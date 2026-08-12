@@ -7,7 +7,7 @@
 `TurnContract`를 반환합니다.
 
 - 집 반복학습 결과를 받아 모르미 가르치기 시작 수준 결정
-- 카페의 줄 서기, 메뉴값 덧셈, 거스름돈 뺄셈, 종합 수행 진행
+- 카페의 줄 서기, 예산 메뉴 선택, 메뉴값 덧셈, 거스름돈, 통합 수행 진행
 - 발화사다리 `L4~L0`와 힌트사다리 `H0~H3`를 독립적으로 조절
 - 도움 카드 자동 공개
 - 발화 이해 LLM, 결정형 오케스트레이터, 모르미 화자 LLM 분리
@@ -84,6 +84,10 @@ uvicorn mormi_api.main:app --reload
 | GET | `/v1/learners/{learner_id}/star-notes` | 별노트 조회 |
 | GET | `/v1/conversations/{conversation_id}/transcript` | 보호된 원문 질문·응답 기록 조회 |
 
+카페는 `cafe_queue`, `cafe_budget_menu`, `cafe_menu_total`, `cafe_change`,
+`cafe_integrated`의 5개 독립 시나리오를 지원합니다. 줄 인원, 예산과 모르미 메뉴는
+대화 시작 시 한 번 정해져 세션 상태에 보존되며 재시도나 복구 때 바뀌지 않습니다.
+
 요청의 `response_id`는 멱등키입니다. 같은 응답을 재전송하면 상태를 다시 진행하지 않고 최초 생성된 결과 턴을 반환합니다.
 
 ## 입력 계약
@@ -112,7 +116,7 @@ uvicorn mormi_api.main:app --reload
   "conversation_id": "conversation_...",
   "turn": {
     "turn_id": "turn_...",
-    "task_id": "cafe_queue_3_vs_5",
+    "task_id": "cafe_queue",
     "stage_id": "queue",
     "mormi": {
       "text": "왼쪽 줄에는 3명이 있구나. 오른쪽은 몇 명이야?",

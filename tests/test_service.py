@@ -26,15 +26,24 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
             learner_id=1,
             scene="cafe",
             scenario_id="cafe_queue_demo",
+            practice_summary={
+                "skill_id": "compare_quantity_in_context",
+                "question_count": 5,
+                "first_try_correct_count": 0,
+            },
         )
     )
     conversation_id = started.conversation_id
+    state = await repository.get_state(conversation_id)
+    left_count = int(state.scenario_data["left_count"])
+    right_count = int(state.scenario_data["right_count"])
+    shorter = "left" if left_count < right_count else "right"
 
     first_response = ChildResponse(
         turn_id=started.turn.turn_id,
         response_id="9956cd80-b1e4-45f9-81aa-638218ebdc86",
         type="choice",
-        choice_ids=["3"],
+        choice_ids=[str(left_count)],
     )
     after_left = await service.respond(conversation_id, first_response)
     first_result_turn_id = after_left.turn.turn_id
@@ -45,7 +54,7 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
             turn_id=after_left.turn.turn_id,
             response_id="51e3317b-f04c-48f2-94c5-7ff0b4077728",
             type="choice",
-            choice_ids=["5"],
+            choice_ids=[str(right_count)],
         ),
     )
 
@@ -59,7 +68,7 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
             turn_id=after_right.turn.turn_id,
             response_id="7307c9af-2440-4d56-aabc-41ec9600db77",
             type="choice",
-            choice_ids=["left"],
+            choice_ids=[shorter],
         ),
     )
     completed = await service.respond(

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from .content import get_scenario, get_task
+from .content import create_scenario_data, get_scenario, get_task
 from .engine import ConversationEngine, select_start_level, update_skill_profile
 from .repository import DuplicateResponseError, Repository
 from .schemas import (
     ChildResponse,
+    ExpressionLevel,
     PracticeResult,
     PracticeSummary,
     SessionCreate,
@@ -49,11 +50,17 @@ class ConversationService:
         practice_rate = practice_summary.success_rate if practice_summary else None
 
         profile = await self.repository.get_profile(request.learner_id)
+        scenario_data = create_scenario_data(request.scenario_id)
         task_start_levels = {
-            task_id: select_start_level(
-                profile,
-                get_task(task_id).skill_id,
-                practice_rate if index == 0 else None,
+            task_id: (
+                ExpressionLevel.L2
+                if get_task(task_id, scenario_data).behavior
+                in {"budget_menu_selection", "menu_selection", "integrated_menu_selection"}
+                else select_start_level(
+                    profile,
+                    get_task(task_id, scenario_data).skill_id,
+                    practice_rate if index == 0 else None,
+                )
             )
             for index, task_id in enumerate(scenario.task_ids)
         }
@@ -65,6 +72,7 @@ class ConversationService:
             scene=request.scene,
             scenario_id=request.scenario_id,
             task_ids=scenario.task_ids,
+            scenario_data=scenario_data,
             task_start_levels=task_start_levels,
             expression_level=start_level,
             task_start_level=start_level,
@@ -93,7 +101,7 @@ class ConversationService:
         active_turn = await self.repository.active_turn(state)
         if active_turn.turn_id != response.turn_id:
             raise ValueError("turn_id is stale; use the latest turn")
-        previous_task = get_task(state.current_task_id)
+        previous_task = get_task(state.current_task_id, state.scenario_data)
         next_state, analysis, next_turn = await self.engine.run_turn(
             state,
             response,

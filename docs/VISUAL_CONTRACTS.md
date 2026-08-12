@@ -29,7 +29,64 @@
 `input.kind=count`일 때는 `input.config.left_person_ids`와
 `input.config.right_person_ids`를 이용해 각각의 사람을 눌러 세는 UI를 활성화합니다.
 
+두 인원은 매 세션 1~5명 범위에서 서로 다르게 정해집니다.
+
+## `cafe_menu`
+
+```json
+{
+  "type": "cafe_menu",
+  "data": {
+    "menu_items": [
+      {"id": "lemon", "name": "레몬 에이드", "price": 2800, "emoji": "🍋"}
+    ],
+    "budget": 8000,
+    "mormi_pick": {"id": "yogurt", "name": "딸기 요거트", "price": 5200},
+    "child_pick": null,
+    "auto_total": true,
+    "budget_status": "pending"
+  }
+}
+```
+
+- `auto_total=true`: 2단계에서 장바구니 합계를 자동 표시합니다.
+- `auto_total=false`: 3·5단계에서 합계를 숨기고 아이가 직접 계산합니다.
+- `budget_status`: `pending`, `within`, `over` 중 하나입니다.
+- 예산을 넘으면 `child_pick`, `total`, `budget_status=over`를 함께 반환합니다.
+- `input.config.allow_same_menu=true`이면 모르미와 같은 메뉴를 고를 수 있습니다.
+
+## `cafe_calculation`
+
+```json
+{
+  "type": "cafe_calculation",
+  "data": {
+    "left": 5200,
+    "right": 2800,
+    "operation": "addition",
+    "result_hidden": true,
+    "mormi_menu": {"id": "yogurt", "name": "딸기 요거트", "price": 5200},
+    "child_menu": {"id": "lemon", "name": "레몬 에이드", "price": 2800}
+  }
+}
+```
+
+카페 계산은 현재 가로식·선택·빈칸 UI만 사용합니다. 세로식 입력은 후속 범위입니다.
+거스름돈은 `left=10000`, `operation=subtraction`으로 전달합니다.
+
+## `budget_meter`와 `budget_menu_help`
+
+도움 카드 H2·H3에서 예산, 모르미 메뉴 가격과 메뉴판을 비교할 때 사용합니다.
+
+## `money_calculation`과 `joint_money_calculation`
+
+- `money_calculation`: H2에서 결과를 숨긴 가로식을 표시합니다.
+- `joint_money_calculation`: H3 공동 수행에서만 결과와 계산 순서를 표시합니다.
+
 ## `vertical_equation`
+
+집 반복학습 후 가르치기에서 사용하는 기존 계약입니다. 카페 3·4·5단계에서는
+현재 사용하지 않습니다.
 
 ```json
 {

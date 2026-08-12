@@ -6,7 +6,7 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .content import TaskDefinition, get_task
+from .content import INTEGRATED_MENU_TASK_ID, MENU_BY_ID, TaskDefinition, get_task
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError, validate_speaker_output
 from .schemas import (
     ChildResponse,
@@ -103,7 +103,7 @@ class ConversationEngine:
         )
 
     def initial_turn(self, state: SessionState) -> TurnContract:
-        task = get_task(state.current_task_id)
+        task = get_task(state.current_task_id, state.scenario_data)
         step = task.step_for(state.expression_level, state.verified_slots)
         state.current_turn_id = new_id("turn")
         return self._turn_contract(
@@ -119,7 +119,7 @@ class ConversationEngine:
     async def _understand_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
         state = SessionState.model_validate(graph_state["session"])
         response = ChildResponse.model_validate(graph_state["response"])
-        task = get_task(state.current_task_id)
+        task = get_task(state.current_task_id, state.scenario_data)
         previous_question = graph_state["previous_question"]
 
         text = response.text or self._response_as_text(response)
@@ -158,7 +158,7 @@ class ConversationEngine:
         state = SessionState.model_validate(graph_state["session"])
         response = ChildResponse.model_validate(graph_state["response"])
         analysis = UtteranceAnalysis.model_validate(graph_state["analysis"])
-        task = get_task(state.current_task_id)
+        task = get_task(state.current_task_id, state.scenario_data)
         decision = self._decide(
             state,
             task,
@@ -192,7 +192,7 @@ class ConversationEngine:
             output = SpeakerOutput.model_validate(graph_state["speaker_output"])
             text = validate_speaker_output(output, decision.speaker_context)
         text = text or decision.speaker_context.fallback_text
-        task = get_task(decision.state.current_task_id)
+        task = get_task(decision.state.current_task_id, decision.state.scenario_data)
         turn = self._turn_contract(
             decision.state,
             task,
@@ -245,11 +245,44 @@ class ConversationEngine:
                 previous_question=previous_question,
             )
 
+        if task.behavior == "budget_menu_selection" and response.choice_ids:
+            selected = MENU_BY_ID.get(response.choice_ids[0])
+            mormi_data = task.visible_facts.get("mormi_menu", {})
+            budget = int(task.visible_facts.get("budget") or 0)
+            mormi_price = int(mormi_data.get("price", 0)) if isinstance(mormi_data, dict) else 0
+            if selected and mormi_price + selected.price > budget:
+                total = mormi_price + selected.price
+                decision = self._decision_for_current_step(
+                    next_state,
+                    task,
+                    dialogue_act="budget_exceeded",
+                    fallback="장바구니가 예산을 넘었네. 다른 메뉴로 바꿔볼까?",
+                    child_text=response.text,
+                    analysis=analysis,
+                    previous_question=previous_question,
+                )
+                decision.visual = task.base_visual.model_copy(
+                    update={
+                        "data": {
+                            **task.base_visual.data,
+                            "child_pick": selected.model_dump(),
+                            "total": total,
+                            "budget_status": "over",
+                        }
+                    },
+                    deep=True,
+                )
+                return decision
+
         newly_verified = task.validated_claims(
             (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
         )
         next_state.verified_slots.update(newly_verified)
         if newly_verified:
+            if "child_menu" in newly_verified:
+                next_state.scenario_data["child_menu_id"] = newly_verified["child_menu"]
+                next_state.scenario_data.pop("last_over_budget_total", None)
+                next_state.scenario_data.pop("last_child_menu_id", None)
             next_state.unrelated_count = 0
             if (
                 state.expression_level is ExpressionLevel.L4
@@ -393,22 +426,84 @@ class ConversationEngine:
         child_text: str | None,
         previous_question: str,
     ) -> PedagogicalDecision:
+        if task.behavior == "integrated_total":
+            total = int(task.slots["result"].expected)
+            budget = int(task.visible_facts.get("budget") or 0)
+            if total > budget:
+                prior_child_menu = state.scenario_data.get("child_menu_id")
+                state.scenario_data["last_child_menu_id"] = prior_child_menu
+                state.scenario_data["last_over_budget_total"] = total
+                state.scenario_data.pop("child_menu_id", None)
+                state.task_index = state.task_ids.index(INTEGRATED_MENU_TASK_ID)
+                state.expression_level = ExpressionLevel.L2
+                state.task_start_level = ExpressionLevel.L2
+                state.hint_level = HintLevel.H0
+                state.task_max_hint = HintLevel.H0
+                state.subgoal_id = "pick_menu"
+                state.verified_slots = {}
+                state.expression_failures = 0
+                state.concept_failures = 0
+                state.direct_note_candidate = None
+                next_task = get_task(state.current_task_id, state.scenario_data)
+                next_step = next_task.step_for(state.expression_level, state.verified_slots)
+                previous_menu = MENU_BY_ID.get(str(prior_child_menu))
+                visual = next_task.base_visual.model_copy(
+                    update={
+                        "data": {
+                            **next_task.base_visual.data,
+                            "child_pick": (
+                                previous_menu.model_dump() if previous_menu else None
+                            ),
+                            "total": total,
+                            "budget_status": "over",
+                        }
+                    },
+                    deep=True,
+                )
+                fallback = "계산해 보니 예산을 넘었네. 메뉴를 다시 골라볼까?"
+                return PedagogicalDecision(
+                    state=state,
+                    dialogue_act="integrated_budget_retry",
+                    required_question=next_step.prompt,
+                    input=next_step.input,
+                    visual=visual,
+                    help_card=None,
+                    note_update=None,
+                    mood="thinking",
+                    speaker_context=self._speaker_context(
+                        task=next_task,
+                        state=state,
+                        dialogue_act="integrated_budget_retry",
+                        previous_question=previous_question,
+                        required_question=next_step.prompt,
+                        verified_facts=[],
+                        analysis=analysis,
+                        child_text=child_text,
+                        fallback=fallback,
+                    ),
+                )
+            state.scenario_data["order_total"] = total
+
         direct = bool(
             state.direct_note_candidate
             and state.task_start_level is ExpressionLevel.L4
             and state.task_max_hint is HintLevel.H0
         )
-        state.all_tasks_direct = state.all_tasks_direct and direct
-        note = NoteUpdate(
-            skill_id=task.skill_id,
-            text=state.direct_note_candidate or task.coauthored_note,
-            attribution=NoteAttribution.CHILD if direct else NoteAttribution.COAUTHORED,
-            evidence=(
-                NoteEvidence.DIRECT_EXPLANATION if direct else NoteEvidence.SUPPORTED_COMPLETION
-            ),
-            attribution_label="아이가 알려줌" if direct else "아이와 같이 공부함",
-        )
-        contribution = task.slots[task.required_slots[-1]].fact_sentence
+        note = None
+        if task.note_policy != "none":
+            state.all_tasks_direct = state.all_tasks_direct and direct
+            note = NoteUpdate(
+                skill_id=task.skill_id,
+                text=state.direct_note_candidate or task.coauthored_note,
+                attribution=NoteAttribution.CHILD if direct else NoteAttribution.COAUTHORED,
+                evidence=(
+                    NoteEvidence.DIRECT_EXPLANATION
+                    if direct
+                    else NoteEvidence.SUPPORTED_COMPLETION
+                ),
+                attribution_label="아이가 알려줌" if direct else "아이와 같이 공부함",
+            )
+        contribution = task.transition_text or task.slots[task.required_slots[-1]].fact_sentence
 
         if state.task_index + 1 < len(state.task_ids):
             state.task_index += 1
@@ -424,7 +519,7 @@ class ConversationEngine:
             state.expression_failures = 0
             state.concept_failures = 0
             state.direct_note_candidate = None
-            next_task = get_task(state.current_task_id)
+            next_task = get_task(state.current_task_id, state.scenario_data)
             next_step = next_task.step_for(state.expression_level, state.verified_slots)
             fallback = self._success_then_question(contribution, next_step.prompt)
             return PedagogicalDecision(
@@ -760,7 +855,7 @@ def select_start_level(
     if skill:
         return skill.highest_stable_expression_level
     if practice_rate is None:
-        return ExpressionLevel.L2
+        return ExpressionLevel.L4
     if practice_rate >= 0.9:
         return ExpressionLevel.L4
     if practice_rate >= 0.7:

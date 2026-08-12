@@ -351,6 +351,7 @@ class SessionState(BaseModel):
     scene: SceneType
     scenario_id: str
     task_ids: list[str]
+    scenario_data: dict[str, Any] = Field(default_factory=dict)
     task_start_levels: dict[str, ExpressionLevel] = Field(default_factory=dict)
     task_index: int = 0
     expression_level: ExpressionLevel

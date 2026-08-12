@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -21,14 +22,25 @@ class SlotDefinition(BaseModel):
     description: str
     expected: str | int | float | bool
     aliases: list[str] = Field(default_factory=list)
+    accepted_values: list[str | int | float | bool] = Field(default_factory=list)
+    preserve_value: bool = False
     fact_sentence: str
 
     def accepts(self, value: object) -> bool:
         if value == self.expected:
             return True
         normalized = str(value).strip().lower().replace(" ", "")
-        candidates = [str(self.expected), *self.aliases]
+        candidates = [
+            str(self.expected),
+            *self.aliases,
+            *(str(item) for item in self.accepted_values),
+        ]
         return normalized in {item.strip().lower().replace(" ", "") for item in candidates}
+
+    def canonical(self, value: object) -> str | int | float | bool:
+        if self.preserve_value and isinstance(value, (str, int, float, bool)):
+            return value
+        return self.expected
 
 
 class StepDefinition(BaseModel):
@@ -62,6 +74,9 @@ class TaskDefinition(BaseModel):
     base_visual: VisualContract
     misconception_tags: list[str]
     coauthored_note: str
+    behavior: str = "teaching"
+    note_policy: str = "stage"
+    transition_text: str | None = None
 
     def step_for(
         self,
@@ -88,7 +103,7 @@ class TaskDefinition(BaseModel):
         for slot_id, value, classifier_factual in claims:
             slot = self.slots.get(slot_id)
             if slot and classifier_factual and slot.accepts(value):
-                verified[slot_id] = slot.expected
+                verified[slot_id] = slot.canonical(value)
         return verified
 
 
@@ -109,6 +124,27 @@ def text_input(*slots: str, placeholder: str = "모르미에게 알려줘") -> I
 
 def choice_input(slots: list[str], choices: list[ChoiceOption]) -> InputContract:
     return InputContract(kind=InputKind.CHOICES, target_slots=slots, choices=choices)
+
+
+class MenuItem(BaseModel):
+    id: str
+    name: str
+    price: int
+    emoji: str
+
+
+CAFE_MENU: tuple[MenuItem, ...] = (
+    MenuItem(id="lemon", name="레몬 에이드", price=2800, emoji="🍋"),
+    MenuItem(id="choco", name="핫초코", price=3200, emoji="☕"),
+    MenuItem(id="sandwich", name="샌드위치", price=4300, emoji="🥪"),
+    MenuItem(id="yogurt", name="딸기 요거트", price=5200, emoji="🍓"),
+)
+MENU_BY_ID = {item.id: item for item in CAFE_MENU}
+CAFE_BUDGETS = (8000, 9000, 10000)
+
+
+def menu_items_json() -> list[dict[str, str | int]]:
+    return [item.model_dump() for item in CAFE_MENU]
 
 
 QUEUE_TASK = TaskDefinition(
@@ -543,58 +579,409 @@ def calculation_task(
     )
 
 
-MENU_TASK = calculation_task(
-    task_id="cafe_menu_2800_plus_3200",
-    title="메뉴값 계산하기",
-    skill_id="addition_with_carry_in_context",
-    left=2800,
-    right=3200,
-    operation="addition",
-    result=6000,
-    stage_id="menu",
-)
+KOREAN_COUNTS = {
+    1: ["1명", "한명", "한 명"],
+    2: ["2명", "두명", "두 명"],
+    3: ["3명", "세명", "세 명"],
+    4: ["4명", "네명", "네 명"],
+    5: ["5명", "다섯명", "다섯 명"],
+}
 
-CHANGE_TASK = calculation_task(
-    task_id="cafe_change_10000_minus_6000",
-    title="거스름돈 받기",
-    skill_id="subtraction_with_regroup_in_context",
-    left=10000,
-    right=6000,
-    operation="subtraction",
-    result=4000,
-    stage_id="change",
-)
 
-REMIX_QUEUE_TASK = QUEUE_TASK.model_copy(
-    update={
-        "id": "cafe_remix_queue_3_vs_5",
-        "title": "처음부터 해보기: 줄 서기",
-        "stage_id": "remix",
-    },
-    deep=True,
-)
+def _nearby_count_options(value: int) -> list[ChoiceOption]:
+    values = sorted({max(1, value - 1), value, min(5, value + 1)})
+    return [option(str(item), f"{item}명") for item in values]
 
-REMIX_MENU_TASK = calculation_task(
-    task_id="cafe_remix_menu_3300_plus_2800",
-    title="처음부터 해보기: 메뉴값",
-    skill_id="addition_with_carry_in_context",
-    left=3300,
-    right=2800,
-    operation="addition",
-    result=6100,
-    stage_id="remix",
-)
 
-REMIX_CHANGE_TASK = calculation_task(
-    task_id="cafe_remix_change_10000_minus_6100",
-    title="처음부터 해보기: 거스름돈",
-    skill_id="subtraction_with_regroup_in_context",
-    left=10000,
-    right=6100,
-    operation="subtraction",
-    result=3900,
-    stage_id="remix",
-)
+def queue_task(
+    *,
+    task_id: str,
+    stage_id: str,
+    left: int,
+    right: int,
+    note_policy: str = "stage",
+) -> TaskDefinition:
+    task = QUEUE_TASK.model_copy(deep=True)
+    smaller = min(left, right)
+    side = "left" if left < right else "right"
+    side_label = "왼쪽" if side == "left" else "오른쪽"
+    task.id = task_id
+    task.stage_id = stage_id
+    task.title = "줄 서기" if stage_id == "queue" else "통합 실습: 줄 서기"
+    task.visible_facts = {
+        "left_count": left,
+        "right_count": right,
+        "same_cashier_speed": True,
+    }
+    task.slots["left_count"] = SlotDefinition(
+        id="left_count",
+        description="왼쪽 줄 사람 수",
+        expected=left,
+        aliases=KOREAN_COUNTS[left],
+        fact_sentence=f"왼쪽 줄에는 {left}명이 있어.",
+    )
+    task.slots["right_count"] = SlotDefinition(
+        id="right_count",
+        description="오른쪽 줄 사람 수",
+        expected=right,
+        aliases=KOREAN_COUNTS[right],
+        fact_sentence=f"오른쪽 줄에는 {right}명이 있어.",
+    )
+    task.slots["smaller_number"] = SlotDefinition(
+        id="smaller_number",
+        description=f"{left}과 {right} 중 작은 수",
+        expected=smaller,
+        aliases=[str(smaller)],
+        fact_sentence=f"{smaller}이 더 작은 수야.",
+    )
+    task.slots["final_choice"] = SlotDefinition(
+        id="final_choice",
+        description="사람이 적어서 덜 기다리는 줄",
+        expected=side,
+        aliases=[side_label, f"{side_label}줄", f"{side_label} 줄"],
+        fact_sentence=f"{side_label} 줄에 서면 덜 기다려.",
+    )
+    task.steps[ExpressionLevel.L2][0].input = choice_input(
+        ["left_count"], _nearby_count_options(left)
+    )
+    task.steps[ExpressionLevel.L2][0].choice_effects = {
+        choice.id: {"left_count": int(choice.id)}
+        for choice in task.steps[ExpressionLevel.L2][0].input.choices
+    }
+    task.steps[ExpressionLevel.L2][1].input = choice_input(
+        ["right_count"], _nearby_count_options(right)
+    )
+    task.steps[ExpressionLevel.L2][1].choice_effects = {
+        choice.id: {"right_count": int(choice.id)}
+        for choice in task.steps[ExpressionLevel.L2][1].input.choices
+    }
+    task.steps[ExpressionLevel.L1][0].input.config = {
+        "left_person_ids": [f"l{index}" for index in range(1, left + 1)],
+        "right_person_ids": [f"r{index}" for index in range(1, right + 1)],
+    }
+    task.steps[ExpressionLevel.L1][1].prompt = f"{left}과 {right} 중 더 작은 수는 뭐야?"
+    task.steps[ExpressionLevel.L1][1].input = choice_input(
+        ["smaller_number"],
+        [option(str(left), str(left)), option(str(right), str(right))],
+    )
+    task.steps[ExpressionLevel.L1][1].choice_effects = {
+        str(left): {"smaller_number": left},
+        str(right): {"smaller_number": right},
+    }
+    task.steps[ExpressionLevel.L1][2].prompt = f"{smaller}명이 있는 줄은 어느 쪽이야?"
+    task.hints[HintLevel.H2] = HintDefinition(
+        level=HintLevel.H2,
+        body=f"숫자 카드 {left}과 {right}를 보고 더 작은 수를 찾아보세요.",
+        visual_type="number_cards",
+        visual_data={"cards": [left, right], "neutral_style": True},
+    )
+    task.hints[HintLevel.H3] = HintDefinition(
+        level=HintLevel.H3,
+        body=f"한 명씩 세고, {left}과 {right}를 비교한 뒤 사람이 적은 줄을 찾아보세요.",
+        visual_type="joint_steps",
+        visual_data={"steps": ["한 명씩 세기", "두 수 비교하기", "사람이 적은 줄 찾기"]},
+    )
+    task.base_visual = VisualContract(
+        type="cafe_queues",
+        data={"left_people": left, "right_people": right, "show_counts": False},
+    )
+    task.note_policy = note_policy
+    task.transition_text = "사람이 적은 줄을 찾았구나."
+    return task
+
+
+def menu_selection_task(
+    *,
+    task_id: str,
+    stage_id: str,
+    mormi_menu: MenuItem,
+    budget: int | None,
+    auto_total: bool,
+    behavior: str,
+    note_policy: str,
+) -> TaskDefinition:
+    valid_ids: list[str | int | float | bool] = [
+        item.id
+        for item in CAFE_MENU
+        if budget is None or not auto_total or mormi_menu.price + item.price <= budget
+    ]
+    choices = [option(item.id, f"{item.emoji} {item.name} {item.price:,}원") for item in CAFE_MENU]
+    input_contract = InputContract(
+        kind=InputKind.CHOICES,
+        target_slots=["child_menu"],
+        choices=choices,
+        config={
+            "component": "cafe_menu_picker",
+            "budget": budget,
+            "mormi_menu_id": mormi_menu.id,
+            "auto_total": auto_total,
+            "allow_same_menu": True,
+        },
+    )
+    prompt = f"나는 {mormi_menu.name}을 골랐어. 너는 뭘 고를래?"
+    step = StepDefinition(
+        id="pick_menu",
+        prompt=prompt,
+        target_slots=["child_menu"],
+        input=input_contract,
+        choice_effects={item.id: {"child_menu": item.id} for item in CAFE_MENU},
+        fallback_text="네가 먹고 싶은 메뉴 하나를 골라 줄래?",
+    )
+    return TaskDefinition(
+        id=task_id,
+        scene=SceneType.CAFE,
+        stage_id=stage_id,
+        skill_id="choose_within_budget" if budget is not None else "choose_menu_for_calculation",
+        title="예산 안에서 메뉴 고르기" if budget is not None else "계산할 메뉴 고르기",
+        goal=(
+            "두 메뉴가 예산 안에 들어오도록 고른다."
+            if budget is not None
+            else "계산할 메뉴를 하나 고른다."
+        ),
+        visible_facts={
+            "budget": budget,
+            "mormi_menu": mormi_menu.model_dump(),
+            "menu_items": menu_items_json(),
+            "auto_total": auto_total,
+        },
+        slots={
+            "child_menu": SlotDefinition(
+                id="child_menu",
+                description="아이가 고른 메뉴",
+                expected=valid_ids[0],
+                accepted_values=valid_ids,
+                preserve_value=True,
+                fact_sentence="아이도 메뉴를 하나 골랐어.",
+            )
+        },
+        required_slots=["child_menu"],
+        steps={level: [step.model_copy(deep=True)] for level in ExpressionLevel},
+        hints={
+            HintLevel.H1: HintDefinition(
+                level=HintLevel.H1,
+                body="장바구니 합계와 예산을 나란히 확인해 보세요.",
+            ),
+            HintLevel.H2: HintDefinition(
+                level=HintLevel.H2,
+                body="모르미 메뉴 가격에 고른 메뉴 가격을 더해 보세요.",
+                visual_type="budget_meter",
+                visual_data={"budget": budget, "mormi_price": mormi_menu.price},
+            ),
+            HintLevel.H3: HintDefinition(
+                level=HintLevel.H3,
+                body="합계가 예산보다 크면 더 저렴한 메뉴로 바꿔 보세요.",
+                visual_type="budget_menu_help",
+                visual_data={"budget": budget, "mormi_menu": mormi_menu.model_dump()},
+            ),
+        },
+        base_visual=VisualContract(
+            type="cafe_menu",
+            data={
+                "menu_items": menu_items_json(),
+                "budget": budget,
+                "mormi_pick": mormi_menu.model_dump(),
+                "child_pick": None,
+                "auto_total": auto_total,
+                "budget_status": "pending",
+            },
+        ),
+        misconception_tags=["budget_exceeded", "price_comparison_error"],
+        coauthored_note="메뉴 가격을 더한 금액이 예산보다 크면 다른 메뉴를 골라야 해.",
+        behavior=behavior,
+        note_policy=note_policy,
+        transition_text="네 메뉴도 골랐구나.",
+    )
+
+
+def simple_calculation_task(
+    *,
+    task_id: str,
+    stage_id: str,
+    title: str,
+    left: int,
+    right: int,
+    operation: str,
+    left_label: str,
+    right_label: str,
+    behavior: str,
+    note_policy: str,
+    coauthored_note: str,
+    context: Mapping[str, Any],
+) -> TaskDefinition:
+    result = left + right if operation == "addition" else left - right
+    symbol = "+" if operation == "addition" else "-"
+    operation_label = "더하기" if operation == "addition" else "빼기"
+    distractors = sorted({max(0, result - 1000), result, result + 1000})
+    result_choices = [option(str(value), f"{value:,}원") for value in distractors]
+    operation_choices = [option("add", "더하기"), option("subtract", "빼기")]
+    operation_effects: dict[str, dict[str, str | int | float | bool]] = {
+        "add": {"operation": "addition"},
+        "subtract": {"operation": "subtraction"},
+    }
+    result_effects: dict[str, dict[str, str | int | float | bool]] = {
+        str(value): {"result": value} for value in distractors
+    }
+
+    l4 = StepDefinition(
+        id="free_calculation",
+        prompt=(
+            "두 메뉴는 모두 얼마야? 어떻게 계산했어?"
+            if operation == "addition"
+            else "거스름돈은 얼마야? 어떻게 계산했어?"
+        ),
+        target_slots=["operation", "result"],
+        input=text_input("operation", "result", placeholder="값과 계산 방법을 알려줘"),
+        fallback_text="계산한 값과 어떤 계산인지 알려줘.",
+    )
+    l3 = [
+        StepDefinition(
+            id="short_result",
+            prompt="계산한 값은 얼마야?",
+            target_slots=["result"],
+            input=text_input("result", placeholder="금액만 알려줘"),
+            fallback_text="내가 많이 물어봤네. 금액부터 알려줘.",
+        ),
+        StepDefinition(
+            id="short_operation",
+            prompt="두 금액을 더해야 해, 빼야 해?",
+            target_slots=["operation"],
+            input=text_input("operation", placeholder="더하기 또는 빼기"),
+            fallback_text="어떤 계산인지도 짧게 알려줘.",
+        ),
+    ]
+    l2 = [
+        StepDefinition(
+            id="choose_operation",
+            prompt="어떤 계산을 해야 할까?",
+            target_slots=["operation"],
+            input=choice_input(["operation"], operation_choices),
+            choice_effects=operation_effects,
+            fallback_text="필요한 계산을 같이 골라 보자.",
+        ),
+        StepDefinition(
+            id="choose_result",
+            prompt="계산한 금액은 어느 쪽이야?",
+            target_slots=["result"],
+            input=choice_input(["result"], result_choices),
+            choice_effects=result_effects,
+            fallback_text="계산한 금액도 같이 골라 보자.",
+        ),
+    ]
+    fill_result = InputContract(
+        kind=InputKind.FILL,
+        target_slots=["result"],
+        choices=result_choices,
+        config={"expression": f"{left:,} {symbol} {right:,} = □"},
+    )
+    l1 = [
+        StepDefinition(
+            id="guided_operation",
+            prompt=f"{left_label}에서 {right_label}을 어떻게 계산할까?",
+            target_slots=["operation"],
+            input=choice_input(["operation"], operation_choices),
+            choice_effects=operation_effects,
+            fallback_text="두 금액 사이 계산 기호부터 골라 보자.",
+        ),
+        StepDefinition(
+            id="guided_result",
+            prompt=f"{left:,} {symbol} {right:,}의 빈칸은 얼마야?",
+            target_slots=["result"],
+            input=fill_result,
+            choice_effects=result_effects,
+            fallback_text="가로식의 빈칸을 같이 채워 보자.",
+        ),
+    ]
+    joint = StepDefinition(
+        id="joint_calculation",
+        prompt="도움 카드 순서대로 계산을 같이 해볼까?",
+        target_slots=["operation", "result"],
+        input=InputContract(
+            kind=InputKind.JOINT,
+            target_slots=["operation", "result"],
+            config={"left": left, "right": right, "operation": operation, "result": result},
+        ),
+        fallback_text="도움 카드 순서대로 계산을 같이 해볼까?",
+    )
+    return TaskDefinition(
+        id=task_id,
+        scene=SceneType.CAFE,
+        stage_id=stage_id,
+        skill_id="add_menu_prices" if operation == "addition" else "calculate_change",
+        title=title,
+        goal=f"{left:,}{symbol}{right:,}을 생활 맥락에서 계산한다.",
+        visible_facts={"left": left, "right": right, "operation": operation, **dict(context)},
+        slots={
+            "operation": SlotDefinition(
+                id="operation",
+                description="필요한 계산 종류",
+                expected=operation,
+                aliases=[operation_label],
+                fact_sentence=f"{operation_label}로 계산해.",
+            ),
+            "result": SlotDefinition(
+                id="result",
+                description="계산 결과",
+                expected=result,
+                aliases=[str(result), f"{result:,}", f"{result:,}원"],
+                fact_sentence=f"계산 결과는 {result:,}원이야.",
+            ),
+        },
+        required_slots=["operation", "result"],
+        steps={
+            ExpressionLevel.L4: [l4],
+            ExpressionLevel.L3: l3,
+            ExpressionLevel.L2: l2,
+            ExpressionLevel.L1: l1,
+            ExpressionLevel.L0: [joint],
+        },
+        hints={
+            HintLevel.H1: HintDefinition(
+                level=HintLevel.H1,
+                body=(
+                    "두 메뉴 가격을 더해 보세요."
+                    if operation == "addition"
+                    else "10,000원에서 메뉴값을 빼 보세요."
+                ),
+            ),
+            HintLevel.H2: HintDefinition(
+                level=HintLevel.H2,
+                body=f"{left:,} {symbol} {right:,} 가로식을 확인해 보세요.",
+                visual_type="money_calculation",
+                visual_data={
+                    "left": left,
+                    "right": right,
+                    "operation": operation,
+                    "result_hidden": True,
+                },
+            ),
+            HintLevel.H3: HintDefinition(
+                level=HintLevel.H3,
+                body=f"도움 카드에서 {left:,} {symbol} {right:,}의 계산 순서를 따라가 보세요.",
+                visual_type="joint_money_calculation",
+                visual_data={
+                    "left": left,
+                    "right": right,
+                    "operation": operation,
+                    "result": result,
+                },
+            ),
+        },
+        base_visual=VisualContract(
+            type="cafe_calculation",
+            data={
+                "left": left,
+                "right": right,
+                "operation": operation,
+                "result_hidden": True,
+                **dict(context),
+            },
+        ),
+        misconception_tags=["operation_confusion", "calculation_error"],
+        coauthored_note=coauthored_note,
+        behavior=behavior,
+        note_policy=note_policy,
+        transition_text=f"계산하면 {result:,}원이구나.",
+    )
 
 HOME_ADD_TASK = calculation_task(
     task_id="home_teach_3_plus_5",
@@ -608,39 +995,68 @@ HOME_ADD_TASK = calculation_task(
     stage_id="home_teach",
 )
 
-
-TASKS: dict[str, TaskDefinition] = {
-    task.id: task
-    for task in [
-        QUEUE_TASK,
-        MENU_TASK,
-        CHANGE_TASK,
-        REMIX_QUEUE_TASK,
-        REMIX_MENU_TASK,
-        REMIX_CHANGE_TASK,
-        HOME_ADD_TASK,
-    ]
-}
+QUEUE_TASK_ID = "cafe_queue"
+BUDGET_MENU_TASK_ID = "cafe_budget_menu_pick"
+TOTAL_MENU_PICK_TASK_ID = "cafe_total_menu_pick"
+TOTAL_CALC_TASK_ID = "cafe_total_calculation"
+CHANGE_TASK_ID = "cafe_change"
+INTEGRATED_QUEUE_TASK_ID = "cafe_integrated_queue"
+INTEGRATED_MENU_TASK_ID = "cafe_integrated_menu_pick"
+INTEGRATED_TOTAL_TASK_ID = "cafe_integrated_total"
+INTEGRATED_CHANGE_TASK_ID = "cafe_integrated_change"
 
 SCENARIOS: dict[str, ScenarioDefinition] = {
-    "cafe_outing": ScenarioDefinition(
-        id="cafe_outing",
+    "cafe_queue": ScenarioDefinition(
+        id="cafe_queue",
         scene=SceneType.CAFE,
-        title="모르미와 카페 가기",
-        task_ids=[
-            QUEUE_TASK.id,
-            MENU_TASK.id,
-            CHANGE_TASK.id,
-            REMIX_QUEUE_TASK.id,
-            REMIX_MENU_TASK.id,
-            REMIX_CHANGE_TASK.id,
-        ],
+        title="1단계 줄 서기",
+        task_ids=[QUEUE_TASK_ID],
     ),
     "cafe_queue_demo": ScenarioDefinition(
         id="cafe_queue_demo",
         scene=SceneType.CAFE,
-        title="카페 줄 서기",
-        task_ids=[QUEUE_TASK.id],
+        title="1단계 줄 서기(호환 ID)",
+        task_ids=[QUEUE_TASK_ID],
+    ),
+    "cafe_budget_menu": ScenarioDefinition(
+        id="cafe_budget_menu",
+        scene=SceneType.CAFE,
+        title="2단계 예산 안에서 메뉴 고르기",
+        task_ids=[BUDGET_MENU_TASK_ID],
+    ),
+    "cafe_menu_total": ScenarioDefinition(
+        id="cafe_menu_total",
+        scene=SceneType.CAFE,
+        title="3단계 메뉴값 계산하기",
+        task_ids=[TOTAL_MENU_PICK_TASK_ID, TOTAL_CALC_TASK_ID],
+    ),
+    "cafe_change": ScenarioDefinition(
+        id="cafe_change",
+        scene=SceneType.CAFE,
+        title="4단계 거스름돈 받기",
+        task_ids=[CHANGE_TASK_ID],
+    ),
+    "cafe_integrated": ScenarioDefinition(
+        id="cafe_integrated",
+        scene=SceneType.CAFE,
+        title="5단계 카페 통합 실습",
+        task_ids=[
+            INTEGRATED_QUEUE_TASK_ID,
+            INTEGRATED_MENU_TASK_ID,
+            INTEGRATED_TOTAL_TASK_ID,
+            INTEGRATED_CHANGE_TASK_ID,
+        ],
+    ),
+    "cafe_outing": ScenarioDefinition(
+        id="cafe_outing",
+        scene=SceneType.CAFE,
+        title="5단계 카페 통합 실습(호환 ID)",
+        task_ids=[
+            INTEGRATED_QUEUE_TASK_ID,
+            INTEGRATED_MENU_TASK_ID,
+            INTEGRATED_TOTAL_TASK_ID,
+            INTEGRATED_CHANGE_TASK_ID,
+        ],
     ),
     "home_addition_teach": ScenarioDefinition(
         id="home_addition_teach",
@@ -651,11 +1067,126 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
 }
 
 
-def get_task(task_id: str) -> TaskDefinition:
-    try:
-        return TASKS[task_id]
-    except KeyError as error:
-        raise KeyError(f"Unknown task: {task_id}") from error
+def create_scenario_data(scenario_id: str, rng: Any | None = None) -> dict[str, Any]:
+    chooser = rng or random.SystemRandom()
+    data: dict[str, Any] = {"payment": 10000}
+    if scenario_id in {"cafe_queue", "cafe_queue_demo", "cafe_integrated", "cafe_outing"}:
+        left = chooser.choice(range(1, 6))
+        right = chooser.choice([value for value in range(1, 6) if value != left])
+        data.update(left_count=left, right_count=right)
+    if scenario_id in {
+        "cafe_budget_menu",
+        "cafe_menu_total",
+        "cafe_change",
+        "cafe_integrated",
+        "cafe_outing",
+    }:
+        data["mormi_menu_id"] = chooser.choice(CAFE_MENU).id
+    if scenario_id in {"cafe_budget_menu", "cafe_integrated", "cafe_outing"}:
+        data["budget"] = chooser.choice(CAFE_BUDGETS)
+    return data
+
+
+def _menu_from_data(data: Mapping[str, Any], key: str, default: str = "choco") -> MenuItem:
+    return MENU_BY_ID.get(str(data.get(key, default)), MENU_BY_ID[default])
+
+
+def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> TaskDefinition:
+    data = scenario_data or {}
+    left_count = int(data.get("left_count", 3))
+    right_count = int(data.get("right_count", 5))
+    mormi_menu = _menu_from_data(data, "mormi_menu_id")
+    child_menu = _menu_from_data(data, "child_menu_id", "lemon")
+    budget = int(data.get("budget", 9000))
+    if task_id == QUEUE_TASK_ID:
+        return queue_task(task_id=task_id, stage_id="queue", left=left_count, right=right_count)
+    if task_id == INTEGRATED_QUEUE_TASK_ID:
+        return queue_task(
+            task_id=task_id,
+            stage_id="integrated",
+            left=left_count,
+            right=right_count,
+            note_policy="none",
+        )
+    if task_id == BUDGET_MENU_TASK_ID:
+        return menu_selection_task(
+            task_id=task_id,
+            stage_id="budget_menu",
+            mormi_menu=mormi_menu,
+            budget=budget,
+            auto_total=True,
+            behavior="budget_menu_selection",
+            note_policy="stage",
+        )
+    if task_id == TOTAL_MENU_PICK_TASK_ID:
+        return menu_selection_task(
+            task_id=task_id,
+            stage_id="menu_total",
+            mormi_menu=mormi_menu,
+            budget=None,
+            auto_total=False,
+            behavior="menu_selection",
+            note_policy="none",
+        )
+    if task_id == INTEGRATED_MENU_TASK_ID:
+        return menu_selection_task(
+            task_id=task_id,
+            stage_id="integrated",
+            mormi_menu=mormi_menu,
+            budget=budget,
+            auto_total=False,
+            behavior="integrated_menu_selection",
+            note_policy="none",
+        )
+    if task_id in {TOTAL_CALC_TASK_ID, INTEGRATED_TOTAL_TASK_ID}:
+        integrated = task_id == INTEGRATED_TOTAL_TASK_ID
+        return simple_calculation_task(
+            task_id=task_id,
+            stage_id="integrated" if integrated else "menu_total",
+            title="통합 실습: 메뉴값 계산" if integrated else "메뉴값 계산하기",
+            left=mormi_menu.price,
+            right=child_menu.price,
+            operation="addition",
+            left_label=mormi_menu.name,
+            right_label=child_menu.name,
+            behavior="integrated_total" if integrated else "menu_total",
+            note_policy="none" if integrated else "stage",
+            coauthored_note="두 메뉴의 전체 가격은 각 메뉴 가격을 더해서 구해.",
+            context={
+                "budget": budget if integrated else None,
+                "mormi_menu": mormi_menu.model_dump(),
+                "child_menu": child_menu.model_dump(),
+            },
+        )
+    if task_id in {CHANGE_TASK_ID, INTEGRATED_CHANGE_TASK_ID}:
+        integrated = task_id == INTEGRATED_CHANGE_TASK_ID
+        menu_price = mormi_menu.price + child_menu.price if integrated else mormi_menu.price
+        return simple_calculation_task(
+            task_id=task_id,
+            stage_id="integrated" if integrated else "change",
+            title="통합 실습: 거스름돈" if integrated else "거스름돈 받기",
+            left=10000,
+            right=menu_price,
+            operation="subtraction",
+            left_label="낸 돈",
+            right_label="전체 메뉴값" if integrated else mormi_menu.name,
+            behavior="integrated_change" if integrated else "change",
+            note_policy="stage",
+            coauthored_note=(
+                "사람이 적은 줄을 고르고 예산 안에서 메뉴를 고른 뒤, 전체 가격과 거스름돈을 계산해."
+                if integrated
+                else "거스름돈은 10,000원에서 메뉴 가격을 빼서 구해."
+            ),
+            context={
+                "payment": 10000,
+                "menu_total": menu_price,
+                "mormi_menu": mormi_menu.model_dump(),
+                "child_menu": child_menu.model_dump() if integrated else None,
+            },
+        )
+    if task_id == HOME_ADD_TASK.id:
+        return HOME_ADD_TASK
+    raise KeyError(f"Unknown task: {task_id}")
 
 
 def get_scenario(scenario_id: str) -> ScenarioDefinition:
@@ -669,7 +1200,8 @@ def validate_content() -> None:
     for scenario in SCENARIOS.values():
         for task_id in scenario.task_ids:
             get_task(task_id)
-    for task in TASKS.values():
+    task_ids = {task_id for scenario in SCENARIOS.values() for task_id in scenario.task_ids}
+    for task in [get_task(task_id) for task_id in task_ids]:
         if set(task.required_slots) - set(task.slots):
             raise ValueError(f"{task.id}: required slot is undefined")
         for level in ExpressionLevel:

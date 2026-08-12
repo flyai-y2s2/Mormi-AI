@@ -7,6 +7,68 @@
       "type": "object",
       "required": ["type", "data"],
       "properties": {
+        "type": { "const": "cafe_menu" },
+        "data": {
+          "type": "object",
+          "required": ["menu_items", "mormi_pick", "auto_total", "budget_status"],
+          "properties": {
+            "menu_items": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+            "budget": { "type": ["integer", "null"], "minimum": 0 },
+            "mormi_pick": { "type": "object" },
+            "child_pick": { "type": ["object", "null"] },
+            "auto_total": { "type": "boolean" },
+            "budget_status": { "enum": ["pending", "within", "over"] },
+            "total": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "cafe_calculation" },
+        "data": {
+          "type": "object",
+          "required": ["left", "right", "operation", "result_hidden"],
+          "properties": {
+            "left": { "type": "integer", "minimum": 0 },
+            "right": { "type": "integer", "minimum": 0 },
+            "operation": { "enum": ["addition", "subtraction"] },
+            "result_hidden": { "type": "boolean" },
+            "budget": { "type": ["integer", "null"], "minimum": 0 },
+            "payment": { "type": "integer", "minimum": 0 },
+            "menu_total": { "type": "integer", "minimum": 0 },
+            "mormi_menu": { "type": "object" },
+            "child_menu": { "type": ["object", "null"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": {
+          "enum": [
+            "budget_meter",
+            "budget_menu_help",
+            "money_calculation",
+            "joint_money_calculation"
+          ]
+        },
+        "data": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
         "type": { "const": "cafe_queues" },
         "data": {
           "type": "object",
