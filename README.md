@@ -67,6 +67,12 @@ cp .env.example .env
 uvicorn mormi_api.main:app --reload
 ```
 
+배포 환경에서 일반 `pip` 설치가 필요하면 다음을 사용합니다.
+
+```bash
+pip install -r requirements.txt
+```
+
 - Swagger UI: `http://localhost:8000/docs`
 - 상태 확인: `GET http://localhost:8000/health`
 
