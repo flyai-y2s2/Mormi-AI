@@ -1,0 +1,1566 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Mormi Conversation API",
+    "description": "집 반복 결과를 받아 모르미 가르치기와 카페 생활수학 대화를 진행하는 LangGraph 기반 API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/practice-results": {
+      "post": {
+        "tags": [
+          "practice integration"
+        ],
+        "summary": "Save Practice Result",
+        "operationId": "save_practice_result_v1_practice_results_post",
+        "parameters": [
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PracticeResult"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations": {
+      "post": {
+        "tags": [
+          "conversation"
+        ],
+        "summary": "Create Conversation",
+        "operationId": "create_conversation_v1_conversations_post",
+        "parameters": [
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/responses": {
+      "post": {
+        "tags": [
+          "conversation"
+        ],
+        "summary": "Respond",
+        "operationId": "respond_v1_conversations__conversation_id__responses_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChildResponse"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The response targeted a stale or already answered turn.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}": {
+      "get": {
+        "tags": [
+          "conversation"
+        ],
+        "summary": "Get Conversation",
+        "operationId": "get_conversation_v1_conversations__conversation_id__get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/learners/{learner_id}/skill-profiles": {
+      "get": {
+        "tags": [
+          "learner state"
+        ],
+        "summary": "Get Learner Profiles",
+        "operationId": "get_learner_profiles_v1_learners__learner_id__skill_profiles_get",
+        "parameters": [
+          {
+            "name": "learner_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Learner Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillProfilesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/learners/{learner_id}/star-notes": {
+      "get": {
+        "tags": [
+          "learner state"
+        ],
+        "summary": "Get Star Notes",
+        "operationId": "get_star_notes_v1_learners__learner_id__star_notes_get",
+        "parameters": [
+          {
+            "name": "learner_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Learner Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StarNotesResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/transcript": {
+      "get": {
+        "tags": [
+          "protected dialogue"
+        ],
+        "summary": "Get Transcript",
+        "operationId": "get_transcript_v1_conversations__conversation_id__transcript_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "title": "Response Get Transcript V1 Conversations  Conversation Id  Transcript Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ChildResponse": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Turn Id"
+          },
+          "response_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Response Id"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ResponseType"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "choice_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Choice Ids"
+          },
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Values"
+          },
+          "asr_confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asr Confidence"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 600000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "response_id",
+          "type"
+        ],
+        "title": "ChildResponse"
+      },
+      "ChoiceOption": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "disabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "ChoiceOption"
+      },
+      "CompletionContract": {
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/CompletionOutcome"
+          },
+          "teach_reward_eligible": {
+            "type": "boolean",
+            "title": "Teach Reward Eligible"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "teach_reward_eligible"
+        ],
+        "title": "CompletionContract"
+      },
+      "CompletionOutcome": {
+        "type": "string",
+        "enum": [
+          "taught",
+          "supported",
+          "bright_exit"
+        ],
+        "title": "CompletionOutcome"
+      },
+      "ConflictDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "const": "stale_turn",
+            "title": "Code",
+            "default": "stale_turn"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
+          },
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "state_version": {
+            "type": "integer",
+            "title": "State Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message",
+          "conversation_id",
+          "turn_id",
+          "state_version"
+        ],
+        "title": "ConflictDetail"
+      },
+      "ConflictResponse": {
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/ConflictDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ConflictResponse"
+      },
+      "ExpressionLevel": {
+        "type": "string",
+        "enum": [
+          "L4",
+          "L3",
+          "L2",
+          "L1",
+          "L0"
+        ],
+        "title": "ExpressionLevel"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "default": "ok"
+          },
+          "llm_configured": {
+            "type": "boolean",
+            "title": "Llm Configured"
+          },
+          "database": {
+            "type": "string",
+            "title": "Database"
+          }
+        },
+        "type": "object",
+        "required": [
+          "llm_configured",
+          "database"
+        ],
+        "title": "HealthResponse"
+      },
+      "HelpCardContract": {
+        "properties": {
+          "visible": {
+            "type": "boolean",
+            "title": "Visible",
+            "default": true
+          },
+          "auto_open": {
+            "type": "boolean",
+            "title": "Auto Open",
+            "default": true
+          },
+          "level": {
+            "$ref": "#/components/schemas/HintLevel"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "default": "도움 카드"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "visual_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Type"
+          },
+          "visual_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Visual Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "body"
+        ],
+        "title": "HelpCardContract"
+      },
+      "HintLevel": {
+        "type": "string",
+        "enum": [
+          "H0",
+          "H1",
+          "H2",
+          "H3"
+        ],
+        "title": "HintLevel"
+      },
+      "InputContract": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/InputKind"
+          },
+          "placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Placeholder"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/ChoiceOption"
+            },
+            "type": "array",
+            "title": "Choices"
+          },
+          "target_slots": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Slots"
+          },
+          "submit_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submit Label"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "title": "InputContract"
+      },
+      "InputKind": {
+        "type": "string",
+        "enum": [
+          "text",
+          "choices",
+          "fill",
+          "count",
+          "equation",
+          "joint",
+          "button",
+          "none"
+        ],
+        "title": "InputKind"
+      },
+      "MormiContract": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 50,
+            "title": "Text"
+          },
+          "mood": {
+            "type": "string",
+            "enum": [
+              "curious",
+              "listening",
+              "thinking",
+              "relieved",
+              "celebrating"
+            ],
+            "title": "Mood"
+          },
+          "max_lines": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Max Lines",
+            "default": 2
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "mood"
+        ],
+        "title": "MormiContract"
+      },
+      "NoteAttribution": {
+        "type": "string",
+        "enum": [
+          "child",
+          "coauthored"
+        ],
+        "title": "NoteAttribution"
+      },
+      "NoteEvidence": {
+        "type": "string",
+        "enum": [
+          "direct_explanation",
+          "supported_completion"
+        ],
+        "title": "NoteEvidence"
+      },
+      "NoteUpdate": {
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "title": "Note Id"
+          },
+          "skill_id": {
+            "type": "string",
+            "title": "Skill Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "attribution": {
+            "$ref": "#/components/schemas/NoteAttribution"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/NoteEvidence"
+          },
+          "attribution_label": {
+            "type": "string",
+            "title": "Attribution Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "skill_id",
+          "text",
+          "attribution",
+          "evidence",
+          "attribution_label"
+        ],
+        "title": "NoteUpdate"
+      },
+      "PedagogySnapshot": {
+        "properties": {
+          "expression_level": {
+            "$ref": "#/components/schemas/ExpressionLevel"
+          },
+          "hint_level": {
+            "$ref": "#/components/schemas/HintLevel"
+          },
+          "subgoal_id": {
+            "type": "string",
+            "title": "Subgoal Id"
+          },
+          "verified_slots": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Verified Slots"
+          },
+          "bottleneck": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bottleneck"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expression_level",
+          "hint_level",
+          "subgoal_id",
+          "verified_slots"
+        ],
+        "title": "PedagogySnapshot"
+      },
+      "PracticeAttempt": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Item Id"
+          },
+          "correct": {
+            "type": "boolean",
+            "title": "Correct"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response"
+          },
+          "misconception_tag": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Misconception Tag"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 600000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item_id",
+          "correct"
+        ],
+        "title": "PracticeAttempt"
+      },
+      "PracticeResult": {
+        "properties": {
+          "skill_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Skill Id"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeAttempt"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Attempts"
+          },
+          "question_count": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Question Count",
+            "default": 0
+          },
+          "first_try_correct_count": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "First Try Correct Count",
+            "default": 0
+          },
+          "wrong_attempt_count": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 0.0,
+            "title": "Wrong Attempt Count",
+            "default": 0
+          },
+          "earned_reward": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Earned Reward",
+            "default": 0
+          },
+          "misconception_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Misconception Tags"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completed At"
+          },
+          "practice_result_id": {
+            "type": "string",
+            "title": "Practice Result Id"
+          },
+          "learner_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Learner Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "skill_id",
+          "learner_id"
+        ],
+        "title": "PracticeResult",
+        "description": "A persisted practice summary with its ownership and idempotency identity."
+      },
+      "PracticeSummary": {
+        "properties": {
+          "skill_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Skill Id"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeAttempt"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Attempts"
+          },
+          "question_count": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Question Count",
+            "default": 0
+          },
+          "first_try_correct_count": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "First Try Correct Count",
+            "default": 0
+          },
+          "wrong_attempt_count": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 0.0,
+            "title": "Wrong Attempt Count",
+            "default": 0
+          },
+          "earned_reward": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Earned Reward",
+            "default": 0
+          },
+          "misconception_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 30,
+            "title": "Misconception Tags"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "skill_id"
+        ],
+        "title": "PracticeSummary"
+      },
+      "ResponseType": {
+        "type": "string",
+        "enum": [
+          "text",
+          "choice",
+          "fill",
+          "count",
+          "equation",
+          "action",
+          "no_response"
+        ],
+        "title": "ResponseType"
+      },
+      "RetentionPolicy": {
+        "type": "string",
+        "enum": [
+          "no_raw",
+          "30_days",
+          "90_days"
+        ],
+        "title": "RetentionPolicy"
+      },
+      "SceneType": {
+        "type": "string",
+        "enum": [
+          "home_teach",
+          "cafe"
+        ],
+        "title": "SceneType"
+      },
+      "SessionCreate": {
+        "properties": {
+          "learner_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Learner Id"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/SceneType"
+          },
+          "scenario_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Scenario Id"
+          },
+          "learning_session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learning Session Id"
+          },
+          "practice_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Practice Result Id"
+          },
+          "practice_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PracticeSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conversation_storage_consent": {
+            "type": "boolean",
+            "title": "Conversation Storage Consent",
+            "default": false
+          },
+          "retention_policy": {
+            "$ref": "#/components/schemas/RetentionPolicy",
+            "default": "no_raw"
+          }
+        },
+        "type": "object",
+        "required": [
+          "learner_id",
+          "scene",
+          "scenario_id"
+        ],
+        "title": "SessionCreate"
+      },
+      "SessionEnvelope": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
+          },
+          "turn": {
+            "$ref": "#/components/schemas/TurnContract"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "turn"
+        ],
+        "title": "SessionEnvelope"
+      },
+      "SessionStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "completed"
+        ],
+        "title": "SessionStatus"
+      },
+      "SkillProfile": {
+        "properties": {
+          "skill_id": {
+            "type": "string",
+            "title": "Skill Id"
+          },
+          "highest_stable_expression_level": {
+            "$ref": "#/components/schemas/ExpressionLevel",
+            "default": "L2"
+          },
+          "h0_success_streak": {
+            "type": "integer",
+            "title": "H0 Success Streak",
+            "default": 0
+          },
+          "recent_max_hint": {
+            "$ref": "#/components/schemas/HintLevel",
+            "default": "H0"
+          },
+          "frequent_hint_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Frequent Hint Types"
+          },
+          "concept_mastery": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Concept Mastery",
+            "default": 0.5
+          },
+          "expression_independence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Expression Independence",
+            "default": 0.5
+          },
+          "last_bottleneck": {
+            "type": "string",
+            "title": "Last Bottleneck",
+            "default": "unknown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "skill_id"
+        ],
+        "title": "SkillProfile"
+      },
+      "SkillProfilesResponse": {
+        "properties": {
+          "learner_id": {
+            "type": "integer",
+            "title": "Learner Id"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillProfile"
+            },
+            "type": "array",
+            "title": "Skills"
+          }
+        },
+        "type": "object",
+        "required": [
+          "learner_id",
+          "skills"
+        ],
+        "title": "SkillProfilesResponse"
+      },
+      "StarNotesResponse": {
+        "properties": {
+          "learner_id": {
+            "type": "integer",
+            "title": "Learner Id"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/NoteUpdate"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "learner_id",
+          "notes"
+        ],
+        "title": "StarNotesResponse"
+      },
+      "TurnContract": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/SceneType"
+          },
+          "scenario_id": {
+            "type": "string",
+            "title": "Scenario Id"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "stage_id": {
+            "type": "string",
+            "title": "Stage Id"
+          },
+          "task_index": {
+            "type": "integer",
+            "title": "Task Index"
+          },
+          "mormi": {
+            "$ref": "#/components/schemas/MormiContract"
+          },
+          "input": {
+            "$ref": "#/components/schemas/InputContract"
+          },
+          "visual": {
+            "$ref": "#/components/schemas/VisualContract"
+          },
+          "help_card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HelpCardContract"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note_update": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NoteUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus"
+          },
+          "state_version": {
+            "type": "integer",
+            "title": "State Version"
+          },
+          "completion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionContract"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pedagogy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PedagogySnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "scene",
+          "scenario_id",
+          "task_id",
+          "stage_id",
+          "task_index",
+          "mormi",
+          "input",
+          "visual",
+          "status",
+          "state_version"
+        ],
+        "title": "TurnContract"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VisualContract": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "title": "VisualContract"
+      }
+    }
+  }
+}

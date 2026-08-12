@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mormi.example/schemas/visual-contract.schema.json",
+  "title": "Mormi VisualContract",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "cafe_queues" },
+        "data": {
+          "type": "object",
+          "required": ["left_people", "right_people", "show_counts"],
+          "properties": {
+            "left_people": { "type": "integer", "minimum": 0 },
+            "right_people": { "type": "integer", "minimum": 0 },
+            "show_counts": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "vertical_equation" },
+        "data": {
+          "type": "object",
+          "required": ["left", "right", "operation", "result_hidden"],
+          "properties": {
+            "left": { "type": "integer", "minimum": 0 },
+            "right": { "type": "integer", "minimum": 0 },
+            "operation": { "enum": ["addition", "subtraction"] },
+            "result_hidden": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "number_cards" },
+        "data": {
+          "type": "object",
+          "required": ["cards"],
+          "properties": {
+            "cards": {
+              "type": "array",
+              "minItems": 2,
+              "items": { "type": "integer" }
+            },
+            "neutral_style": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "place_value_equation" },
+        "data": {
+          "type": "object",
+          "required": ["left", "right", "operation"],
+          "properties": {
+            "left": { "type": "integer", "minimum": 0 },
+            "right": { "type": "integer", "minimum": 0 },
+            "operation": { "enum": ["addition", "subtraction"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "joint_steps" },
+        "data": {
+          "type": "object",
+          "required": ["steps"],
+          "properties": {
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "joint_equation_steps" },
+        "data": {
+          "type": "object",
+          "required": ["left", "right", "operation", "result"],
+          "properties": {
+            "left": { "type": "integer", "minimum": 0 },
+            "right": { "type": "integer", "minimum": 0 },
+            "operation": { "enum": ["addition", "subtraction"] },
+            "result": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "success" },
+        "data": {
+          "type": "object",
+          "required": ["task"],
+          "properties": {
+            "task": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

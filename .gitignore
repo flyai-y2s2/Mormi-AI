@@ -1,0 +1,18 @@
+.env
+.DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+*.db
+*.sqlite3
+data/*
+!data/.gitkeep
+dist/
+build/
+*.egg-info/
+
+# 일회성 프론트 협의·회신 문서는 공식 API_SPEC에 통합한다.
+docs/FRONTEND_*.md
