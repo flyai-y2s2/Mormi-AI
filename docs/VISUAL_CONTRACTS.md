@@ -38,10 +38,15 @@
   "type": "cafe_menu",
   "data": {
     "menu_items": [
-      {"id": "lemon", "name": "레몬 에이드", "price": 2800, "emoji": "🍋"}
+      {
+        "id": "americano",
+        "name": "아메리카노",
+        "price": 3000,
+        "image_url": "/figma/cafe/americano.png?v=2"
+      }
     ],
-    "budget": 8000,
-    "mormi_pick": {"id": "yogurt", "name": "딸기 요거트", "price": 5200},
+    "budget": 10000,
+    "mormi_pick": {"id": "strawberry-juice", "name": "딸기주스", "price": 4000},
     "child_pick": null,
     "auto_total": true,
     "budget_status": "pending"
@@ -50,10 +55,11 @@
 ```
 
 - `auto_total=true`: 2단계에서 장바구니 합계를 자동 표시합니다.
-- `auto_total=false`: 3·5단계에서 합계를 숨기고 아이가 직접 계산합니다.
+- `menu_items`는 프론트가 대화 시작 시 보낸 스냅샷을 그대로 반환합니다.
+- `auto_total=false`: 3단계에서 합계를 숨기고 아이가 직접 계산합니다.
 - `budget_status`: `pending`, `within`, `over` 중 하나입니다.
 - 예산을 넘으면 `child_pick`, `total`, `budget_status=over`를 함께 반환합니다.
-- `input.config.allow_same_menu=true`이면 모르미와 같은 메뉴를 고를 수 있습니다.
+- 모르미가 고른 메뉴는 `choice.disabled=true`이며 아이는 다른 메뉴를 고릅니다.
 
 ## `cafe_calculation`
 
@@ -61,12 +67,12 @@
 {
   "type": "cafe_calculation",
   "data": {
-    "left": 5200,
-    "right": 2800,
+    "left": 4000,
+    "right": 3000,
     "operation": "addition",
     "result_hidden": true,
-    "mormi_menu": {"id": "yogurt", "name": "딸기 요거트", "price": 5200},
-    "child_menu": {"id": "lemon", "name": "레몬 에이드", "price": 2800}
+    "mormi_menu": {"id": "strawberry-juice", "name": "딸기주스", "price": 4000},
+    "child_menu": {"id": "americano", "name": "아메리카노", "price": 3000}
   }
 }
 ```
@@ -85,7 +91,7 @@
 
 ## `vertical_equation`
 
-집 반복학습 후 가르치기에서 사용하는 기존 계약입니다. 카페 3·4·5단계에서는
+집 반복학습 후 가르치기에서 사용하는 기존 계약입니다. 카페 3·4단계에서는
 현재 사용하지 않습니다.
 
 ```json

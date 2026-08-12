@@ -111,30 +111,58 @@ X-Mormi-Service-Key: <service-key>
 | `cafe` | `cafe_budget_menu` | 2단계: 자동 합계를 보며 예산 안에서 메뉴 선택 |
 | `cafe` | `cafe_menu_total` | 3단계: 두 메뉴를 고르고 전체 가격 계산 |
 | `cafe` | `cafe_change` | 4단계: 10,000원에서 한 메뉴 가격을 빼기 |
-| `cafe` | `cafe_integrated` | 5단계: 줄→예산 메뉴→직접 합계→거스름돈 |
 
-호환을 위해 `cafe_queue_demo`는 `cafe_queue`, `cafe_outing`은
-`cafe_integrated`와 같은 흐름으로 유지합니다.
+호환을 위해 `cafe_queue_demo`는 `cafe_queue`와 같은 흐름으로 유지합니다.
+5단계 통합 시나리오는 현재 프로토타입 API에 노출하지 않습니다.
 
 ### 카페 세션 변형값
 
-- 줄 인원은 왼쪽·오른쪽 각각 1~5명이며 서로 다른 수로 정합니다.
-- 예산은 8,000원·9,000원·10,000원 중 하나입니다.
-- 모르미 메뉴는 고정 메뉴판에서 무작위로 하나를 고릅니다.
+- 줄 인원은 AI가 왼쪽·오른쪽 각각 1~5명, 서로 다른 수로 정합니다.
+- 메뉴판, 모르미가 고른 메뉴와 예산은 프론트가 `cafe_context`로 전달합니다.
+- AI 서버에는 실제 서비스 메뉴 이름이나 가격을 하드코딩하지 않습니다.
 - 거스름돈 계산에서 내는 돈은 항상 10,000원입니다.
-- 모든 변형값은 대화 생성 시 한 번만 정해져 세션 상태에 저장됩니다.
+- 전달받은 메뉴 스냅샷과 생성된 줄 인원은 세션 상태에 저장됩니다.
 - 동일 `conversation_id` 복구와 멱등 재시도에서는 값이 다시 뽑히지 않습니다.
 
-고정 메뉴판:
+메뉴 시나리오 시작 예시:
 
-| ID | 메뉴 | 가격 |
-|---|---|---:|
-| `lemon` | 레몬 에이드 | 2,800원 |
-| `choco` | 핫초코 | 3,200원 |
-| `sandwich` | 샌드위치 | 4,300원 |
-| `yogurt` | 딸기 요거트 | 5,200원 |
+```json
+{
+  "learner_id": 1,
+  "scene": "cafe",
+  "scenario_id": "cafe_budget_menu",
+  "cafe_context": {
+    "menu_items": [
+      {
+        "id": "americano",
+        "name": "아메리카노",
+        "price": 3000,
+        "image_url": "/figma/cafe/americano.png?v=2"
+      },
+      {
+        "id": "strawberry-juice",
+        "name": "딸기주스",
+        "price": 4000,
+        "image_url": "/figma/cafe/strawberry-juice.png?v=2"
+      }
+    ],
+    "mormi_menu_id": "strawberry-juice",
+    "budget": 10000
+  },
+  "conversation_storage_consent": false,
+  "retention_policy": "no_raw"
+}
+```
 
-두 사람이 같은 메뉴를 고르는 것도 허용합니다.
+`cafe_context` 규칙:
+
+- `cafe_budget_menu`, `cafe_menu_total`, `cafe_change`에서 필수입니다.
+- `menu_items`는 ID가 중복되지 않는 2~20개 메뉴입니다.
+- `mormi_menu_id`는 반드시 `menu_items` 안의 ID여야 합니다.
+- 모르미가 고른 메뉴는 선택지에서 비활성화되며 아이는 다른 메뉴를 고릅니다.
+- `cafe_budget_menu`에서는 `budget`도 필수이며, 아이가 고를 수 있는 메뉴가 최소
+  하나는 있어야 합니다.
+- 화면에 표시한 메뉴와 API에 보낸 스냅샷은 동일해야 합니다.
 
 ### 반복 결과가 이미 저장된 경우
 

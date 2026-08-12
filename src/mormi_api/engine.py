@@ -6,9 +6,10 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .content import INTEGRATED_MENU_TASK_ID, MENU_BY_ID, TaskDefinition, get_task
+from .content import TaskDefinition, get_task
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError, validate_speaker_output
 from .schemas import (
+    CafeMenuItem,
     ChildResponse,
     CompletionContract,
     CompletionOutcome,
@@ -246,7 +247,12 @@ class ConversationEngine:
             )
 
         if task.behavior == "budget_menu_selection" and response.choice_ids:
-            selected = MENU_BY_ID.get(response.choice_ids[0])
+            menu_items = [
+                CafeMenuItem.model_validate(item)
+                for item in task.visible_facts.get("menu_items", [])
+            ]
+            menu_by_id = {item.id: item for item in menu_items}
+            selected = menu_by_id.get(response.choice_ids[0])
             mormi_data = task.visible_facts.get("mormi_menu", {})
             budget = int(task.visible_facts.get("budget") or 0)
             mormi_price = int(mormi_data.get("price", 0)) if isinstance(mormi_data, dict) else 0
@@ -426,64 +432,6 @@ class ConversationEngine:
         child_text: str | None,
         previous_question: str,
     ) -> PedagogicalDecision:
-        if task.behavior == "integrated_total":
-            total = int(task.slots["result"].expected)
-            budget = int(task.visible_facts.get("budget") or 0)
-            if total > budget:
-                prior_child_menu = state.scenario_data.get("child_menu_id")
-                state.scenario_data["last_child_menu_id"] = prior_child_menu
-                state.scenario_data["last_over_budget_total"] = total
-                state.scenario_data.pop("child_menu_id", None)
-                state.task_index = state.task_ids.index(INTEGRATED_MENU_TASK_ID)
-                state.expression_level = ExpressionLevel.L2
-                state.task_start_level = ExpressionLevel.L2
-                state.hint_level = HintLevel.H0
-                state.task_max_hint = HintLevel.H0
-                state.subgoal_id = "pick_menu"
-                state.verified_slots = {}
-                state.expression_failures = 0
-                state.concept_failures = 0
-                state.direct_note_candidate = None
-                next_task = get_task(state.current_task_id, state.scenario_data)
-                next_step = next_task.step_for(state.expression_level, state.verified_slots)
-                previous_menu = MENU_BY_ID.get(str(prior_child_menu))
-                visual = next_task.base_visual.model_copy(
-                    update={
-                        "data": {
-                            **next_task.base_visual.data,
-                            "child_pick": (
-                                previous_menu.model_dump() if previous_menu else None
-                            ),
-                            "total": total,
-                            "budget_status": "over",
-                        }
-                    },
-                    deep=True,
-                )
-                fallback = "계산해 보니 예산을 넘었네. 메뉴를 다시 골라볼까?"
-                return PedagogicalDecision(
-                    state=state,
-                    dialogue_act="integrated_budget_retry",
-                    required_question=next_step.prompt,
-                    input=next_step.input,
-                    visual=visual,
-                    help_card=None,
-                    note_update=None,
-                    mood="thinking",
-                    speaker_context=self._speaker_context(
-                        task=next_task,
-                        state=state,
-                        dialogue_act="integrated_budget_retry",
-                        previous_question=previous_question,
-                        required_question=next_step.prompt,
-                        verified_facts=[],
-                        analysis=analysis,
-                        child_text=child_text,
-                        fallback=fallback,
-                    ),
-                )
-            state.scenario_data["order_total"] = total
-
         direct = bool(
             state.direct_note_candidate
             and state.task_start_level is ExpressionLevel.L4

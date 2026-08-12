@@ -197,6 +197,32 @@ class PracticeResult(PracticeSummary):
     learner_id: int = Field(ge=1)
 
 
+class CafeMenuItem(BaseModel):
+    """A menu snapshot supplied by the frontend through the trusted BFF."""
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    name: str = Field(min_length=1, max_length=40)
+    price: int = Field(ge=0, le=100_000)
+    image_url: str | None = Field(default=None, max_length=500)
+
+
+class CafeSessionContext(BaseModel):
+    """Frontend-owned café facts frozen for one AI conversation."""
+
+    menu_items: list[CafeMenuItem] = Field(min_length=2, max_length=20)
+    mormi_menu_id: str = Field(min_length=1, max_length=64)
+    budget: int | None = Field(default=None, ge=0, le=100_000)
+
+    @model_validator(mode="after")
+    def validate_menu_references(self) -> CafeSessionContext:
+        menu_ids = [item.id for item in self.menu_items]
+        if len(menu_ids) != len(set(menu_ids)):
+            raise ValueError("menu item ids must be unique")
+        if self.mormi_menu_id not in menu_ids:
+            raise ValueError("mormi_menu_id must reference menu_items")
+        return self
+
+
 class SessionCreate(BaseModel):
     learner_id: int = Field(ge=1)
     scene: SceneType
@@ -204,6 +230,7 @@ class SessionCreate(BaseModel):
     learning_session_id: str | None = Field(default=None, max_length=100)
     practice_result_id: str | None = Field(default=None, max_length=100)
     practice_summary: PracticeSummary | None = None
+    cafe_context: CafeSessionContext | None = None
     conversation_storage_consent: bool = False
     retention_policy: RetentionPolicy = RetentionPolicy.NO_RAW
 
@@ -216,6 +243,26 @@ class SessionCreate(BaseModel):
             and self.retention_policy is not RetentionPolicy.NO_RAW
         ):
             raise ValueError("retention_policy must be no_raw without storage consent")
+        menu_scenarios = {"cafe_budget_menu", "cafe_menu_total", "cafe_change"}
+        if self.scenario_id in menu_scenarios and self.cafe_context is None:
+            raise ValueError("cafe_context is required for menu scenarios")
+        if self.cafe_context is not None and self.scenario_id not in menu_scenarios:
+            raise ValueError("cafe_context is not used by this scenario")
+        if self.scenario_id == "cafe_budget_menu" and (
+            self.cafe_context is None or self.cafe_context.budget is None
+        ):
+            raise ValueError("budget is required for cafe_budget_menu")
+        if self.scenario_id == "cafe_budget_menu" and self.cafe_context is not None:
+            menu_by_id = {item.id: item for item in self.cafe_context.menu_items}
+            mormi_price = menu_by_id[self.cafe_context.mormi_menu_id].price
+            budget = self.cafe_context.budget
+            assert budget is not None
+            if not any(
+                item.id != self.cafe_context.mormi_menu_id
+                and mormi_price + item.price <= budget
+                for item in self.cafe_context.menu_items
+            ):
+                raise ValueError("budget must allow at least one child menu")
         return self
 
 

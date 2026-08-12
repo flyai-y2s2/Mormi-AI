@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from .schemas import (
+    CafeMenuItem,
+    CafeSessionContext,
     ChoiceOption,
     ExpressionLevel,
     HintLevel,
@@ -126,25 +128,8 @@ def choice_input(slots: list[str], choices: list[ChoiceOption]) -> InputContract
     return InputContract(kind=InputKind.CHOICES, target_slots=slots, choices=choices)
 
 
-class MenuItem(BaseModel):
-    id: str
-    name: str
-    price: int
-    emoji: str
-
-
-CAFE_MENU: tuple[MenuItem, ...] = (
-    MenuItem(id="lemon", name="레몬 에이드", price=2800, emoji="🍋"),
-    MenuItem(id="choco", name="핫초코", price=3200, emoji="☕"),
-    MenuItem(id="sandwich", name="샌드위치", price=4300, emoji="🥪"),
-    MenuItem(id="yogurt", name="딸기 요거트", price=5200, emoji="🍓"),
-)
-MENU_BY_ID = {item.id: item for item in CAFE_MENU}
-CAFE_BUDGETS = (8000, 9000, 10000)
-
-
-def menu_items_json() -> list[dict[str, str | int]]:
-    return [item.model_dump() for item in CAFE_MENU]
+def menu_items_json(items: Sequence[CafeMenuItem]) -> list[dict[str, str | int | None]]:
+    return [item.model_dump() for item in items]
 
 
 QUEUE_TASK = TaskDefinition(
@@ -607,7 +592,7 @@ def queue_task(
     side_label = "왼쪽" if side == "left" else "오른쪽"
     task.id = task_id
     task.stage_id = stage_id
-    task.title = "줄 서기" if stage_id == "queue" else "통합 실습: 줄 서기"
+    task.title = "줄 서기"
     task.visible_facts = {
         "left_count": left,
         "right_count": right,
@@ -694,7 +679,8 @@ def menu_selection_task(
     *,
     task_id: str,
     stage_id: str,
-    mormi_menu: MenuItem,
+    menu_items: Sequence[CafeMenuItem],
+    mormi_menu: CafeMenuItem,
     budget: int | None,
     auto_total: bool,
     behavior: str,
@@ -702,10 +688,19 @@ def menu_selection_task(
 ) -> TaskDefinition:
     valid_ids: list[str | int | float | bool] = [
         item.id
-        for item in CAFE_MENU
-        if budget is None or not auto_total or mormi_menu.price + item.price <= budget
+        for item in menu_items
+        if item.id != mormi_menu.id
+        and (budget is None or not auto_total or mormi_menu.price + item.price <= budget)
     ]
-    choices = [option(item.id, f"{item.emoji} {item.name} {item.price:,}원") for item in CAFE_MENU]
+    choices = [
+        ChoiceOption(
+            id=item.id,
+            label=f"{item.name} {item.price:,}원",
+            image_url=item.image_url,
+            disabled=item.id == mormi_menu.id,
+        )
+        for item in menu_items
+    ]
     input_contract = InputContract(
         kind=InputKind.CHOICES,
         target_slots=["child_menu"],
@@ -715,7 +710,7 @@ def menu_selection_task(
             "budget": budget,
             "mormi_menu_id": mormi_menu.id,
             "auto_total": auto_total,
-            "allow_same_menu": True,
+            "allow_same_menu": False,
         },
     )
     prompt = f"나는 {mormi_menu.name}을 골랐어. 너는 뭘 고를래?"
@@ -724,7 +719,7 @@ def menu_selection_task(
         prompt=prompt,
         target_slots=["child_menu"],
         input=input_contract,
-        choice_effects={item.id: {"child_menu": item.id} for item in CAFE_MENU},
+        choice_effects={item.id: {"child_menu": item.id} for item in menu_items},
         fallback_text="네가 먹고 싶은 메뉴 하나를 골라 줄래?",
     )
     return TaskDefinition(
@@ -741,7 +736,7 @@ def menu_selection_task(
         visible_facts={
             "budget": budget,
             "mormi_menu": mormi_menu.model_dump(),
-            "menu_items": menu_items_json(),
+            "menu_items": menu_items_json(menu_items),
             "auto_total": auto_total,
         },
         slots={
@@ -777,7 +772,7 @@ def menu_selection_task(
         base_visual=VisualContract(
             type="cafe_menu",
             data={
-                "menu_items": menu_items_json(),
+                "menu_items": menu_items_json(menu_items),
                 "budget": budget,
                 "mormi_pick": mormi_menu.model_dump(),
                 "child_pick": None,
@@ -1000,10 +995,7 @@ BUDGET_MENU_TASK_ID = "cafe_budget_menu_pick"
 TOTAL_MENU_PICK_TASK_ID = "cafe_total_menu_pick"
 TOTAL_CALC_TASK_ID = "cafe_total_calculation"
 CHANGE_TASK_ID = "cafe_change"
-INTEGRATED_QUEUE_TASK_ID = "cafe_integrated_queue"
-INTEGRATED_MENU_TASK_ID = "cafe_integrated_menu_pick"
-INTEGRATED_TOTAL_TASK_ID = "cafe_integrated_total"
-INTEGRATED_CHANGE_TASK_ID = "cafe_integrated_change"
+MENU_SCENARIO_IDS = {"cafe_budget_menu", "cafe_menu_total", "cafe_change"}
 
 SCENARIOS: dict[str, ScenarioDefinition] = {
     "cafe_queue": ScenarioDefinition(
@@ -1036,28 +1028,6 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         title="4단계 거스름돈 받기",
         task_ids=[CHANGE_TASK_ID],
     ),
-    "cafe_integrated": ScenarioDefinition(
-        id="cafe_integrated",
-        scene=SceneType.CAFE,
-        title="5단계 카페 통합 실습",
-        task_ids=[
-            INTEGRATED_QUEUE_TASK_ID,
-            INTEGRATED_MENU_TASK_ID,
-            INTEGRATED_TOTAL_TASK_ID,
-            INTEGRATED_CHANGE_TASK_ID,
-        ],
-    ),
-    "cafe_outing": ScenarioDefinition(
-        id="cafe_outing",
-        scene=SceneType.CAFE,
-        title="5단계 카페 통합 실습(호환 ID)",
-        task_ids=[
-            INTEGRATED_QUEUE_TASK_ID,
-            INTEGRATED_MENU_TASK_ID,
-            INTEGRATED_TOTAL_TASK_ID,
-            INTEGRATED_CHANGE_TASK_ID,
-        ],
-    ),
     "home_addition_teach": ScenarioDefinition(
         id="home_addition_teach",
         scene=SceneType.HOME_TEACH,
@@ -1067,51 +1037,65 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
 }
 
 
-def create_scenario_data(scenario_id: str, rng: Any | None = None) -> dict[str, Any]:
+def create_scenario_data(
+    scenario_id: str,
+    cafe_context: CafeSessionContext | None = None,
+    rng: Any | None = None,
+) -> dict[str, Any]:
     chooser = rng or random.SystemRandom()
     data: dict[str, Any] = {"payment": 10000}
-    if scenario_id in {"cafe_queue", "cafe_queue_demo", "cafe_integrated", "cafe_outing"}:
+    if scenario_id in {"cafe_queue", "cafe_queue_demo"}:
         left = chooser.choice(range(1, 6))
         right = chooser.choice([value for value in range(1, 6) if value != left])
         data.update(left_count=left, right_count=right)
-    if scenario_id in {
-        "cafe_budget_menu",
-        "cafe_menu_total",
-        "cafe_change",
-        "cafe_integrated",
-        "cafe_outing",
-    }:
-        data["mormi_menu_id"] = chooser.choice(CAFE_MENU).id
-    if scenario_id in {"cafe_budget_menu", "cafe_integrated", "cafe_outing"}:
-        data["budget"] = chooser.choice(CAFE_BUDGETS)
+    if scenario_id in MENU_SCENARIO_IDS:
+        if cafe_context is None:
+            raise ValueError("cafe_context is required for menu scenarios")
+        data.update(cafe_context.model_dump(mode="json"))
     return data
 
 
-def _menu_from_data(data: Mapping[str, Any], key: str, default: str = "choco") -> MenuItem:
-    return MENU_BY_ID.get(str(data.get(key, default)), MENU_BY_ID[default])
+def _menu_items_from_data(data: Mapping[str, Any]) -> tuple[CafeMenuItem, ...]:
+    raw_items = data.get("menu_items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ValueError("scenario_data.menu_items is required")
+    return tuple(CafeMenuItem.model_validate(item) for item in raw_items)
+
+
+def _menu_from_data(
+    data: Mapping[str, Any],
+    key: str,
+    menu_items: Sequence[CafeMenuItem],
+    *,
+    default_to_first: bool = False,
+) -> CafeMenuItem:
+    menu_by_id = {item.id: item for item in menu_items}
+    selected_id = data.get(key)
+    if selected_id is None and default_to_first:
+        return menu_items[0]
+    try:
+        return menu_by_id[str(selected_id)]
+    except KeyError as error:
+        raise ValueError(f"scenario_data.{key} must reference menu_items") from error
 
 
 def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> TaskDefinition:
     data = scenario_data or {}
     left_count = int(data.get("left_count", 3))
     right_count = int(data.get("right_count", 5))
-    mormi_menu = _menu_from_data(data, "mormi_menu_id")
-    child_menu = _menu_from_data(data, "child_menu_id", "lemon")
-    budget = int(data.get("budget", 9000))
     if task_id == QUEUE_TASK_ID:
         return queue_task(task_id=task_id, stage_id="queue", left=left_count, right=right_count)
-    if task_id == INTEGRATED_QUEUE_TASK_ID:
-        return queue_task(
-            task_id=task_id,
-            stage_id="integrated",
-            left=left_count,
-            right=right_count,
-            note_policy="none",
-        )
+    if task_id == HOME_ADD_TASK.id:
+        return HOME_ADD_TASK
+    menu_items = _menu_items_from_data(data)
+    mormi_menu = _menu_from_data(data, "mormi_menu_id", menu_items)
+    child_menu = _menu_from_data(data, "child_menu_id", menu_items, default_to_first=True)
     if task_id == BUDGET_MENU_TASK_ID:
+        budget = int(data["budget"])
         return menu_selection_task(
             task_id=task_id,
             stage_id="budget_menu",
+            menu_items=menu_items,
             mormi_menu=mormi_menu,
             budget=budget,
             auto_total=True,
@@ -1122,70 +1106,53 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
         return menu_selection_task(
             task_id=task_id,
             stage_id="menu_total",
+            menu_items=menu_items,
             mormi_menu=mormi_menu,
             budget=None,
             auto_total=False,
             behavior="menu_selection",
             note_policy="none",
         )
-    if task_id == INTEGRATED_MENU_TASK_ID:
-        return menu_selection_task(
-            task_id=task_id,
-            stage_id="integrated",
-            mormi_menu=mormi_menu,
-            budget=budget,
-            auto_total=False,
-            behavior="integrated_menu_selection",
-            note_policy="none",
-        )
-    if task_id in {TOTAL_CALC_TASK_ID, INTEGRATED_TOTAL_TASK_ID}:
-        integrated = task_id == INTEGRATED_TOTAL_TASK_ID
+    if task_id == TOTAL_CALC_TASK_ID:
         return simple_calculation_task(
             task_id=task_id,
-            stage_id="integrated" if integrated else "menu_total",
-            title="통합 실습: 메뉴값 계산" if integrated else "메뉴값 계산하기",
+            stage_id="menu_total",
+            title="메뉴값 계산하기",
             left=mormi_menu.price,
             right=child_menu.price,
             operation="addition",
             left_label=mormi_menu.name,
             right_label=child_menu.name,
-            behavior="integrated_total" if integrated else "menu_total",
-            note_policy="none" if integrated else "stage",
+            behavior="menu_total",
+            note_policy="stage",
             coauthored_note="두 메뉴의 전체 가격은 각 메뉴 가격을 더해서 구해.",
             context={
-                "budget": budget if integrated else None,
+                "budget": None,
                 "mormi_menu": mormi_menu.model_dump(),
                 "child_menu": child_menu.model_dump(),
             },
         )
-    if task_id in {CHANGE_TASK_ID, INTEGRATED_CHANGE_TASK_ID}:
-        integrated = task_id == INTEGRATED_CHANGE_TASK_ID
-        menu_price = mormi_menu.price + child_menu.price if integrated else mormi_menu.price
+    if task_id == CHANGE_TASK_ID:
+        menu_price = mormi_menu.price
         return simple_calculation_task(
             task_id=task_id,
-            stage_id="integrated" if integrated else "change",
-            title="통합 실습: 거스름돈" if integrated else "거스름돈 받기",
+            stage_id="change",
+            title="거스름돈 받기",
             left=10000,
             right=menu_price,
             operation="subtraction",
             left_label="낸 돈",
-            right_label="전체 메뉴값" if integrated else mormi_menu.name,
-            behavior="integrated_change" if integrated else "change",
+            right_label=mormi_menu.name,
+            behavior="change",
             note_policy="stage",
-            coauthored_note=(
-                "사람이 적은 줄을 고르고 예산 안에서 메뉴를 고른 뒤, 전체 가격과 거스름돈을 계산해."
-                if integrated
-                else "거스름돈은 10,000원에서 메뉴 가격을 빼서 구해."
-            ),
+            coauthored_note="거스름돈은 10,000원에서 메뉴 가격을 빼서 구해.",
             context={
                 "payment": 10000,
                 "menu_total": menu_price,
                 "mormi_menu": mormi_menu.model_dump(),
-                "child_menu": child_menu.model_dump() if integrated else None,
+                "child_menu": None,
             },
         )
-    if task_id == HOME_ADD_TASK.id:
-        return HOME_ADD_TASK
     raise KeyError(f"Unknown task: {task_id}")
 
 
@@ -1197,11 +1164,27 @@ def get_scenario(scenario_id: str) -> ScenarioDefinition:
 
 
 def validate_content() -> None:
+    validation_context = CafeSessionContext(
+        menu_items=[
+            CafeMenuItem(id="sample-a", name="메뉴 A", price=2000),
+            CafeMenuItem(id="sample-b", name="메뉴 B", price=3000),
+        ],
+        mormi_menu_id="sample-a",
+        budget=10000,
+    )
     for scenario in SCENARIOS.values():
+        scenario_data = create_scenario_data(
+            scenario.id,
+            validation_context if scenario.id in MENU_SCENARIO_IDS else None,
+        )
         for task_id in scenario.task_ids:
-            get_task(task_id)
+            get_task(task_id, scenario_data)
     task_ids = {task_id for scenario in SCENARIOS.values() for task_id in scenario.task_ids}
-    for task in [get_task(task_id) for task_id in task_ids]:
+    sample_data = create_scenario_data("cafe_menu_total", validation_context)
+    for task in [
+        get_task(task_id, sample_data if task_id != QUEUE_TASK_ID else {})
+        for task_id in task_ids
+    ]:
         if set(task.required_slots) - set(task.slots):
             raise ValueError(f"{task.id}: required slot is undefined")
         for level in ExpressionLevel:

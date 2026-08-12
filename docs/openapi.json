@@ -463,6 +463,88 @@
   },
   "components": {
     "schemas": {
+      "CafeMenuItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "price": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Price"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "price"
+        ],
+        "title": "CafeMenuItem",
+        "description": "A menu snapshot supplied by the frontend through the trusted BFF."
+      },
+      "CafeSessionContext": {
+        "properties": {
+          "menu_items": {
+            "items": {
+              "$ref": "#/components/schemas/CafeMenuItem"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 2,
+            "title": "Menu Items"
+          },
+          "mormi_menu_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Mormi Menu Id"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget"
+          }
+        },
+        "type": "object",
+        "required": [
+          "menu_items",
+          "mormi_menu_id"
+        ],
+        "title": "CafeSessionContext",
+        "description": "Frontend-owned café facts frozen for one AI conversation."
+      },
       "ChildResponse": {
         "properties": {
           "turn_id": {
@@ -1263,6 +1345,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/PracticeSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cafe_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CafeSessionContext"
               },
               {
                 "type": "null"
