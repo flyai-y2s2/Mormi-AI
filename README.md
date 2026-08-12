@@ -2,7 +2,9 @@
 
 경계선지능 아동이 AI 동생 모르미를 가르치며 기초 수학을 복습하고, 카페 같은 생활 장면에 적용하도록 돕는 독립 AI 대화 서비스입니다.
 
-이 저장소는 화면을 직접 렌더링하지 않습니다. 다음 교육적 결정을 담당하고 프론트엔드가 그대로 렌더링할 수 있는 `TurnContract`를 반환합니다.
+이 저장소는 화면을 직접 렌더링하거나 일반 서비스 백엔드를 대신하지 않습니다.
+다음 교육적 결정을 담당하고 Spring 백엔드가 프론트엔드에 전달할 수 있는
+`TurnContract`를 반환합니다.
 
 - 집 반복학습 결과를 받아 모르미 가르치기 시작 수준 결정
 - 카페의 줄 서기, 메뉴값 덧셈, 거스름돈 뺄셈, 종합 수행 진행
@@ -99,7 +101,9 @@ uvicorn mormi_api.main:app --reload
 }
 ```
 
-`type`은 `text`, `choice`, `fill`, `count`, `equation`, `action`, `no_response`를 지원합니다. 프론트엔드는 이전 턴의 `input.kind`에 맞는 유형을 보내면 됩니다.
+`type`은 `text`, `choice`, `fill`, `count`, `equation`, `action`, `no_response`를
+지원합니다. Spring 백엔드는 프론트에서 받은 입력을 이전 턴의 `input.kind`에 맞는
+형태로 이 서비스에 전달합니다.
 
 ## 출력 계약
 
@@ -133,7 +137,9 @@ uvicorn mormi_api.main:app --reload
 
 - 운영 환경에서는 `MORMI_RAW_DATA_ENCRYPTION_KEY` 없이는 서버가 시작되지 않습니다.
 - 운영 환경에서는 PostgreSQL과 `MORMI_SERVICE_API_KEY`가 필수입니다.
-- 서비스 간 호출은 `X-Mormi-Service-Key` 헤더로 보호합니다.
+- Spring 백엔드와의 서비스 간 호출은 `X-Mormi-Service-Key` 헤더로 보호합니다.
+- Claude API 키는 Mormi-AI에만 두고, Spring과 프론트에는 전달하지 않습니다.
+- Mormi-AI 서비스 키는 Spring 서버에만 두고, 브라우저에는 전달하지 않습니다.
 - 원문은 발화 이해 요청과 암호화 기록에만 사용하고 학습 프로필에는 복사하지 않습니다.
 - 원문 동의가 없으면 아이 원문은 저장하지 않고 구조화 판정만 저장합니다.
 - 원문 보존 정책은 `no_raw`, `30_days`, `90_days` 중 하나입니다.
