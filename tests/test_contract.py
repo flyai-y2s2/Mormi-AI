@@ -219,3 +219,17 @@ def test_request_level_validation_gets_a_stable_safe_code(
         ]
     )
     assert _request_validation_code(error) == expected
+
+
+def test_unknown_request_validation_exposes_only_the_rule_name() -> None:
+    error = RequestValidationError(
+        [
+            {
+                "type": "model_attributes_type",
+                "loc": ("body",),
+                "msg": "Input should be a valid dictionary",
+                "input": "아이 원문",
+            }
+        ]
+    )
+    assert _request_validation_code(error) == "request_validation_failed.model_attributes_type"

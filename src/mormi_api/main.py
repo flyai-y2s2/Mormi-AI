@@ -149,6 +149,13 @@ def _request_validation_code(error: RequestValidationError) -> str:
     for fragment, code in known_codes:
         if fragment in messages:
             return code
+    first_type = (
+        str(error.errors()[0].get("type", "value_error"))
+        if error.errors()
+        else "value_error"
+    )
+    if first_type.replace("_", "").replace(".", "").isalnum():
+        return f"request_validation_failed.{first_type}"[:80]
     return "request_validation_failed"
 
 
