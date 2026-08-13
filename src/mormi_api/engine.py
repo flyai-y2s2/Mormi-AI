@@ -124,6 +124,19 @@ class ConversationEngine:
         task = get_task(state.current_task_id, state.scenario_data)
         previous_question = graph_state["previous_question"]
 
+        # "잘 모르겠어" 버튼 is an expression-support request, not evidence
+        # that the child holds a mathematical misconception.  It bypasses the
+        # LLM because the UI action already has one unambiguous meaning.
+        if response.type is ResponseType.NO_RESPONSE:
+            analysis = UtteranceAnalysis(
+                safety_category=SafetyCategory.NORMAL,
+                response_category=ResponseCategory.NO_RESPONSE,
+                difficulty_class=DifficultyClass.EXPRESSION,
+                bottleneck="expression",
+                confidence=1,
+            )
+            return {"analysis": analysis.model_dump(mode="json")}
+
         text = response.text or self._response_as_text(response)
         deterministic_category = deterministic_safety(text)
         if deterministic_category is not SafetyCategory.NORMAL:
@@ -281,8 +294,21 @@ class ConversationEngine:
                 )
                 return decision
 
-        newly_verified = task.validated_claims(
-            (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
+        successful_categories = {
+            ResponseCategory.CORRECT_FULL,
+            ResponseCategory.CORRECT_PARTIAL,
+            ResponseCategory.SELF_CORRECTION,
+        }
+        # Completion requires two independent gates: the understanding stage
+        # must call the response successful, and every accepted claim must
+        # match reviewed curriculum facts.  An error analysis can therefore
+        # never fill a slot even if a malformed model/client supplies a value.
+        newly_verified = (
+            task.validated_claims(
+                (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
+            )
+            if analysis.response_category in successful_categories
+            else {}
         )
         next_state.verified_slots.update(newly_verified)
         if newly_verified:
@@ -685,16 +711,30 @@ class ConversationEngine:
     ) -> UtteranceAnalysis:
         step = task.step_for(state.expression_level, state.verified_slots)
         candidate_values: dict[str, object] = {}
+        selected_labels: list[str] = []
         if response.type in {ResponseType.CHOICE, ResponseType.FILL}:
+            choices_by_id = {choice.id: choice for choice in step.input.choices}
+            if len(response.choice_ids) != 1 or any(
+                choice_id not in choices_by_id for choice_id in response.choice_ids
+            ):
+                return UtteranceAnalysis(
+                    safety_category=SafetyCategory.NORMAL,
+                    response_category=ResponseCategory.RECOGNITION_OR_INPUT_ERROR,
+                    difficulty_class=DifficultyClass.INPUT,
+                    bottleneck="structured_input",
+                    confidence=1,
+                )
             for choice_id in response.choice_ids:
+                selected_labels.append(choices_by_id[choice_id].label)
                 candidate_values.update(step.choice_effects.get(choice_id, {}))
         elif response.type in {ResponseType.COUNT, ResponseType.EQUATION, ResponseType.ACTION}:
             candidate_values.update(response.values)
 
         claims = []
+        interpreted_slots = {*step.target_slots, *step.optional_slots}
         for slot_id, value in candidate_values.items():
             slot = task.slots.get(slot_id)
-            if slot:
+            if slot and slot_id in interpreted_slots:
                 claims.append(
                     {
                         "slot_id": slot_id,
@@ -703,10 +743,23 @@ class ConversationEngine:
                         "evidence_span": str(value),
                     }
                 )
+        if not claims and selected_labels:
+            # Keep a structured, non-factual trace of which requested concept
+            # was missed without ever turning the child-facing label into a
+            # verified slot value.
+            claims.extend(
+                {
+                    "slot_id": slot_id,
+                    "value": selected_labels[0],
+                    "factual": False,
+                    "evidence_span": selected_labels[0],
+                }
+                for slot_id in step.target_slots
+            )
         factual_count = sum(1 for claim in claims if claim["factual"])
         all_factual = bool(claims) and factual_count == len(claims)
-        expected_count = len(step.target_slots)
-        if all_factual and factual_count >= expected_count:
+        factual_slots = {claim["slot_id"] for claim in claims if claim["factual"]}
+        if all_factual and set(step.target_slots).issubset(factual_slots):
             category = ResponseCategory.CORRECT_FULL
             difficulty = DifficultyClass.UNKNOWN
         elif factual_count:
@@ -721,6 +774,11 @@ class ConversationEngine:
                 "response_category": category,
                 "difficulty_class": difficulty,
                 "claims": claims,
+                "misconception_tag": (
+                    task.misconception_tags[0] if category is ResponseCategory.CONCEPTUAL_ERROR
+                    and task.misconception_tags else None
+                ),
+                "bottleneck": "concept" if difficulty is DifficultyClass.CONCEPT else "unknown",
                 "confidence": 1,
             }
         )

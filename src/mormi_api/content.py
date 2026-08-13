@@ -1127,9 +1127,7 @@ def home_teaching_task(
         option(f"answer_{index}", str(label)) for index, label in enumerate(sample_answers)
     ]
     answer_effects: dict[str, dict[str, str | int | float | bool]] = {
-        f"answer_{index}": {
-            "answer": expected_answer if label == expected_answer else f"unsupported:{label}"
-        }
+        f"answer_{index}": {"answer": expected_answer} if label == expected_answer else {}
         for index, label in enumerate(sample_answers)
     }
 
@@ -1137,16 +1135,12 @@ def home_teaching_task(
         option(f"short_{index}", label) for index, label in enumerate(spec.short_options)
     ]
     short_effects: dict[str, dict[str, str | int | float | bool]] = {
-        f"short_{index}": {
-            "rule": expected_rule if label == spec.short_correct else f"unsupported:{label}"
-        }
+        f"short_{index}": {"rule": expected_rule} if label == spec.short_correct else {}
         for index, label in enumerate(spec.short_options)
     }
     fill_choices = [option(f"fill_{index}", label) for index, label in enumerate(spec.fill_options)]
     fill_effects: dict[str, dict[str, str | int | float | bool]] = {
-        f"fill_{index}": {
-            "rule": expected_rule if label == spec.fill_correct else f"unsupported:{label}"
-        }
+        f"fill_{index}": {"rule": expected_rule} if label == spec.fill_correct else {}
         for index, label in enumerate(spec.fill_options)
     }
     sentence_frame = " ".join(
@@ -1551,27 +1545,28 @@ def validate_content() -> None:
             if task_id == TOTAL_CALC_TASK_ID:
                 task_data = {**scenario_data, "child_menu_id": "sample-b"}
             get_task(task_id, task_data)
-    task_ids = {task_id for scenario in SCENARIOS.values() for task_id in scenario.task_ids}
+    task_ids = {
+        task_id
+        for scenario in SCENARIOS.values()
+        if scenario.id != "home_teach"
+        for task_id in scenario.task_ids
+    }
     sample_data = {
         **create_scenario_data("cafe_menu_total", validation_context),
         "child_menu_id": "sample-b",
     }
-    sample_home_data = create_scenario_data(
-        "home_teach",
-        curriculum_session_id=next(iter(HOME_TEACHING_CATALOG)),
-        skill_id="catalog_validation",
-    )
-    for task in [
+    tasks_to_validate = [
         get_task(
             task_id,
-            sample_home_data
-            if task_id == HOME_TEACH_TASK_ID
-            else sample_data
-            if task_id != QUEUE_TASK_ID
-            else {},
+            sample_data if task_id != QUEUE_TASK_ID else {},
         )
         for task_id in task_ids
-    ]:
+    ]
+    tasks_to_validate.extend(
+        home_teaching_task(spec, skill_id=spec.id)
+        for spec in HOME_TEACHING_CATALOG.values()
+    )
+    for task in tasks_to_validate:
         if set(task.required_slots) - set(task.slots):
             raise ValueError(f"{task.id}: required slot is undefined")
         for level in ExpressionLevel:
@@ -1582,6 +1577,26 @@ def validate_content() -> None:
                 raise ValueError(f"{task.id}/{step.id}: target slot is undefined")
             if set(step.optional_slots) - set(task.slots):
                 raise ValueError(f"{task.id}/{step.id}: optional slot is undefined")
+            if step.input.kind in {InputKind.CHOICES, InputKind.FILL}:
+                visible_choice_ids = {choice.id for choice in step.input.choices}
+                if set(step.choice_effects) != visible_choice_ids:
+                    raise ValueError(
+                        f"{task.id}/{step.id}: every visible choice needs one reviewed effect"
+                    )
+                correct_choice_ids = {
+                    choice_id
+                    for choice_id, effects in step.choice_effects.items()
+                    if effects
+                    and set(step.target_slots).issubset(effects)
+                    and all(
+                        task.slots[slot_id].accepts(value)
+                        for slot_id, value in effects.items()
+                    )
+                }
+                if not correct_choice_ids:
+                    raise ValueError(
+                        f"{task.id}/{step.id}: structured input needs a reviewed correct choice"
+                    )
             if step.input.kind is InputKind.JOINT:
                 completion_values = step.input.config.get("completion_values")
                 if not isinstance(completion_values, Mapping):

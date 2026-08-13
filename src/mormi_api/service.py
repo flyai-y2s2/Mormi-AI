@@ -6,6 +6,7 @@ from .repository import DuplicateResponseError, Repository
 from .schemas import (
     ChildResponse,
     ExpressionLevel,
+    InputContract,
     InputKind,
     PracticeResult,
     PracticeSummary,
@@ -142,6 +143,7 @@ class ConversationService:
                 f"response type {response.type.value} does not match "
                 f"input kind {active_turn.input.kind.value}"
             )
+        validate_response_payload(active_turn.input, response)
         previous_task = get_task(state.current_task_id, state.scenario_data)
         next_state, analysis, next_turn = await self.engine.run_turn(
             state,
@@ -195,3 +197,20 @@ def response_matches_input(input_kind: InputKind, response_type: ResponseType) -
         InputKind.BUTTON: ResponseType.ACTION,
     }
     return expected.get(input_kind) is response_type
+
+
+def validate_response_payload(input_contract: InputContract, response: ChildResponse) -> None:
+    """Reject structured answers that do not belong to the active turn.
+
+    Choice IDs are server-authored opaque identifiers.  Accepting an unknown
+    ID, or more than one ID for a single-choice teaching turn, would let a
+    stale/malformed client bypass the reviewed choice mapping.
+    """
+
+    if response.type not in {ResponseType.CHOICE, ResponseType.FILL}:
+        return
+    if len(response.choice_ids) != 1:
+        raise ValueError("structured teaching response requires exactly one choice_id")
+    allowed_ids = {choice.id for choice in input_contract.choices if not choice.disabled}
+    if response.choice_ids[0] not in allowed_ids:
+        raise ValueError("choice_id does not belong to the active turn")
