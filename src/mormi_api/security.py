@@ -105,13 +105,13 @@ def safety_redirect(category: SafetyCategory) -> str:
     """
 
     redirects = {
-        SafetyCategory.SEXUAL: "그 이야기는 여기서 그만하자. 아까 질문으로 돌아갈까?",
-        SafetyCategory.PERSONAL_DATA: "그건 말하지 않아도 돼. 아까 질문으로 돌아갈까?",
-        SafetyCategory.PROMPT_INJECTION: "그 부탁은 들어줄 수 없어. 아까 질문으로 돌아갈까?",
-        SafetyCategory.ABUSIVE: "그 말은 듣기 싫어. 아까 질문으로 돌아갈까?",
+        SafetyCategory.SEXUAL: "그 이야기는 여기서 그만하자.",
+        SafetyCategory.PERSONAL_DATA: "그건 말하지 않아도 돼.",
+        SafetyCategory.PROMPT_INJECTION: "그 부탁은 들어줄 수 없어.",
+        SafetyCategory.ABUSIVE: "그 말은 듣기 싫어.",
         SafetyCategory.DANGEROUS: "그 말은 지금 가까운 어른에게 꼭 알려줘.",
-        SafetyCategory.UNKNOWN: "말을 잘 못 알아들었어. 아까 질문으로 다시 해볼까?",
-        SafetyCategory.PLAYFUL_OFFTOPIC: "장난이구나. 아까 질문으로 돌아갈까?",
-        SafetyCategory.NORMAL: "아까 질문으로 돌아갈까?",
+        SafetyCategory.UNKNOWN: "말을 잘 못 알아들었어.",
+        SafetyCategory.PLAYFUL_OFFTOPIC: "장난이구나.",
+        SafetyCategory.NORMAL: "",
     }
     return redirects[category]

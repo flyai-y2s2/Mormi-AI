@@ -359,6 +359,24 @@ class ConversationEngine:
                 newly_verified=newly_verified,
             )
 
+        # A colloquial answer can be meaningfully related while still being
+        # too incomplete to fill a canonical curriculum slot.  The classifier
+        # is allowed to return correct_partial without inventing a claim.  Do
+        # not erase that understanding by falling through to the unrelated
+        # branch; move to a more concrete expression step instead.
+        if analysis.response_category in successful_categories:
+            if next_state.expression_level is not ExpressionLevel.L0:
+                next_state.expression_level = next_state.expression_level.lower()
+            return self._decision_for_current_step(
+                next_state,
+                task,
+                dialogue_act="acknowledge_unstructured_partial",
+                fallback="네가 말한 데까지는 들었어.",
+                child_text=response.text,
+                analysis=analysis,
+                previous_question=previous_question,
+            )
+
         category = analysis.response_category
         if category in {
             ResponseCategory.EXPRESSION_BLOCK,
@@ -452,7 +470,7 @@ class ConversationEngine:
             next_state,
             task,
             dialogue_act="context_return",
-            fallback="그 얘기는 이따 하자. 아까 질문으로 돌아갈까?",
+            fallback="그 얘기는 이따 하자.",
             child_text=response.text,
             analysis=analysis,
             previous_question=previous_question,
@@ -577,6 +595,7 @@ class ConversationEngine:
             fallback = self._preface_question("도움 카드가 열렸네.", step.prompt)
         elif dialogue_act == "joint_mode":
             fallback = self._preface_question("도움 카드 순서대로 보자.", step.prompt)
+        fallback = self._ensure_required_question(fallback, step.prompt)
         return PedagogicalDecision(
             state=state,
             dialogue_act=dialogue_act,
@@ -809,10 +828,16 @@ class ConversationEngine:
         newly_verified: Mapping[str, object],
         state: SessionState,
     ) -> str:
-        facts = [task.slots[slot].fact_sentence.rstrip(".") for slot in newly_verified]
         step = task.step_for(state.expression_level, state.verified_slots)
-        prefix = " ".join(facts[:1])
-        return ConversationEngine._preface_question(f"{prefix}구나.", step.prompt)
+        return ConversationEngine._preface_question("그 부분은 기억했어.", step.prompt)
+
+    @staticmethod
+    def _ensure_required_question(fallback: str, question: str) -> str:
+        normalized_fallback = re.sub(r"\s+", "", fallback)
+        normalized_question = re.sub(r"\s+", "", question)
+        if normalized_question in normalized_fallback:
+            return ConversationEngine._fit_50(fallback)
+        return ConversationEngine._preface_question(fallback, question)
 
     @staticmethod
     def _smooth_ladder_fallback(state: SessionState, task: TaskDefinition) -> str:
