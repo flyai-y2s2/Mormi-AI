@@ -117,6 +117,12 @@ jobs:
           aws ecr get-login-password --region "${AWS_REGION}" \
             | docker login --username AWS --password-stdin "${REGISTRY}"
 
+          # 이전 배포 이미지와 빌드 캐시가 쌓이면 새 레이어를 pull 하기 전에
+          # 디스크가 가득 찬다. 실행 중인 mormi-ai 이미지와 볼륨은 보존하고,
+          # 사용하지 않는 캐시만 먼저 정리한다.
+          docker image prune -af >/dev/null
+          docker builder prune -af >/dev/null
+
           docker pull "${IMAGE_URI}"
 
           docker rm -f mormi-ai 2>/dev/null || true
