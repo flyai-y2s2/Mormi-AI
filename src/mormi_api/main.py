@@ -133,6 +133,25 @@ def _diagnostic_headers(code: str, path: str | None = None) -> dict[str, str]:
     return headers
 
 
+def _request_validation_code(error: RequestValidationError) -> str:
+    known_codes = (
+        ("consented raw storage requires", "storage_consent_retention_mismatch"),
+        ("retention_policy must be no_raw", "storage_retention_without_consent"),
+        ("learning_session_id is required", "home_learning_session_missing"),
+        ("practice_result_id is required", "home_practice_result_missing"),
+        ("cafe_context is required", "cafe_context_missing"),
+        ("cafe_context is not used", "cafe_context_unexpected"),
+        ("queue_context is required", "queue_context_missing"),
+        ("queue_context is not used", "queue_context_unexpected"),
+        ("budget is required", "cafe_budget_missing"),
+    )
+    messages = " ".join(str(issue.get("msg", "")) for issue in error.errors())
+    for fragment, code in known_codes:
+        if fragment in messages:
+            return code
+    return "request_validation_failed"
+
+
 def _service_error_code(error: ValueError) -> tuple[str, str | None, list[dict[str, str]]]:
     if isinstance(error, ValidationError):
         issues = _validation_issues(error)
@@ -161,10 +180,11 @@ async def request_validation_error(
     error: RequestValidationError,
 ) -> JSONResponse:
     issues = _validation_issues(error)
+    code = _request_validation_code(error)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": {"code": "request_validation_failed", "issues": issues}},
-        headers=_diagnostic_headers("request_validation_failed", issues[0]["location"]),
+        content={"detail": {"code": code, "issues": issues}},
+        headers=_diagnostic_headers(code, issues[0]["location"]),
     )
 
 

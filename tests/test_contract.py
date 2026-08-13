@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from mormi_api.main import _service_error_code, _validation_issues, app
+from mormi_api.main import (
+    _request_validation_code,
+    _service_error_code,
+    _validation_issues,
+    app,
+)
 from mormi_api.schemas import PracticeResult, PracticeSummary, SessionCreate
 
 
@@ -179,3 +185,37 @@ def test_known_service_error_gets_a_stable_safe_code() -> None:
     assert code == "home_curriculum_unsupported"
     assert path is None
     assert issues == []
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "Value error, consented raw storage requires a finite retention_policy",
+            "storage_consent_retention_mismatch",
+        ),
+        (
+            "Value error, retention_policy must be no_raw without storage consent",
+            "storage_retention_without_consent",
+        ),
+        (
+            "Value error, practice_result_id is required for home_teach",
+            "home_practice_result_missing",
+        ),
+    ],
+)
+def test_request_level_validation_gets_a_stable_safe_code(
+    message: str,
+    expected: str,
+) -> None:
+    error = RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body",),
+                "msg": message,
+                "input": {"sensitive": "아이 원문"},
+            }
+        ]
+    )
+    assert _request_validation_code(error) == expected
