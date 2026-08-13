@@ -787,11 +787,47 @@ KOREAN_COUNTS = {
     3: ["3명", "세명", "세 명"],
     4: ["4명", "네명", "네 명"],
     5: ["5명", "다섯명", "다섯 명"],
+    6: ["6명", "여섯명", "여섯 명"],
+    7: ["7명", "일곱명", "일곱 명"],
+    8: ["8명", "여덟명", "여덟 명"],
+    9: ["9명", "아홉명", "아홉 명"],
 }
+
+# QueueSessionContext 가 1~9를 받으므로 여기도 같은 범위를 덮어야 한다.
+# 둘이 어긋나면 화면이 그린 줄을 말로 못 옮기고 KeyError 로 죽는다.
+MAX_QUEUE_COUNT = max(KOREAN_COUNTS)
+
+# 숫자를 소리 내어 읽었을 때 마지막 음절에 받침이 있는지.
+# 일(ㄹ) 삼(ㅁ) 육(ㄱ) 칠(ㄹ) 팔(ㄹ) 은 받침이 있고, 이 사 오 구 는 없다.
+# 0으로 끝나면 십·백·천 처럼 받침이 있는 소리로 읽는다.
+_DIGIT_HAS_FINAL = {0: True, 1: True, 2: False, 3: True, 4: False,
+                    5: False, 6: True, 7: True, 8: True, 9: False}
+
+
+def has_final_consonant(value: str | int) -> bool:
+    """마지막 글자에 받침이 있는지. 숫자는 읽는 소리를 기준으로 판단한다."""
+    text = str(value).rstrip()
+    if not text:
+        return False
+    last = text[-1]
+    if last.isdigit():
+        return _DIGIT_HAS_FINAL[int(last)]
+    if "가" <= last <= "힣":
+        return (ord(last) - 0xAC00) % 28 != 0
+    return False
+
+
+def particle(value: str | int, after_final: str, after_vowel: str) -> str:
+    """받침에 맞는 조사를 고른다. 예: particle(2, "과", "와") -> "와".
+
+    아이가 읽는 문장이라 '아메리카노을' 같은 어색한 조사가 그대로 노출되면 안 된다.
+    메뉴 이름과 숫자는 방문마다 달라지므로 조사를 문장에 박아 둘 수 없다.
+    """
+    return after_final if has_final_consonant(value) else after_vowel
 
 
 def _nearby_count_options(value: int) -> list[ChoiceOption]:
-    values = sorted({max(1, value - 1), value, min(5, value + 1)})
+    values = sorted({max(1, value - 1), value, min(MAX_QUEUE_COUNT, value + 1)})
     return [option(str(item), f"{item}명") for item in values]
 
 
@@ -832,10 +868,10 @@ def queue_task(
     )
     task.slots["smaller_number"] = SlotDefinition(
         id="smaller_number",
-        description=f"{left}과 {right} 중 작은 수",
+        description=f"{left}{particle(left, '과', '와')} {right} 중 작은 수",
         expected=smaller,
         aliases=[str(smaller)],
-        fact_sentence=f"{smaller}이 더 작은 수야.",
+        fact_sentence=f"{smaller}{particle(smaller, '이', '가')} 더 작은 수야.",
     )
     task.slots["final_choice"] = SlotDefinition(
         id="final_choice",
@@ -874,7 +910,9 @@ def queue_task(
         "left_person_ids": [f"l{index}" for index in range(1, left + 1)],
         "right_person_ids": [f"r{index}" for index in range(1, right + 1)],
     }
-    task.steps[ExpressionLevel.L1][1].prompt = f"{left}과 {right} 중 더 작은 수는 뭐야?"
+    task.steps[ExpressionLevel.L1][1].prompt = (
+        f"{left}{particle(left, '과', '와')} {right} 중 더 작은 수는 뭐야?"
+    )
     task.steps[ExpressionLevel.L1][1].input = choice_input(
         ["smaller_number"],
         [option(str(left), str(left)), option(str(right), str(right))],
@@ -911,13 +949,19 @@ def queue_task(
     }
     task.hints[HintLevel.H2] = HintDefinition(
         level=HintLevel.H2,
-        body=f"숫자 카드 {left}과 {right}를 보고 더 작은 수를 찾아보세요.",
+        body=(
+            f"숫자 카드 {left}{particle(left, '과', '와')} "
+            f"{right}{particle(right, '을', '를')} 보고 더 작은 수를 찾아보세요."
+        ),
         visual_type="number_cards",
         visual_data={"cards": [left, right], "neutral_style": True},
     )
     task.hints[HintLevel.H3] = HintDefinition(
         level=HintLevel.H3,
-        body=f"한 명씩 세고, {left}과 {right}를 비교한 뒤 사람이 적은 줄을 찾아보세요.",
+        body=(
+            f"한 명씩 세고, {left}{particle(left, '과', '와')} "
+            f"{right}{particle(right, '을', '를')} 비교한 뒤 사람이 적은 줄을 찾아보세요."
+        ),
         visual_type="joint_steps",
         visual_data={"steps": ["한 명씩 세기", "두 수 비교하기", "사람이 적은 줄 찾기"]},
     )
@@ -973,7 +1017,10 @@ def menu_selection_task(
         prompt = f"{budget:,}원 안에서 고르자. 나는 {mormi_menu.name}, 너는 뭘 고를래?"
         fallback = f"예산은 {budget:,}원이야. 네 메뉴 하나를 골라줄래?"
     else:
-        prompt = f"나는 {mormi_menu.name}을 골랐어. 너는 뭘 고를래?"
+        prompt = (
+            f"나는 {mormi_menu.name}{particle(mormi_menu.name, '을', '를')} 골랐어. "
+            "너는 뭘 고를래?"
+        )
         fallback = "계산할 메뉴를 하나 골라줄래?"
     if len(prompt) > 50:
         prompt = fallback
