@@ -96,6 +96,9 @@ pip install -r requirements.txt
 `cafe_context`로 전달합니다. 이 값들은 세션 상태에 보존되어 재시도나 복구 때
 바뀌지 않습니다.
 
+거스름돈 단계는 현재 FE 계약을 따릅니다. 모르미가 고른 메뉴 하나에 10,000원을
+내며, 아이는 `10,000 − 모르미 메뉴 가격`을 계산합니다.
+
 요청의 `response_id`는 멱등키입니다. 같은 응답을 재전송하면 상태를 다시 진행하지 않고 최초 생성된 결과 턴을 반환합니다.
 
 ## 입력 계약
@@ -156,6 +159,30 @@ pip install -r requirements.txt
 - 원문 동의가 없으면 아이 원문은 저장하지 않고 구조화 판정만 저장합니다.
 - 원문 보존 정책은 `no_raw`, `30_days`, `90_days` 중 하나입니다.
 - 실제 아동 대상 운영 전에 보호자·기관의 동의 철회·삭제 요청 절차를 확정해야 합니다.
+
+## 운영 환경변수
+
+AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
+
+| 변수 | 운영 필수 | 설명 |
+|---|---:|---|
+| `MORMI_ENVIRONMENT=production` | 예 | 운영 안전 검증 활성화 |
+| `MORMI_DATABASE_URL` | 예 | `postgresql+asyncpg://...` 형식의 PostgreSQL 접속 문자열 |
+| `MORMI_ANTHROPIC_API_KEY` | 예 | 자유 발화 분류와 모르미 발화 생성용 Claude API 키 |
+| `MORMI_RAW_DATA_ENCRYPTION_KEY` | 예 | 원문 질문·응답 저장 암호화 키. 배포 후 임의 변경 금지 |
+| `MORMI_SERVICE_API_KEY` | 예 | Spring→AI 호출을 보호하는 서비스 간 공유 키 |
+| `MORMI_CLASSIFIER_MODEL` | 아니요 | 기본값 `claude-haiku-4-5-20251001` |
+| `MORMI_SPEAKER_MODEL` | 아니요 | 기본값 `claude-sonnet-4-6` |
+| `MORMI_IDEMPOTENCY_RETENTION_DAYS` | 아니요 | 멱등 응답 보존 기간, 기본 30일 |
+| `MORMI_CORS_ORIGINS` | 아니요 | 브라우저 직접 호출을 허용할 오리진 JSON 배열. Spring 경유만 하면 `[]` |
+| `MORMI_SHOW_INTERNAL_PEDAGOGY=false` | 아니요 | 운영 응답에서 내부 L/H·판정 근거를 숨김 |
+
+Spring 서버에는 AI 비밀 전체가 아니라 다음 두 값만 공유합니다.
+
+- `MORMI_DIALOGUE_BASE_URL`: AI 서버의 내부 주소
+- `MORMI_DIALOGUE_SERVICE_KEY`: AI의 `MORMI_SERVICE_API_KEY`와 동일한 값
+
+Anthropic 키, 원문 암호화 키와 DB 접속 문자열은 FE나 Spring 서버에 전달하지 않습니다.
 
 ## 검증
 

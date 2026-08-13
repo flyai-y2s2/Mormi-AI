@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
   "aiosqlite>=0.21,<1",
-  "anthropic>=0.78,<1",
+  "anthropic>=0.121,<1",
   "cryptography>=45,<47",
   "fastapi>=0.118,<1",
   "langgraph>=1.0,<2",

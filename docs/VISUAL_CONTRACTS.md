@@ -78,8 +78,9 @@
 ```
 
 카페 계산은 현재 가로식·선택·빈칸 UI만 사용합니다. 세로식 입력은 후속 범위입니다.
-거스름돈은 `operation=subtraction`이며 `left`는 아이가 실제로 낸 돈
-(`cafe_context.paid_amount`), `right`는 두 메뉴의 합계입니다. 고정값이 아닙니다.
+거스름돈은 `operation=subtraction`이며 `left`는 항상 10,000원,
+`right`는 `mormi_menu_id`가 가리키는 메뉴 하나의 가격입니다.
+FE의 4단계 화면과 동일하게 `10,000 − 모르미 메뉴 가격`을 계산합니다.
 
 ## `budget_meter`와 `budget_menu_help`
 

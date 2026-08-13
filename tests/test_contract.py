@@ -26,6 +26,8 @@ def test_openapi_exposes_frontend_agreed_paths() -> None:
     assert "cafe_context" in schema["components"]["schemas"]["SessionCreate"]["properties"]
     cafe_context = schema["components"]["schemas"]["CafeSessionContext"]
     assert {"menu_items", "mormi_menu_id"}.issubset(cafe_context["required"])
+    assert "child_menu_id" not in cafe_context["properties"]
+    assert "paid_amount" not in cafe_context["properties"]
     assert "completion" in schema["components"]["schemas"]["TurnContract"]["properties"]
     conflict = paths["/v1/conversations/{conversation_id}/responses"]["post"]["responses"]["409"]
     assert conflict["content"]["application/json"]["schema"]["$ref"].endswith("/ConflictResponse")

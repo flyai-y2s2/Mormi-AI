@@ -995,6 +995,7 @@ BUDGET_MENU_TASK_ID = "cafe_budget_menu_pick"
 TOTAL_MENU_PICK_TASK_ID = "cafe_total_menu_pick"
 TOTAL_CALC_TASK_ID = "cafe_total_calculation"
 CHANGE_TASK_ID = "cafe_change"
+CAFE_CHANGE_PAYMENT_AMOUNT = 10_000
 MENU_SCENARIO_IDS = {"cafe_budget_menu", "cafe_menu_total", "cafe_change"}
 
 SCENARIOS: dict[str, ScenarioDefinition] = {
@@ -1043,8 +1044,6 @@ def create_scenario_data(
     rng: Any | None = None,
 ) -> dict[str, Any]:
     chooser = rng or random.SystemRandom()
-    # Cash paid is not assumed here. It is graded by the general backend at the
-    # payment stage and arrives through cafe_context.paid_amount.
     data: dict[str, Any] = {}
     if scenario_id in {"cafe_queue", "cafe_queue_demo"}:
         left = chooser.choice(range(1, 6))
@@ -1053,8 +1052,6 @@ def create_scenario_data(
     if scenario_id in MENU_SCENARIO_IDS:
         if cafe_context is None:
             raise ValueError("cafe_context is required for menu scenarios")
-        # Unset facts are omitted rather than stored as null: the engine treats
-        # the presence of `child_menu_id` as "the child has settled on a menu".
         data.update(cafe_context.model_dump(mode="json", exclude_none=True))
     return data
 
@@ -1093,7 +1090,6 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
         return HOME_ADD_TASK
     menu_items = _menu_items_from_data(data)
     mormi_menu = _menu_from_data(data, "mormi_menu_id", menu_items)
-    child_menu = _menu_from_data(data, "child_menu_id", menu_items, default_to_first=True)
     if task_id == BUDGET_MENU_TASK_ID:
         budget = int(data["budget"])
         return menu_selection_task(
@@ -1118,6 +1114,16 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
             note_policy="none",
         )
     if task_id == TOTAL_CALC_TASK_ID:
+        # Conversation creation inspects every future task before the child has
+        # chosen a menu. The placeholder is used only to derive static task
+        # metadata; once this task is reached, the engine has stored the real
+        # child_menu_id in scenario_data.
+        child_menu = _menu_from_data(
+            data,
+            "child_menu_id",
+            menu_items,
+            default_to_first=True,
+        )
         return simple_calculation_task(
             task_id=task_id,
             stage_id="menu_total",
@@ -1137,17 +1143,12 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
             },
         )
     if task_id == CHANGE_TASK_ID:
-        # Change is paid cash minus BOTH menus, matching the general backend's
-        # `paidAmount - orderTotal`. Subtracting only Mormi's menu would grade a
-        # different problem than the one the child was shown.
-        order_total = mormi_menu.price + child_menu.price
-        paid_amount = int(data["paid_amount"])
         return simple_calculation_task(
             task_id=task_id,
             stage_id="change",
             title="거스름돈 받기",
-            left=paid_amount,
-            right=order_total,
+            left=CAFE_CHANGE_PAYMENT_AMOUNT,
+            right=mormi_menu.price,
             operation="subtraction",
             left_label="낸 돈",
             right_label="메뉴 값",
@@ -1155,10 +1156,9 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
             note_policy="stage",
             coauthored_note="거스름돈은 낸 돈에서 메뉴 값을 빼서 구해.",
             context={
-                "payment": paid_amount,
-                "menu_total": order_total,
+                "payment": CAFE_CHANGE_PAYMENT_AMOUNT,
+                "menu_total": mormi_menu.price,
                 "mormi_menu": mormi_menu.model_dump(),
-                "child_menu": child_menu.model_dump(),
             },
         )
     raise KeyError(f"Unknown task: {task_id}")
@@ -1179,9 +1179,6 @@ def validate_content() -> None:
         ],
         mormi_menu_id="sample-a",
         budget=10000,
-        # The change stage requires both, so content validation supplies them.
-        child_menu_id="sample-b",
-        paid_amount=10000,
     )
     for scenario in SCENARIOS.values():
         scenario_data = create_scenario_data(
@@ -1189,9 +1186,15 @@ def validate_content() -> None:
             validation_context if scenario.id in MENU_SCENARIO_IDS else None,
         )
         for task_id in scenario.task_ids:
-            get_task(task_id, scenario_data)
+            task_data = scenario_data
+            if task_id == TOTAL_CALC_TASK_ID:
+                task_data = {**scenario_data, "child_menu_id": "sample-b"}
+            get_task(task_id, task_data)
     task_ids = {task_id for scenario in SCENARIOS.values() for task_id in scenario.task_ids}
-    sample_data = create_scenario_data("cafe_menu_total", validation_context)
+    sample_data = {
+        **create_scenario_data("cafe_menu_total", validation_context),
+        "child_menu_id": "sample-b",
+    }
     for task in [
         get_task(task_id, sample_data if task_id != QUEUE_TASK_ID else {})
         for task_id in task_ids

@@ -535,32 +535,6 @@
               }
             ],
             "title": "Budget"
-          },
-          "child_menu_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Child Menu Id"
-          },
-          "paid_amount": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 100000.0,
-                "minimum": 0.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Paid Amount"
           }
         },
         "type": "object",
@@ -569,7 +543,7 @@
           "mormi_menu_id"
         ],
         "title": "CafeSessionContext",
-        "description": "Frontend-owned café facts frozen for one AI conversation.\n\nCafé stages run as independent conversations, so results the child already\nsettled in an earlier stage arrive here rather than through session state.\n`child_menu_id` carries the menu picked during the selection stage, and\n`paid_amount` carries the cash the general backend graded at the payment\nstage. The change stage needs both to subtract from the right numbers."
+        "description": "Frontend-owned café facts frozen for one independent conversation."
       },
       "ChildResponse": {
         "properties": {

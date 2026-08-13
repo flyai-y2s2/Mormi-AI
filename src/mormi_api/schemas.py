@@ -207,20 +207,11 @@ class CafeMenuItem(BaseModel):
 
 
 class CafeSessionContext(BaseModel):
-    """Frontend-owned café facts frozen for one AI conversation.
-
-    Café stages run as independent conversations, so results the child already
-    settled in an earlier stage arrive here rather than through session state.
-    `child_menu_id` carries the menu picked during the selection stage, and
-    `paid_amount` carries the cash the general backend graded at the payment
-    stage. The change stage needs both to subtract from the right numbers.
-    """
+    """Frontend-owned café facts frozen for one independent conversation."""
 
     menu_items: list[CafeMenuItem] = Field(min_length=2, max_length=20)
     mormi_menu_id: str = Field(min_length=1, max_length=64)
     budget: int | None = Field(default=None, ge=0, le=100_000)
-    child_menu_id: str | None = Field(default=None, min_length=1, max_length=64)
-    paid_amount: int | None = Field(default=None, ge=0, le=100_000)
 
     @model_validator(mode="after")
     def validate_menu_references(self) -> CafeSessionContext:
@@ -229,21 +220,7 @@ class CafeSessionContext(BaseModel):
             raise ValueError("menu item ids must be unique")
         if self.mormi_menu_id not in menu_ids:
             raise ValueError("mormi_menu_id must reference menu_items")
-        if self.child_menu_id is not None:
-            if self.child_menu_id not in menu_ids:
-                raise ValueError("child_menu_id must reference menu_items")
-            if self.child_menu_id == self.mormi_menu_id:
-                raise ValueError("child_menu_id must differ from mormi_menu_id")
         return self
-
-    @property
-    def order_total(self) -> int:
-        """Sum of both menus. Only meaningful once the child has picked one."""
-        menu_by_id = {item.id: item for item in self.menu_items}
-        total = menu_by_id[self.mormi_menu_id].price
-        if self.child_menu_id is not None:
-            total += menu_by_id[self.child_menu_id].price
-        return total
 
 
 class SessionCreate(BaseModel):
@@ -286,16 +263,6 @@ class SessionCreate(BaseModel):
                 for item in self.cafe_context.menu_items
             ):
                 raise ValueError("budget must allow at least one child menu")
-        # The change stage is a separate conversation from menu selection and
-        # payment, so it cannot recover those results on its own. Demand them
-        # instead of defaulting, which would quietly compute a wrong change.
-        if self.scenario_id == "cafe_change" and self.cafe_context is not None:
-            if self.cafe_context.child_menu_id is None:
-                raise ValueError("child_menu_id is required for cafe_change")
-            if self.cafe_context.paid_amount is None:
-                raise ValueError("paid_amount is required for cafe_change")
-            if self.cafe_context.paid_amount < self.cafe_context.order_total:
-                raise ValueError("paid_amount must cover the order total")
         return self
 
 

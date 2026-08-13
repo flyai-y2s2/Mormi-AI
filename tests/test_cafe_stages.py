@@ -47,13 +47,13 @@ FRONTEND_MENU = [
     {
         "id": "strawberry-cake",
         "name": "딸기케이크",
-        "price": 3000,
+        "price": 4500,
         "image_url": "/figma/cafe/strawberry-cake.png?v=2",
     },
     {
         "id": "sandwich",
         "name": "샌드위치",
-        "price": 4000,
+        "price": 5000,
         "image_url": "/figma/cafe/sandwich.png?v=2",
     },
 ]
@@ -62,15 +62,11 @@ FRONTEND_MENU = [
 def cafe_context(
     mormi_menu_id: str,
     budget: int | None = None,
-    child_menu_id: str | None = None,
-    paid_amount: int | None = None,
 ) -> dict[str, object]:
     return {
         "menu_items": FRONTEND_MENU,
         "mormi_menu_id": mormi_menu_id,
         "budget": budget,
-        "child_menu_id": child_menu_id,
-        "paid_amount": paid_amount,
     }
 
 
@@ -154,7 +150,7 @@ async def test_budget_menu_uses_frontend_menu_and_allows_correction(
     over = await choose(service, started.conversation_id, started.turn, "sandwich")
     assert over.turn.status.value == "active"
     assert over.turn.visual.data["budget_status"] == "over"
-    assert over.turn.visual.data["total"] == 8000
+    assert over.turn.visual.data["total"] == 9000
     state = await repository.get_state(started.conversation_id)
     assert "child_menu_id" not in state.scenario_data
 
@@ -193,34 +189,28 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
 
 
 @pytest.mark.asyncio
-async def test_change_subtracts_both_menus_from_the_cash_actually_paid(
+async def test_change_subtracts_mormi_menu_from_fixed_10000(
     tmp_path: object,
 ) -> None:
-    """Change must match the general backend's `paidAmount - orderTotal`.
-
-    Mormi picks the cake (3,000) and the child picked the sandwich (4,000), so
-    a 10,000 payment leaves 3,000. Subtracting only Mormi's menu would show the
-    child 7,000 for a problem whose answer is 3,000.
-    """
+    """The FE change stage pays 10,000 won for Mormi's single menu."""
     service, repository, database = await make_service(tmp_path, skills=("calculate_change",))
     started = await service.create_conversation(
         SessionCreate(
             learner_id=1,
             scene="cafe",
             scenario_id="cafe_change",
-            cafe_context=cafe_context(
-                "strawberry-cake",
-                child_menu_id="sandwich",
-                paid_amount=10000,
-            ),
+            cafe_context=cafe_context("strawberry-cake"),
         )
     )
 
     assert started.turn.visual.data["left"] == 10000
-    assert started.turn.visual.data["right"] == 7000
+    assert started.turn.visual.data["right"] == 4500
+    assert started.turn.visual.data["payment"] == 10000
+    assert started.turn.visual.data["menu_total"] == 4500
+    assert "child_menu" not in started.turn.visual.data
     assert "method" not in started.turn.input.target_slots
     operation = await choose(service, started.conversation_id, started.turn, "subtract")
-    completed = await choose(service, started.conversation_id, operation.turn, "3000")
+    completed = await choose(service, started.conversation_id, operation.turn, "5500")
 
     assert completed.turn.status.value == "completed"
     assert "받아내림" not in completed.turn.note_update.text  # type: ignore[union-attr]
@@ -228,57 +218,15 @@ async def test_change_subtracts_both_menus_from_the_cash_actually_paid(
     await database.dispose()
 
 
-@pytest.mark.asyncio
-async def test_change_honours_a_payment_other_than_10000(tmp_path: object) -> None:
-    """The paid cash is whatever the backend graded, not a fixed 10,000."""
-    service, _repository, database = await make_service(tmp_path, skills=("calculate_change",))
-    started = await service.create_conversation(
-        SessionCreate(
-            learner_id=1,
-            scene="cafe",
-            scenario_id="cafe_change",
-            cafe_context=cafe_context(
-                "strawberry-cake",
-                child_menu_id="milk",
-                paid_amount=6000,
-            ),
-        )
+def test_change_requires_only_current_frontend_menu_context() -> None:
+    request = SessionCreate(
+        learner_id=1,
+        scene="cafe",
+        scenario_id="cafe_change",
+        cafe_context=cafe_context("strawberry-cake"),
     )
-
-    assert started.turn.visual.data["left"] == 6000
-    assert started.turn.visual.data["right"] == 5000
-    await database.dispose()
-
-
-def test_change_requires_the_earlier_stage_results() -> None:
-    """Independent conversations cannot recover the pick or the payment."""
-    with pytest.raises(ValidationError):
-        SessionCreate(
-            learner_id=1,
-            scene="cafe",
-            scenario_id="cafe_change",
-            cafe_context=cafe_context("strawberry-cake", paid_amount=10000),
-        )
-
-    with pytest.raises(ValidationError):
-        SessionCreate(
-            learner_id=1,
-            scene="cafe",
-            scenario_id="cafe_change",
-            cafe_context=cafe_context("strawberry-cake", child_menu_id="sandwich"),
-        )
-
-    with pytest.raises(ValidationError):
-        SessionCreate(
-            learner_id=1,
-            scene="cafe",
-            scenario_id="cafe_change",
-            cafe_context=cafe_context(
-                "strawberry-cake",
-                child_menu_id="sandwich",
-                paid_amount=5000,
-            ),
-        )
+    assert request.cafe_context is not None
+    assert request.cafe_context.mormi_menu_id == "strawberry-cake"
 
 
 @pytest.mark.asyncio

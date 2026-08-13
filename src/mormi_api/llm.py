@@ -4,8 +4,8 @@ import json
 import re
 from typing import Any
 
-from anthropic import AsyncAnthropic
-from pydantic import ValidationError
+from anthropic import AsyncAnthropic, transform_schema
+from pydantic import BaseModel, ValidationError
 
 from .content import TaskDefinition
 from .schemas import (
@@ -24,6 +24,18 @@ class ModelUnavailableError(RuntimeError):
 
 class ModelOutputError(RuntimeError):
     pass
+
+
+def structured_output_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """Convert Pydantic JSON Schema to Anthropic's strict output schema.
+
+    Pydantic does not add ``additionalProperties: false`` by default. Claude's
+    Structured Outputs API requires it on every object, including objects under
+    ``$defs`` such as ``SlotClaim``. The SDK transformer also normalizes schema
+    keywords to the subset accepted by the Messages API.
+    """
+
+    return transform_schema(model)
 
 
 class ClaudeGateway:
@@ -50,7 +62,7 @@ class ClaudeGateway:
         if not self.client:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         prompt = self._classifier_prompt(state, task, previous_question, response)
-        schema = UtteranceAnalysis.model_json_schema()
+        schema = structured_output_schema(UtteranceAnalysis)
         message = await self.client.messages.create(
             model=self.settings.classifier_model,
             max_tokens=1300,
@@ -75,7 +87,7 @@ class ClaudeGateway:
     async def speak(self, context: SpeakerContext) -> SpeakerOutput:
         if not self.client:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
-        schema = SpeakerOutput.model_json_schema()
+        schema = structured_output_schema(SpeakerOutput)
         message = await self.client.messages.create(
             model=self.settings.speaker_model,
             max_tokens=220,
