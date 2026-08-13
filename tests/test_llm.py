@@ -75,6 +75,16 @@ def test_speaker_rejects_grading_synonyms() -> None:
         assert validate_speaker_output(SpeakerOutput(text=text), context) is None
 
 
+def test_speaker_rejects_system_status_voice() -> None:
+    context = speaker_context()
+    for text in (
+        "그 부분은 기억했어. 왜 왼쪽 줄이 덜 기다릴까?",
+        "네가 말한 데까지는 들었어. 왜 왼쪽 줄이 덜 기다릴까?",
+        "그 부분은 확인했어. 왜 왼쪽 줄이 덜 기다릴까?",
+    ):
+        assert validate_speaker_output(SpeakerOutput(text=text), context) is None
+
+
 def test_speaker_must_keep_the_orchestrator_question() -> None:
     context = speaker_context()
     assert (

@@ -441,7 +441,7 @@ class ConversationEngine:
                 next_state,
                 task,
                 dialogue_act="acknowledge_unstructured_partial",
-                fallback="네가 말한 데까지는 들었어.",
+                fallback="앗, 내가 한 번에 많이 물어봤네.",
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
@@ -932,7 +932,30 @@ class ConversationEngine:
             entry_active=state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE,
             targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
         )
-        return ConversationEngine._preface_question("그 부분은 기억했어.", step.prompt)
+        acknowledgement = ConversationEngine._younger_sibling_acknowledgement(
+            task,
+            newly_verified,
+        )
+        if (
+            task.skill_id == "number-count"
+            and set(newly_verified).intersection({"answer", "count_sequence"})
+            and "tracking" not in state.verified_slots
+        ):
+            if "answer" in newly_verified:
+                acknowledgement = "아, 세 개구나!"
+            return ConversationEngine._fit_50(f"{acknowledgement} {step.prompt}")
+        return ConversationEngine._preface_question(acknowledgement, step.prompt)
+
+    @staticmethod
+    def _younger_sibling_acknowledgement(
+        task: TaskDefinition,
+        newly_verified: Mapping[str, object],
+    ) -> str:
+        """Acknowledge only reviewed facts in a warm younger-sibling voice."""
+
+        if task.skill_id == "number-count" and "answer" in newly_verified:
+            return "아, 세 개구나!"
+        return "아, 그렇구나!"
 
     @staticmethod
     def _ensure_required_question(fallback: str, question: str) -> str:

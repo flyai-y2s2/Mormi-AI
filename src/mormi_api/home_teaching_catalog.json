@@ -14,7 +14,7 @@
       "눈으로만",
       "건너뛰며"
     ],
-    "short_prompt": "나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?",
+    "short_prompt": "나는 가끔 점을 세다가 헷갈려. 어떻게 세는지 알려주면 안 될까?",
     "short_correct": "점 하나씩 가리키기",
     "short_options": [
       "점 하나씩 가리키기",
@@ -28,7 +28,7 @@
     ],
     "misconception": "대상을 빠뜨리거나 같은 것을 두 번 셈",
     "sample_problem": {
-      "prompt": "점은 모두 몇 개일까?",
+      "prompt": "지금 점이 몇 개야?",
       "answers": [
         "3",
         "4",
@@ -40,10 +40,10 @@
         "count": 3
       }
     },
-    "content_version": 2,
+    "content_version": 3,
     "entry_mode": "wrong_guess",
-    "entry_prompt": "점이 두 개 있는 것 같은데, 맞아?",
-    "l4_prompt": "그럼 점은 몇 개고, 어떻게 세었어?"
+    "entry_prompt": "지금 점이 두 개 있는 거 맞지?",
+    "l4_prompt": "점이 몇 개인지랑 어떻게 세는지 알려주면 안 될까?"
   },
   {
     "id": "number-compare",

@@ -73,13 +73,35 @@ CURRENT_FRONTEND_HOME_SESSION_IDS = {
 
 def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert set(HOME_TEACHING_CATALOG) == CURRENT_FRONTEND_HOME_SESSION_IDS
-    assert all(spec.content_version == 2 for spec in HOME_TEACHING_CATALOG.values())
+    assert HOME_TEACHING_CATALOG["number-count"].content_version == 3
+    assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
     assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
     assert all(
         spec.entry_prompt is not None
         if spec.entry_mode == "wrong_guess"
         else spec.entry_prompt is None
         for spec in HOME_TEACHING_CATALOG.values()
+    )
+
+
+def test_number_count_copy_sounds_like_a_younger_sibling_asking_for_help() -> None:
+    spec = HOME_TEACHING_CATALOG["number-count"]
+
+    assert spec.sample_problem["prompt"] == "지금 점이 몇 개야?"
+    assert spec.entry_prompt == "지금 점이 두 개 있는 거 맞지?"
+    assert spec.effective_l4_prompt == "점이 몇 개인지랑 어떻게 세는지 알려주면 안 될까?"
+    assert spec.short_prompt == ("나는 가끔 점을 세다가 헷갈려. 어떻게 세는지 알려주면 안 될까?")
+    assert all(
+        phrase
+        not in " ".join(
+            [
+                spec.sample_problem["prompt"],
+                spec.entry_prompt,
+                spec.effective_l4_prompt,
+                spec.short_prompt,
+            ]
+        )
+        for phrase in ("그 부분은 기억했어", "네가 말한 데까지", "점을 하나 놓칠 때가 있어")
     )
 
 
@@ -663,8 +685,8 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     assert state.expression_level is ExpressionLevel.L4
     assert state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
     assert state.hint_level is HintLevel.H0
-    assert after_answer.turn.mormi.text.endswith(
-        "나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?"
+    assert after_answer.turn.mormi.text == (
+        "아, 세 개구나! 나는 가끔 점을 세다가 헷갈려. 어떻게 세는지 알려주면 안 될까?"
     )
     assert after_answer.turn.input.kind is InputKind.TEXT
     assert after_answer.turn.input.target_slots == ["tracking", "count_sequence"]

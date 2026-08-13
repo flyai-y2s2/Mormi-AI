@@ -17,6 +17,12 @@ VAGUE_COPY = (
     "한눈에 대충",
 )
 
+SYSTEM_STATUS_COPY = (
+    "그 부분은 기억했어",
+    "그 부분은 확인했어",
+    "네가 말한 데까지",
+)
+
 
 def test_every_home_turn_uses_reviewed_specific_copy() -> None:
     for spec in HOME_TEACHING_CATALOG.values():
@@ -35,6 +41,7 @@ def test_every_home_turn_uses_reviewed_specific_copy() -> None:
         assert len(spec.fill_options) == len(set(spec.fill_options)), spec.id
         assert all(len(option) <= 45 for option in spec.short_options), spec.id
         assert not any(term in text for term in VAGUE_COPY for text in copy), spec.id
+        assert not any(term in text for term in SYSTEM_STATUS_COPY for text in copy), spec.id
 
 
 def test_korean_postpositions_attach_to_the_fill_blank() -> None:

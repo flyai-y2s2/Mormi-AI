@@ -417,7 +417,9 @@ async def test_abusive_text_sets_a_clear_boundary_without_changing_learning_stat
     )
 
     assert analysis.safety_category is SafetyCategory.ABUSIVE
-    assert turn.mormi.text == "그 말은 듣기 싫어. 그럼 점은 몇 개고, 어떻게 세었어?"
+    assert turn.mormi.text == (
+        "그 말은 듣기 싫어. 점이 몇 개인지랑 어떻게 세는지 알려주면 안 될까?"
+    )
     assert next_state.status.value == "active"
     assert next_state.expression_level is ExpressionLevel.L4
     assert next_state.hint_level is HintLevel.H0
@@ -466,7 +468,7 @@ async def test_claimless_correct_partial_never_falls_through_to_unrelated() -> N
     assert next_state.unrelated_count == 0
     assert next_state.expression_level is ExpressionLevel.L3
     assert next_state.hint_level is HintLevel.H0
-    assert turn.mormi.text.endswith("점은 모두 몇 개일까?")
+    assert turn.mormi.text.endswith("지금 점이 몇 개야?")
     assert "그 얘기는 이따" not in turn.mormi.text
     assert turn.input.kind is InputKind.TEXT
     assert turn.input.target_slots == ["answer", "count_sequence"]
@@ -518,8 +520,8 @@ async def test_number_count_partial_meanings_are_remembered_separately() -> None
         "count_sequence": "one_by_one_order",
     }
     assert next_state.expression_level is ExpressionLevel.L3
-    assert turn.mormi.text.endswith(
-        "나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?"
+    assert turn.mormi.text == (
+        "아, 세 개구나! 나는 가끔 점을 세다가 헷갈려. 어떻게 세는지 알려주면 안 될까?"
     )
     assert turn.input.target_slots == ["tracking", "count_sequence"]
 
@@ -601,9 +603,7 @@ def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None
                     choice_ids=[choice.id],
                 )
                 analysis = engine._deterministic_analysis(state, task, response)
-                factual_slots = {
-                    claim.slot_id for claim in analysis.claims if claim.factual
-                }
+                factual_slots = {claim.slot_id for claim in analysis.claims if claim.factual}
                 is_correct = set(step.target_slots).issubset(factual_slots)
                 if is_correct:
                     continue
@@ -617,9 +617,9 @@ def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None
                     ResponseCategory.CORRECT_FULL,
                     ResponseCategory.CORRECT_PARTIAL,
                 }, f"{spec.id}/{step.id}/{choice.id}"
-                assert not analysis.claims or all(
-                    not claim.factual for claim in analysis.claims
-                ), f"{spec.id}/{step.id}/{choice.id}"
+                assert not analysis.claims or all(not claim.factual for claim in analysis.claims), (
+                    f"{spec.id}/{step.id}/{choice.id}"
+                )
                 assert not task.complete(merged), f"{spec.id}/{step.id}/{choice.id}"
 
 

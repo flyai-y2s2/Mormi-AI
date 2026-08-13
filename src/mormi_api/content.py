@@ -231,6 +231,8 @@ class HomeTeachingSpec(BaseModel):
             raise ValueError("sample_problem.visual.type is required")
         if self.short_prompt.strip() == "어떤 방법이 맞을까?":
             raise ValueError("short_prompt must name the current mathematical action")
+        if re.search(r"그\s*부분.*(?:기억|확인)|네가\s*말한\s*데까지", self.short_prompt):
+            raise ValueError("short_prompt must not sound like a system status report")
         l4_prompt = self.effective_l4_prompt
         if l4_prompt.strip() == self.short_prompt.strip():
             raise ValueError("L4 and L2 prompts must not collapse into the same request")
@@ -1634,7 +1636,7 @@ def _configure_number_count_task(
         ExpressionLevel.L3: [
             StepDefinition(
                 id="short_count",
-                prompt="점은 모두 몇 개일까?",
+                prompt="지금 점이 몇 개야?",
                 target_slots=["answer"],
                 optional_slots=["count_sequence"],
                 input=text_input(
@@ -1642,7 +1644,7 @@ def _configure_number_count_task(
                     "count_sequence",
                     placeholder="센 수를 짧게 알려줘",
                 ),
-                fallback_text="내가 한꺼번에 물어봤네. 점은 모두 몇 개일까?",
+                fallback_text="내가 한꺼번에 물어봤네. 점이 몇 개인지 먼저 알려줘.",
             ),
             StepDefinition(
                 id="short_tracking",
@@ -1654,17 +1656,17 @@ def _configure_number_count_task(
                     "count_sequence",
                     placeholder="네가 센 방법을 알려줘",
                 ),
-                fallback_text="나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?",
+                fallback_text=short_prompt,
             ),
         ],
         ExpressionLevel.L2: [
             StepDefinition(
                 id="choose_count",
-                prompt="점은 모두 몇 개일까?",
+                prompt="지금 점이 몇 개야?",
                 target_slots=["answer"],
                 input=choice_input(["answer"], answer_choices),
                 choice_effects=answer_effects,
-                fallback_text="말로만 들으려니 헷갈려. 점은 모두 몇 개일까?",
+                fallback_text="말로만 들으려니 헷갈려. 점이 몇 개인지 골라 볼까?",
             ),
             StepDefinition(
                 id="choose_tracking",
@@ -1689,7 +1691,7 @@ def _configure_number_count_task(
         ExpressionLevel.L1: [
             StepDefinition(
                 id="guided_count",
-                prompt="점은 모두 몇 개일까?",
+                prompt="지금 점이 몇 개야?",
                 target_slots=["answer"],
                 input=choice_input(["answer"], answer_choices),
                 choice_effects=answer_effects,
