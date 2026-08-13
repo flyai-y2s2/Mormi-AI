@@ -4,7 +4,7 @@
     "subject": "number",
     "unit": "수 감각",
     "title": "수를 빠뜨리지 않고 세어요",
-    "misconception_prompt": "점이 일곱 개니까 여섯이라고 하면 되지?",
+    "misconception_prompt": "나는 점을 세다가 2개라고 했어. 빠뜨리지 않고 세는 법을 알려줘!",
     "learned_line": "하나씩 가리키며 마지막 수를 말해!",
     "fill_before": "하나씩",
     "fill_after": "마지막 수를 말해!",
@@ -14,12 +14,12 @@
       "한꺼번에",
       "눈을 감고"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "가리키며",
+    "short_prompt": "점을 빠뜨리지 않으려면 어떻게 셀까?",
+    "short_correct": "하나씩 가리키며 세기",
     "short_options": [
-      "가리키며",
-      "한꺼번에",
-      "눈을 감고"
+      "하나씩 가리키며 세기",
+      "한눈에 대충 세기",
+      "센 곳을 다시 세기"
     ],
     "hint": "센 것과 세지 않은 것을 자리를 나누어 봐.",
     "help_lines": [
@@ -46,7 +46,7 @@
     "subject": "number",
     "unit": "수 감각",
     "title": "수의 크기를 비교해요",
-    "misconception_prompt": "점이 넓게 퍼져 있으면 언제나 더 많지?",
+    "misconception_prompt": "나는 3이 5보다 더 큰 줄 알았어. 어느 쪽이 더 많아?",
     "learned_line": "두 수는 하나씩 짝지어 비교해!",
     "fill_before": "두 수는 하나씩",
     "fill_after": "비교해!",
@@ -56,12 +56,12 @@
       "색으로",
       "느낌으로"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "짝지어",
+    "short_prompt": "두 점 무리의 수를 어떻게 비교할까?",
+    "short_correct": "하나씩 짝지어 보기",
     "short_options": [
-      "짝지어",
-      "색으로",
-      "느낌으로"
+      "하나씩 짝지어 보기",
+      "퍼진 넓이만 보기",
+      "점 크기만 보기"
     ],
     "hint": "두 줄을 같은 자리에서 시작해 남는 점을 찾아.",
     "help_lines": [
@@ -89,7 +89,7 @@
     "subject": "money",
     "unit": "돈 계산",
     "title": "돈을 세어요",
-    "misconception_prompt": "1,000원 한 장과 500원 하나면 1,050원이지?",
+    "misconception_prompt": "500원과 100원을 보고 510원이라고 했어. 어떻게 세야 해?",
     "learned_line": "돈은 적힌 값을 모두 더해서 세어!",
     "fill_before": "돈은 적힌 값을 모두",
     "fill_after": "세어",
@@ -99,12 +99,12 @@
       "빼서",
       "가려서"
     ],
-    "short_prompt": "돈의 무엇을 볼까?",
-    "short_correct": "값",
+    "short_prompt": "돈을 셀 때 무엇을 보고 계산할까?",
+    "short_correct": "적힌 값을 보기",
     "short_options": [
-      "값",
-      "색",
-      "크기"
+      "적힌 값을 보기",
+      "돈의 개수만 보기",
+      "돈의 크기만 보기"
     ],
     "hint": "큰 값부터 말하며 다음 돈을 이어 더해 봐.",
     "help_lines": [
@@ -134,7 +134,7 @@
     "subject": "number",
     "unit": "수 감각",
     "title": "10을 만들고 가르어요",
-    "misconception_prompt": "10은 6과 3으로 가를 수 있지?",
+    "misconception_prompt": "6과 3을 모으면 10이라고 생각했어. 무엇이 빠졌을까?",
     "learned_line": "10은 두 수로 가르고 모을 수 있어!",
     "fill_before": "10은",
     "fill_after": "가르고 모을 수 있어!",
@@ -144,12 +144,12 @@
       "한 수만",
       "아무 수로"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "두 수로",
+    "short_prompt": "10은 어떤 수들로 가르고 모을까?",
+    "short_correct": "두 수로 가르고 모으기",
     "short_options": [
-      "두 수로",
-      "한 수만",
-      "아무 수로"
+      "두 수로 가르고 모으기",
+      "한 수만 보기",
+      "아무 두 수나 고르기"
     ],
     "hint": "10칸에서 채운 칸과 빈칸을 함께 봐.",
     "help_lines": [
@@ -176,7 +176,7 @@
     "subject": "number",
     "unit": "수 감각",
     "title": "십과 일을 나누어 봐요",
-    "misconception_prompt": "3십 4는 43이지?",
+    "misconception_prompt": "3십 4를 43이라고 읽었어. 십과 일을 어떻게 봐야 해?",
     "learned_line": "두 자리 수는 십과 일로 나누어 읽어!",
     "fill_before": "두 자리 수는",
     "fill_after": "일로 나누어 읽어!",
@@ -186,12 +186,12 @@
       "일만",
       "모양과"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "십과",
+    "short_prompt": "두 자리 수는 무엇으로 나누어 볼까?",
+    "short_correct": "십과 일로 나누기",
     "short_options": [
-      "십과",
-      "일만",
-      "모양과"
+      "십과 일로 나누기",
+      "일만 세기",
+      "숫자 순서 바꾸기"
     ],
     "hint": "왼쪽 자리는 십 묶음, 오른쪽 자리는 낱개야.",
     "help_lines": [
@@ -229,7 +229,7 @@
     "subject": "addition",
     "unit": "덧셈",
     "title": "그림을 모아요",
-    "misconception_prompt": "2개와 3개를 모으면… 4개지?",
+    "misconception_prompt": "2개와 3개를 모아 4개라고 했어. 어떻게 세어야 해?",
     "learned_line": "더하기는 두 무리를 합치는 거야!",
     "fill_before": "더하기는 두 무리를",
     "fill_after": "거야",
@@ -239,12 +239,12 @@
       "빼는",
       "나누는"
     ],
-    "short_prompt": "더하기는 무엇을 할까?",
-    "short_correct": "합치기",
+    "short_prompt": "두 무리를 모두 세려면 어떻게 할까?",
+    "short_correct": "두 무리를 합치기",
     "short_options": [
-      "합치기",
-      "덜기",
-      "가리기"
+      "두 무리를 합치기",
+      "한 무리만 세기",
+      "가져간 수를 세기"
     ],
     "hint": "두 상자를 한 상자에 담아 봐.",
     "help_lines": [
@@ -273,7 +273,7 @@
     "subject": "money",
     "unit": "돈 계산",
     "title": "물건값을 더해요",
-    "misconception_prompt": "700원 빵과 500원 주스를 사면 200원이지?",
+    "misconception_prompt": "700원과 500원을 보고 200원이라고 했어. 어떻게 계산해?",
     "learned_line": "두 물건을 사면 두 값을 더해!",
     "fill_before": "두 물건을 사면 두 값을",
     "fill_after": "",
@@ -283,12 +283,12 @@
       "빼",
       "그대로 둬"
     ],
-    "short_prompt": "두 물건값은 어떻게 할까?",
-    "short_correct": "더하기",
+    "short_prompt": "두 물건값은 어떻게 계산할까?",
+    "short_correct": "두 값을 더하기",
     "short_options": [
-      "더하기",
-      "빼기",
-      "세지 않기"
+      "두 값을 더하기",
+      "큰 값만 쓰기",
+      "두 값을 빼기"
     ],
     "hint": "첫 물건값에 둘째 물건값을 이어 더해 봐.",
     "help_lines": [
@@ -322,7 +322,7 @@
     "subject": "addition",
     "unit": "덧셈",
     "title": "자리끼리 더해요",
-    "misconception_prompt": "23 더하기 4는 십끼리 더해서 63이지?",
+    "misconception_prompt": "12와 5를 더할 때 십끼리만 보면 될까? 어떻게 더해?",
     "learned_line": "같은 자리끼리 더해야 해!",
     "fill_before": "덧셈은 같은",
     "fill_after": "더해",
@@ -332,12 +332,12 @@
       "색끼리",
       "마음대로"
     ],
-    "short_prompt": "무엇끼리 더할까?",
-    "short_correct": "같은 자리",
+    "short_prompt": "12와 5는 어떤 자리끼리 더할까?",
+    "short_correct": "같은 자리끼리 더하기",
     "short_options": [
-      "같은 자리",
-      "다른 자리",
-      "큰 수만"
+      "같은 자리끼리 더하기",
+      "다른 자리끼리 더하기",
+      "큰 수만 쓰기"
     ],
     "hint": "일은 일 아래, 십은 십 아래에 놓아 봐.",
     "help_lines": [
@@ -366,7 +366,7 @@
     "subject": "addition",
     "unit": "덧셈",
     "title": "10을 먼저 만들어요",
-    "misconception_prompt": "8 더하기 5는 10보다 작으니까 3이지?",
+    "misconception_prompt": "8과 5를 모아 3이라고 했어. 10을 써서 알려줄래?",
     "learned_line": "10을 먼저 만들고 남은 수를 더해!",
     "fill_before": "10을 먼저 만들고",
     "fill_after": "수를 더해",
@@ -376,12 +376,12 @@
       "처음",
       "큰"
     ],
-    "short_prompt": "무엇을 먼저 만들까?",
-    "short_correct": "10",
+    "short_prompt": "8과 5를 더할 때 무엇을 먼저 만들까?",
+    "short_correct": "10을 먼저 만들기",
     "short_options": [
-      "10",
-      "5",
-      "20"
+      "10을 먼저 만들기",
+      "5를 먼저 만들기",
+      "두 수를 빼기"
     ],
     "hint": "8에게 2를 주면 10, 5에서 2를 주고 3이 남아.",
     "help_lines": [
@@ -410,7 +410,7 @@
     "subject": "subtraction",
     "unit": "뺄셈",
     "title": "남은 수를 찾아요",
-    "misconception_prompt": "7개에서 3개를 가져가면 10개가 남지?",
+    "misconception_prompt": "5개에서 2개를 덜었는데 7개라고 했어. 어떻게 세어야 해?",
     "learned_line": "뺄셈은 덜어 내고 남은 수를 찾는 거야!",
     "fill_before": "뺄셈은 덜어 내고",
     "fill_after": "수를 찾아",
@@ -420,12 +420,12 @@
       "모든",
       "처음"
     ],
-    "short_prompt": "덜어 낸 뒤 무엇을 셀까?",
-    "short_correct": "남은 것",
+    "short_prompt": "덜어 낸 뒤 무엇을 세어야 할까?",
+    "short_correct": "남은 것을 세기",
     "short_options": [
-      "남은 것",
-      "가져간 것만",
-      "처음 것"
+      "남은 것을 세기",
+      "가져간 것만 세기",
+      "처음 수를 그대로 쓰기"
     ],
     "hint": "손가락으로 덜어 낼 만큼 가려 봐.",
     "help_lines": [
@@ -454,7 +454,7 @@
     "subject": "money",
     "unit": "돈 계산",
     "title": "내 돈으로 살 수 있어요",
-    "misconception_prompt": "5,000원이 있고 3,200원짜리를 사면 돈이 하나도 안 남지?",
+    "misconception_prompt": "나는 거스름돈이 없다고 했어. 2,000원에서 어떻게 계산해?",
     "learned_line": "남는 돈은 낸 돈에서 물건값을 빼!",
     "fill_before": "남는 돈은 낸 돈에서 물건값을",
     "fill_after": "",
@@ -464,12 +464,12 @@
       "더해",
       "두 번 세어"
     ],
-    "short_prompt": "남는 돈은 어떤 계산?",
-    "short_correct": "빼기",
+    "short_prompt": "거스름돈은 어떤 계산으로 구할까?",
+    "short_correct": "낸 돈에서 물건값 빼기",
     "short_options": [
-      "빼기",
-      "더하기",
-      "곱하기"
+      "낸 돈에서 물건값 빼기",
+      "낸 돈과 물건값 더하기",
+      "물건값만 쓰기"
     ],
     "hint": "낸 돈에서 물건값만큼 덜어 낸다고 생각해 봐.",
     "help_lines": [
@@ -502,7 +502,7 @@
     "subject": "subtraction",
     "unit": "뺄셈",
     "title": "자리끼리 빼요",
-    "misconception_prompt": "28에서 6을 빼려면 십의 자리에서 6을 빼지?",
+    "misconception_prompt": "17에서 5를 십 자리에서 빼면 될까? 어디끼리 빼야 해?",
     "learned_line": "뺄셈도 같은 자리끼리 계산해!",
     "fill_before": "뺄셈도 같은",
     "fill_after": "계산해",
@@ -512,12 +512,12 @@
       "색끼리",
       "큰 수만"
     ],
-    "short_prompt": "무엇끼리 뺄까?",
-    "short_correct": "같은 자리",
+    "short_prompt": "17에서 5는 어떤 자리끼리 뺄까?",
+    "short_correct": "같은 자리끼리 빼기",
     "short_options": [
-      "같은 자리",
-      "다른 자리",
-      "작은 수만"
+      "같은 자리끼리 빼기",
+      "다른 자리끼리 빼기",
+      "작은 수만 쓰기"
     ],
     "hint": "일의 자리부터 같은 줄에 놓아 봐.",
     "help_lines": [
@@ -546,7 +546,7 @@
     "subject": "subtraction",
     "unit": "뺄셈",
     "title": "십 하나를 바꿔요",
-    "misconception_prompt": "12에서 5를 못 빼니까 그냥 5에서 2를 빼면 되지?",
+    "misconception_prompt": "12에서 5를 5-2로 하면 될까? 십 하나는 어떻게 바꿔?",
     "learned_line": "일이 모자라면 십 하나를 낱개 10개로 바꿔!",
     "fill_before": "일이 모자라면 십 하나를",
     "fill_after": "바꿔",
@@ -556,12 +556,12 @@
       "1개로",
       "없게"
     ],
-    "short_prompt": "십 하나는 낱개 몇 개?",
-    "short_correct": "10개",
+    "short_prompt": "십 하나를 낱개로 바꾸면 몇 개일까?",
+    "short_correct": "낱개 10개로 바꾸기",
     "short_options": [
-      "10개",
-      "1개",
-      "5개"
+      "낱개 10개로 바꾸기",
+      "낱개 1개로 바꾸기",
+      "십을 없애기"
     ],
     "hint": "십 막대 하나를 낱개 열 개로 풀어 봐.",
     "help_lines": [
@@ -590,7 +590,7 @@
     "subject": "multiplication",
     "unit": "곱셈",
     "title": "같은 수씩 묶어요",
-    "misconception_prompt": "2개씩 3묶음이면 2와 3을 더해서 5지?",
+    "misconception_prompt": "2개씩 3묶음을 2+3으로 계산했어. 어떻게 세어야 해?",
     "learned_line": "같은 수씩 여러 묶음은 곱셈으로 세어!",
     "fill_before": "같은 수씩 여러 묶음은",
     "fill_after": "세어!",
@@ -600,12 +600,12 @@
       "뺄셈으로",
       "하나만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "곱셈으로",
+    "short_prompt": "같은 수씩 여러 묶음은 어떻게 셀까?",
+    "short_correct": "곱셈으로 세기",
     "short_options": [
-      "곱셈으로",
-      "뺄셈으로",
-      "하나만"
+      "곱셈으로 세기",
+      "두 수를 더하기",
+      "한 묶음만 세기"
     ],
     "hint": "한 묶음의 수와 묶음 수를 차례로 확인해.",
     "help_lines": [
@@ -634,7 +634,7 @@
     "subject": "multiplication",
     "unit": "곱셈",
     "title": "같은 수를 이어 더해요",
-    "misconception_prompt": "3개씩 4묶음은 3+4로 나타내지?",
+    "misconception_prompt": "2개씩 4묶음을 2+4로 썼어. 어떻게 나타내야 해?",
     "learned_line": "곱셈은 같은 수를 여러 번 더한 거야!",
     "fill_before": "곱셈은",
     "fill_after": "여러 번 더한 거야!",
@@ -644,12 +644,12 @@
       "다른 수를",
       "큰 수만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "같은 수를",
+    "short_prompt": "같은 수를 여러 번 어떻게 나타낼까?",
+    "short_correct": "같은 수를 여러 번 더하기",
     "short_options": [
-      "같은 수를",
-      "다른 수를",
-      "큰 수만"
+      "같은 수를 여러 번 더하기",
+      "서로 다른 수를 더하기",
+      "큰 수만 반복하기"
     ],
     "hint": "각 묶음의 수를 묶음 수만큼 이어 더해.",
     "help_lines": [
@@ -678,7 +678,7 @@
     "subject": "money",
     "unit": "돈 계산",
     "title": "마트 심부름",
-    "misconception_prompt": "두 물건을 사고 남는 돈은 가격을 각각 따로 빼면 되지?",
+    "misconception_prompt": "두 물건값을 따로 빼면 될까? 계산 순서를 알려줘.",
     "learned_line": "물건값을 먼저 더하고 낸 돈에서 한 번 빼!",
     "fill_before": "물건값을 먼저",
     "fill_after": "낸 돈에서 빼",
@@ -688,12 +688,12 @@
       "가리고",
       "두 번 빼고"
     ],
-    "short_prompt": "물건값은 먼저 어떤 계산?",
-    "short_correct": "더하기",
+    "short_prompt": "두 물건값을 먼저 어떻게 계산할까?",
+    "short_correct": "물건값부터 더하기",
     "short_options": [
-      "더하기",
-      "빼기",
-      "세지 않기"
+      "물건값부터 더하기",
+      "물건값을 각각 빼기",
+      "큰 값만 쓰기"
     ],
     "hint": "1단계: 물건값 모두 더하기. 2단계: 낸 돈에서 빼기.",
     "help_lines": [
@@ -702,12 +702,12 @@
     ],
     "misconception": "여러 물건값을 합치지 않고 하나의 가격만 뺌",
     "sample_problem": {
-      "prompt": "모두 얼마일까?",
-      "correct": "2,000원",
+      "prompt": "5,000원을 내면 얼마가 남을까?",
+      "correct": "3,000원",
       "answers": [
+        "3,000원",
         "2,000원",
-        "1,900원",
-        "2,100원"
+        "7,000원"
       ],
       "visual": {
         "type": "money",
@@ -715,6 +715,7 @@
           1200,
           800
         ],
+        "paid": 5000,
         "labels": [
           "우유",
           "빵"
@@ -727,7 +728,7 @@
     "subject": "multiplication",
     "unit": "곱셈",
     "title": "2·5·10단을 생활에서 써요",
-    "misconception_prompt": "5씩 네 번이면 5, 10, 15에서 끝나지?",
+    "misconception_prompt": "2씩 네 번을 2, 4, 6에서 끝냈어. 다음은 어떻게 셀까?",
     "learned_line": "2·5·10단은 뛰어 세며 답을 찾아!",
     "fill_before": "2·5·10단은",
     "fill_after": "답을 찾아!",
@@ -737,12 +738,12 @@
       "하나씩만",
       "거꾸로만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "뛰어 세며",
+    "short_prompt": "2단의 답은 어떤 방법으로 이어 셀까?",
+    "short_correct": "같은 간격으로 뛰어 세기",
     "short_options": [
-      "뛰어 세며",
-      "하나씩만",
-      "거꾸로만"
+      "같은 간격으로 뛰어 세기",
+      "하나씩만 세기",
+      "거꾸로만 세기"
     ],
     "hint": "2, 4, 6처럼 같은 간격으로 수를 말해.",
     "help_lines": [
@@ -771,7 +772,7 @@
     "subject": "multiplication",
     "unit": "곱셈",
     "title": "곱셈구구의 관계를 찾아요",
-    "misconception_prompt": "4×6을 알아도 4×7에는 쓸 수 없지?",
+    "misconception_prompt": "3×5를 알아도 3×6에는 못 쓰지? 어떻게 이어 찾을까?",
     "learned_line": "곱셈은 아는 곱에서 이어 찾아!",
     "fill_before": "곱셈은",
     "fill_after": "이어 찾아!",
@@ -781,12 +782,12 @@
       "처음부터만",
       "아무 수에서"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "아는 곱에서",
+    "short_prompt": "3×6은 무엇을 이용해 이어 찾을까?",
+    "short_correct": "아는 곱에서 이어 찾기",
     "short_options": [
-      "아는 곱에서",
-      "처음부터만",
-      "아무 수에서"
+      "아는 곱에서 이어 찾기",
+      "매번 처음부터 세기",
+      "아무 곱에서 시작하기"
     ],
     "hint": "바로 앞 곱에 한 묶음의 수를 더해.",
     "help_lines": [
@@ -795,7 +796,7 @@
     ],
     "misconception": "각 구구를 서로 관계없는 암기 항목으로 봄",
     "sample_problem": {
-      "prompt": "3×6은?",
+      "prompt": "3×5=15일 때 3×6은?",
       "answers": [
         "18",
         "16",
@@ -815,7 +816,7 @@
     "subject": "division",
     "unit": "나눗셈",
     "title": "똑같이 나누어요",
-    "misconception_prompt": "사탕 8개를 2명에게 나누면 한 명이 6개를 가져도 되지?",
+    "misconception_prompt": "6개를 2명에게 나눠 한 명이 4개 가져도 될까? 어떻게 나눠?",
     "learned_line": "나눗셈은 하나씩 번갈아 나누어!",
     "fill_before": "나눗셈은 하나씩",
     "fill_after": "나누어!",
@@ -825,12 +826,12 @@
       "한쪽에만",
       "눈대중으로"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "번갈아",
+    "short_prompt": "6개를 두 사람에게 어떻게 나눌까?",
+    "short_correct": "한 개씩 번갈아 나누기",
     "short_options": [
-      "번갈아",
-      "한쪽에만",
-      "눈대중으로"
+      "한 개씩 번갈아 나누기",
+      "한 사람에게 먼저 주기",
+      "눈대중으로 나누기"
     ],
     "hint": "모든 사람에게 하나씩 주는 일을 반복해.",
     "help_lines": [
@@ -859,7 +860,7 @@
     "subject": "division",
     "unit": "나눗셈",
     "title": "몇 묶음인지 찾아요",
-    "misconception_prompt": "12개를 3개씩 묶으면 3묶음이지?",
+    "misconception_prompt": "8개를 2개씩 묶었는데 2묶음이라고 했어. 어떻게 세어?",
     "learned_line": "같은 수씩 묶고 묶음 수를 세어!",
     "fill_before": "같은 수씩 묶고",
     "fill_after": "세어!",
@@ -869,12 +870,12 @@
       "낱개만",
       "전체만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "묶음 수를",
+    "short_prompt": "2개씩 묶은 뒤 무엇을 세어야 할까?",
+    "short_correct": "만든 묶음 수를 세기",
     "short_options": [
-      "묶음 수를",
-      "낱개만",
-      "전체만"
+      "만든 묶음 수를 세기",
+      "낱개 수만 세기",
+      "전체 수만 다시 세기"
     ],
     "hint": "정해진 수만큼 동그라미를 치고 동그라미 수를 세어.",
     "help_lines": [
@@ -903,7 +904,7 @@
     "subject": "pattern",
     "unit": "규칙·관계",
     "title": "반복되는 규칙을 찾아요",
-    "misconception_prompt": "동그라미-세모가 반복돼도 다음은 네모일 수 있지?",
+    "misconception_prompt": "●▲가 반복되는데 다음을 ■라고 했어. 무엇을 봐야 해?",
     "learned_line": "규칙은 되풀이되는 묶음을 찾아!",
     "fill_before": "규칙은",
     "fill_after": "묶음을 찾아!",
@@ -913,12 +914,12 @@
       "가장 큰",
       "마지막만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "되풀이되는",
+    "short_prompt": "규칙에서 어떤 묶음을 찾아야 할까?",
+    "short_correct": "되풀이되는 묶음 찾기",
     "short_options": [
-      "되풀이되는",
-      "가장 큰",
-      "마지막만"
+      "되풀이되는 묶음 찾기",
+      "가장 큰 모양 찾기",
+      "마지막 모양만 보기"
     ],
     "hint": "처음부터 같은 순서가 다시 나오는 곳을 묶어.",
     "help_lines": [
@@ -952,7 +953,7 @@
     "subject": "pattern",
     "unit": "규칙·관계",
     "title": "수의 변화를 찾아요",
-    "misconception_prompt": "2, 4, 6은 4씩 커지는 규칙이지?",
+    "misconception_prompt": "2, 4, 6, 8은 4씩 커진다고 했어. 얼마씩 커질까?",
     "learned_line": "수 규칙은 얼마씩 변하는지 찾아!",
     "fill_before": "수 규칙은",
     "fill_after": "변하는지 찾아!",
@@ -962,12 +963,12 @@
       "몇 자리인지",
       "색이 어떤지"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "얼마씩",
+    "short_prompt": "수 규칙에서 무엇이 변하는지 볼까?",
+    "short_correct": "얼마씩 변하는지 보기",
     "short_options": [
-      "얼마씩",
-      "몇 자리인지",
-      "색이 어떤지"
+      "얼마씩 변하는지 보기",
+      "숫자 자릿수만 보기",
+      "숫자 모양만 보기"
     ],
     "hint": "이웃한 두 수의 차이를 차례로 확인해.",
     "help_lines": [
@@ -1003,7 +1004,7 @@
     "subject": "pattern",
     "unit": "규칙·관계",
     "title": "빈칸의 수를 찾아요",
-    "misconception_prompt": "□+3=8의 빈칸은 8이지?",
+    "misconception_prompt": "□+3=8에서 빈칸을 8이라고 했어. 어떻게 찾을까?",
     "learned_line": "빈칸은 양쪽 관계를 거꾸로 생각해!",
     "fill_before": "빈칸은 양쪽 관계를",
     "fill_after": "생각해!",
@@ -1013,12 +1014,12 @@
       "그대로만",
       "짐작으로"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "거꾸로",
+    "short_prompt": "빈칸은 어떤 방법으로 찾아볼까?",
+    "short_correct": "거꾸로 계산해 보기",
     "short_options": [
-      "거꾸로",
-      "그대로만",
-      "짐작으로"
+      "거꾸로 계산해 보기",
+      "빈칸에 전체 수 쓰기",
+      "눈대중으로 고르기"
     ],
     "hint": "더한 문제는 빼서, 뺀 문제는 더해서 확인해.",
     "help_lines": [
@@ -1050,7 +1051,7 @@
     "subject": "clock",
     "unit": "시계",
     "title": "정각과 30분",
-    "misconception_prompt": "긴 바늘이 6이면 6분이지?",
+    "misconception_prompt": "긴 바늘이 6이라서 6분이라고 읽었어. 어떻게 읽어야 해?",
     "learned_line": "긴 바늘이 12면 정각, 6이면 30분이야!",
     "fill_before": "긴 바늘이 6이면",
     "fill_after": "",
@@ -1060,12 +1061,12 @@
       "6분",
       "정각"
     ],
-    "short_prompt": "긴 바늘이 6이면?",
-    "short_correct": "30분",
+    "short_prompt": "긴 바늘이 6이면 몇 분일까?",
+    "short_correct": "30분으로 읽기",
     "short_options": [
-      "30분",
-      "6분",
-      "정각"
+      "30분으로 읽기",
+      "6분으로 읽기",
+      "정각으로 읽기"
     ],
     "hint": "긴 바늘은 숫자 한 칸마다 5분씩 가.",
     "help_lines": [
@@ -1075,16 +1076,16 @@
     "misconception": "긴 바늘 숫자를 그대로 분으로 읽음",
     "sample_problem": {
       "prompt": "이 시계는 몇 시일까?",
-      "correct": "3시",
+      "correct": "3시 30분",
       "answers": [
-        "3시",
-        "12시 3분",
-        "3시 30분"
+        "3시 30분",
+        "3시 6분",
+        "6시 15분"
       ],
       "visual": {
         "type": "clock",
         "hour": 3,
-        "minute": 0
+        "minute": 30
       }
     }
   },
@@ -1093,7 +1094,7 @@
     "subject": "clock",
     "unit": "시계",
     "title": "15분과 45분",
-    "misconception_prompt": "긴 바늘이 3이면 3분이지?",
+    "misconception_prompt": "긴 바늘이 3이라서 3분이라고 읽었어. 몇 분을 뜻할까?",
     "learned_line": "긴 바늘이 3이면 15분, 9면 45분이야!",
     "fill_before": "긴 바늘이 3이면",
     "fill_after": "",
@@ -1103,12 +1104,12 @@
       "3분",
       "30분"
     ],
-    "short_prompt": "긴 바늘이 3이면?",
-    "short_correct": "15분",
+    "short_prompt": "긴 바늘이 3이면 몇 분일까?",
+    "short_correct": "15분으로 읽기",
     "short_options": [
-      "15분",
-      "3분",
-      "45분"
+      "15분으로 읽기",
+      "3분으로 읽기",
+      "45분으로 읽기"
     ],
     "hint": "5, 10, 15처럼 숫자 칸마다 5분씩 세어 봐.",
     "help_lines": [
@@ -1136,7 +1137,7 @@
     "subject": "clock",
     "unit": "시간·달력",
     "title": "걸린 시간을 찾아요",
-    "misconception_prompt": "2시에 시작해 3시에 끝났으면 3시간 걸렸지?",
+    "misconception_prompt": "2시부터 3시까지 3시간이라고 했어. 어디서부터 셀까?",
     "learned_line": "걸린 시간은 시작부터 끝까지 세어!",
     "fill_before": "걸린 시간은",
     "fill_after": "끝까지 세어!",
@@ -1146,12 +1147,12 @@
       "끝에서만",
       "숫자만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "시작부터",
+    "short_prompt": "걸린 시간은 어디서부터 세어야 할까?",
+    "short_correct": "시작부터 끝까지 세기",
     "short_options": [
-      "시작부터",
-      "끝에서만",
-      "숫자만"
+      "시작부터 끝까지 세기",
+      "끝 시각만 보기",
+      "두 숫자를 더하기"
     ],
     "hint": "시작 시각에서 30분이나 1시간씩 뛰어 세어.",
     "help_lines": [
@@ -1183,7 +1184,7 @@
     "subject": "clock",
     "unit": "시간·달력",
     "title": "달력에서 날짜를 찾아요",
-    "misconception_prompt": "8월 8일이면 언제나 월요일이지?",
+    "misconception_prompt": "8월 8일에서 사흘 뒤를 10일이라고 했어. 어떻게 셀까?",
     "learned_line": "날짜는 월·일·요일을 함께 확인해!",
     "fill_before": "날짜는",
     "fill_after": "함께 확인해!",
@@ -1193,12 +1194,12 @@
       "일만",
       "색만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "월·일·요일을",
+    "short_prompt": "날짜를 찾을 때 무엇을 함께 확인할까?",
+    "short_correct": "월·일·요일 함께 보기",
     "short_options": [
-      "월·일·요일을",
-      "일만",
-      "색만"
+      "월·일·요일 함께 보기",
+      "날짜 숫자만 보기",
+      "칸 색만 보기"
     ],
     "hint": "먼저 월을 보고, 날짜 칸을 찾고, 위의 요일을 확인해.",
     "help_lines": [
@@ -1226,7 +1227,7 @@
     "subject": "measurement",
     "unit": "측정",
     "title": "길이를 직접 비교해요",
-    "misconception_prompt": "시작점이 달라도 끝이 오른쪽이면 더 길지?",
+    "misconception_prompt": "왼쪽 막대가 더 길다고 했어. 무엇을 맞춰 봐야 해?",
     "learned_line": "길이는 한쪽 끝을 맞추어 비교해!",
     "fill_before": "길이는 한쪽 끝을",
     "fill_after": "비교해!",
@@ -1236,12 +1237,12 @@
       "벌려서",
       "눈감고"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "맞추어",
+    "short_prompt": "막대 길이를 비교하려면 시작점을 어떻게 할까?",
+    "short_correct": "시작점을 맞추어 비교하기",
     "short_options": [
-      "맞추어",
-      "벌려서",
-      "눈감고"
+      "시작점을 맞추어 비교하기",
+      "막대 사이를 벌리기",
+      "끝점만 보기"
     ],
     "hint": "두 물건의 시작점을 같은 줄에 놓아.",
     "help_lines": [
@@ -1271,7 +1272,7 @@
     "subject": "measurement",
     "unit": "측정",
     "title": "자로 길이를 재어요",
-    "misconception_prompt": "2에서 시작해 8에서 끝나면 길이가 8cm지?",
+    "misconception_prompt": "0에서 6까지인데 5cm라고 했어. 자를 어떻게 읽어?",
     "learned_line": "자는 0에 맞추고 끝 숫자를 읽어!",
     "fill_before": "자는",
     "fill_after": "끝 숫자를 읽어!",
@@ -1281,12 +1282,12 @@
       "1에만 맞추고",
       "중간에 놓고"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "0에 맞추고",
+    "short_prompt": "자로 잴 때 시작을 어디에 맞출까?",
+    "short_correct": "0에 맞추고 끝 숫자 읽기",
     "short_options": [
-      "0에 맞추고",
-      "1에만 맞추고",
-      "중간에 놓고"
+      "0에 맞추고 끝 숫자 읽기",
+      "1에 맞추고 끝 숫자 읽기",
+      "중간에 놓고 숫자 읽기"
     ],
     "hint": "물건 시작은 0, 물건 끝 아래 숫자가 길이야.",
     "help_lines": [
@@ -1315,7 +1316,7 @@
     "subject": "measurement",
     "unit": "측정",
     "title": "무게와 들이를 비교해요",
-    "misconception_prompt": "1kg은 숫자 1이니까 500g보다 가볍지?",
+    "misconception_prompt": "1000g보다 500g이 더 무겁다고 했어. 어떻게 비교해?",
     "learned_line": "측정값은 같은 단위로 바꾸어 비교해!",
     "fill_before": "측정값은",
     "fill_after": "바꾸어 비교해!",
@@ -1325,12 +1326,12 @@
       "숫자만",
       "모양으로"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "같은 단위로",
+    "short_prompt": "무게를 비교하기 전에 단위를 어떻게 할까?",
+    "short_correct": "같은 단위로 바꾸기",
     "short_options": [
-      "같은 단위로",
-      "숫자만",
-      "모양으로"
+      "같은 단위로 바꾸기",
+      "숫자만 비교하기",
+      "물건 모양으로 고르기"
     ],
     "hint": "kg와 g, L와 mL를 먼저 같은 단위로 맞춰.",
     "help_lines": [
@@ -1360,7 +1361,7 @@
     "subject": "geometry",
     "unit": "도형·공간",
     "title": "도형의 특징을 찾아요",
-    "misconception_prompt": "기울어진 세모는 세모가 아니지?",
+    "misconception_prompt": "세 변과 세 꼭짓점이어도 사각형이라고 하면 되지?",
     "learned_line": "도형은 변과 꼭짓점을 세어!",
     "fill_before": "도형은 변과",
     "fill_after": "세어!",
@@ -1370,12 +1371,12 @@
       "색만",
       "크기만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "꼭짓점을",
+    "short_prompt": "삼각형을 찾을 때 무엇을 세어 볼까?",
+    "short_correct": "변과 꼭짓점 세기",
     "short_options": [
-      "꼭짓점을",
-      "색만",
-      "크기만"
+      "변과 꼭짓점 세기",
+      "색만 보기",
+      "크기만 보기"
     ],
     "hint": "곧은 선의 수와 뾰족하게 만나는 점을 세어.",
     "help_lines": [
@@ -1406,7 +1407,7 @@
     "subject": "geometry",
     "unit": "도형·공간",
     "title": "도형을 나누고 합쳐요",
-    "misconception_prompt": "정사각형을 돌리면 더는 정사각형이 아니지?",
+    "misconception_prompt": "삼각형 두 개는 사각형이 될 수 없지? 어떻게 합쳐 볼까?",
     "learned_line": "도형은 나누고 돌리고 합칠 수 있어!",
     "fill_before": "도형은 나누고 돌리고",
     "fill_after": "",
@@ -1416,12 +1417,12 @@
       "바꿀 수 없어!",
       "색만 봐!"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "합칠 수 있어!",
+    "short_prompt": "도형을 돌리고 합치면 새 모양을 만들 수 있을까?",
+    "short_correct": "돌리고 합쳐 보기",
     "short_options": [
-      "합칠 수 있어!",
-      "바꿀 수 없어!",
-      "색만 봐!"
+      "돌리고 합쳐 보기",
+      "도형은 바꿀 수 없다고 보기",
+      "색만 맞추기"
     ],
     "hint": "도형의 방향을 돌려 빈자리에 맞춰 봐.",
     "help_lines": [
@@ -1452,7 +1453,7 @@
     "subject": "geometry",
     "unit": "도형·공간",
     "title": "위치와 방향을 말해요",
-    "misconception_prompt": "기준이 없어도 왼쪽이라고만 말하면 모두 알지?",
+    "misconception_prompt": "별이 세모의 왼쪽에 있다고 했어. 무엇을 기준으로 말해?",
     "learned_line": "위치는 기준에서 방향과 거리를 말해!",
     "fill_before": "위치는",
     "fill_after": "방향과 거리를 말해!",
@@ -1462,12 +1463,12 @@
       "내 느낌으로",
       "반대에서"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "기준에서",
+    "short_prompt": "별의 위치를 말할 때 어디에서 볼까?",
+    "short_correct": "기준에서 방향 보기",
     "short_options": [
-      "기준에서",
-      "내 느낌으로",
-      "반대에서"
+      "기준에서 방향 보기",
+      "내 위치만 보기",
+      "방향을 반대로 말하기"
     ],
     "hint": "무엇을 기준으로 왼쪽·오른쪽·앞·뒤인지 먼저 말해.",
     "help_lines": [
@@ -1498,7 +1499,7 @@
     "subject": "data",
     "unit": "자료·가능성",
     "title": "기준을 정해 분류해요",
-    "misconception_prompt": "빨간 세모를 색 상자와 모양 상자에 모두 넣어도 되지?",
+    "misconception_prompt": "원 둘과 삼각형을 같이 모아도 되지? 어떤 기준으로 나눠?",
     "learned_line": "분류는 한 기준으로 같은 것끼리 모아!",
     "fill_before": "분류는",
     "fill_after": "같은 것끼리 모아!",
@@ -1508,12 +1509,12 @@
       "여러 기준을 섞어",
       "느낌대로"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "한 기준으로",
+    "short_prompt": "분류할 때 기준은 어떻게 정할까?",
+    "short_correct": "한 기준으로 모으기",
     "short_options": [
-      "한 기준으로",
-      "여러 기준을 섞어",
-      "느낌대로"
+      "한 기준으로 모으기",
+      "여러 기준을 섞기",
+      "느낌대로 모으기"
     ],
     "hint": "색, 모양, 크기 중 기준 하나를 먼저 말해.",
     "help_lines": [
@@ -1544,7 +1545,7 @@
     "subject": "data",
     "unit": "자료·가능성",
     "title": "표와 그래프를 읽어요",
-    "misconception_prompt": "막대가 가장 진한 항목이 언제나 가장 많지?",
+    "misconception_prompt": "막대가 짧은 배가 가장 많다고 했어. 무엇을 봐야 해?",
     "learned_line": "그래프는 제목과 눈금을 먼저 봐!",
     "fill_before": "그래프는 제목과",
     "fill_after": "먼저 봐!",
@@ -1554,12 +1555,12 @@
       "색만",
       "막대 폭만"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "눈금을",
+    "short_prompt": "가장 많은 항목을 찾을 때 무엇을 볼까?",
+    "short_correct": "눈금과 막대 높이 보기",
     "short_options": [
-      "눈금을",
-      "색만",
-      "막대 폭만"
+      "눈금과 막대 높이 보기",
+      "색만 보기",
+      "막대 폭만 보기"
     ],
     "hint": "한 칸이 몇을 뜻하는지 확인하고 막대 끝을 읽어.",
     "help_lines": [
@@ -1595,7 +1596,7 @@
     "subject": "data",
     "unit": "자료·가능성",
     "title": "가능성을 말해요",
-    "misconception_prompt": "빨강 1개, 파랑 5개여도 내가 빨강을 원하면 빨강이 더 잘 나오지?",
+    "misconception_prompt": "빨강을 더 원하니까 빨강이 잘 나온다고 했어. 무엇을 비교해?",
     "learned_line": "가능성은 자료를 보고 비교해!",
     "fill_before": "가능성은",
     "fill_after": "보고 비교해!",
@@ -1605,12 +1606,12 @@
       "기분을",
       "소원을"
     ],
-    "short_prompt": "어떤 방법이 맞을까?",
-    "short_correct": "자료를",
+    "short_prompt": "더 잘 나올 색은 무엇을 보고 정할까?",
+    "short_correct": "자료의 개수 비교하기",
     "short_options": [
-      "자료를",
-      "기분을",
-      "소원을"
+      "자료의 개수 비교하기",
+      "원하는 색 고르기",
+      "기분으로 고르기"
     ],
     "hint": "더 많이 들어 있으면 나올 가능성이 더 커.",
     "help_lines": [

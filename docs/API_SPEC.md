@@ -117,7 +117,6 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 | `scene` | `scenario_id` | 설명 |
 |---|---|---|
 | `home_teach` | `home_teach` | 반복한 커리큘럼에 맞는 가르치기 시나리오 생성 |
-| `home_teach` | `home_addition_teach` | 기존 3+5 호환 시나리오 |
 | `cafe` | `cafe_queue` | 1단계: 1~5명의 두 줄을 세고 짧은 줄 선택 |
 | `cafe` | `cafe_budget_menu` | 2단계: 자동 합계를 보며 예산 안에서 메뉴 선택 |
 | `cafe` | `cafe_menu_total` | 3단계: 두 메뉴를 고르고 전체 가격 계산 |
@@ -268,14 +267,14 @@ AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionSt
     "stage_id": "home_teach",
     "task_index": 0,
     "mormi": {
-      "text": "1,000원 한 장과 500원 하나면 1,050원이지?",
+      "text": "500원과 100원을 보고 510원이라고 했어. 어떻게 세야 해?",
       "mood": "curious",
       "max_lines": 2
     },
     "input": {
       "kind": "text",
       "choices": [],
-      "target_slots": ["rule"]
+      "target_slots": ["answer", "rule"]
     },
     "visual": {
       "type": "home_teaching",
@@ -291,8 +290,10 @@ AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionSt
 }
 ```
 
-응답에 표시되는 구체적인 질문과 입력 방식은 학습자 프로필과 반복 결과에 따라
-달라질 수 있습니다. 프론트는 특정 시작 단계나 문구를 가정하지 않습니다.
+집 가르치기의 첫 턴은 반복학습 정답률과 무관하게 `L4-H0`, 텍스트 입력,
+`help_card=null`입니다. 반복학습 오답은 개념 수행 정보이지 표현 능력의 증거가
+아니기 때문입니다. 첫 응답 이후의 질문과 입력 방식은 아이 반응에 따라 달라지므로
+프론트는 후속 턴의 특정 단계나 문구를 가정하지 않습니다.
 
 ## 6. 아이 응답 제출
 

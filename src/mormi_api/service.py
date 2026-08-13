@@ -6,8 +6,10 @@ from .repository import DuplicateResponseError, Repository
 from .schemas import (
     ChildResponse,
     ExpressionLevel,
+    InputKind,
     PracticeResult,
     PracticeSummary,
+    ResponseType,
     SessionCreate,
     SessionEnvelope,
     SessionState,
@@ -66,8 +68,6 @@ class ConversationService:
                 raise ValueError("practice result does not belong to learner_id")
             practice_summary = PracticeSummary.model_validate(loaded_result.model_dump())
 
-        practice_rate = practice_summary.success_rate if practice_summary else None
-
         profile = await self.repository.get_profile(request.learner_id)
         curriculum_session_id = (
             practice_summary.curriculum_session_id if practice_summary else None
@@ -84,16 +84,21 @@ class ConversationService:
         )
         task_start_levels = {
             task_id: (
-                ExpressionLevel.L2
+                # Drill accuracy is concept-performance evidence, not evidence
+                # that the child cannot explain.  Home teaching must therefore
+                # offer one independent L4-H0 teaching turn before adding any
+                # expression support.
+                ExpressionLevel.L4
+                if request.scenario_id == "home_teach"
+                else ExpressionLevel.L2
                 if get_task(task_id, scenario_data).behavior
                 in {"budget_menu_selection", "menu_selection"}
                 else select_start_level(
                     profile,
                     get_task(task_id, scenario_data).skill_id,
-                    practice_rate if index == 0 else None,
                 )
             )
-            for index, task_id in enumerate(scenario.task_ids)
+            for task_id in scenario.task_ids
         }
         start_level = task_start_levels[scenario.task_ids[0]]
         started_at = utc_now()
@@ -132,6 +137,11 @@ class ConversationService:
         active_turn = await self.repository.active_turn(state)
         if active_turn.turn_id != response.turn_id:
             raise ValueError("turn_id is stale; use the latest turn")
+        if not response_matches_input(active_turn.input.kind, response.type):
+            raise ValueError(
+                f"response type {response.type.value} does not match "
+                f"input kind {active_turn.input.kind.value}"
+            )
         previous_task = get_task(state.current_task_id, state.scenario_data)
         next_state, analysis, next_turn = await self.engine.run_turn(
             state,
@@ -170,3 +180,18 @@ class ConversationService:
         state = await self.repository.get_state(conversation_id)
         turn = await self.repository.active_turn(state)
         return SessionEnvelope(conversation_id=conversation_id, turn=turn)
+
+
+def response_matches_input(input_kind: InputKind, response_type: ResponseType) -> bool:
+    if response_type is ResponseType.NO_RESPONSE:
+        return input_kind is not InputKind.NONE
+    expected = {
+        InputKind.TEXT: ResponseType.TEXT,
+        InputKind.CHOICES: ResponseType.CHOICE,
+        InputKind.FILL: ResponseType.FILL,
+        InputKind.COUNT: ResponseType.COUNT,
+        InputKind.EQUATION: ResponseType.EQUATION,
+        InputKind.JOINT: ResponseType.ACTION,
+        InputKind.BUTTON: ResponseType.ACTION,
+    }
+    return expected.get(input_kind) is response_type

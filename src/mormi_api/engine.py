@@ -106,6 +106,7 @@ class ConversationEngine:
     def initial_turn(self, state: SessionState) -> TurnContract:
         task = get_task(state.current_task_id, state.scenario_data)
         step = task.step_for(state.expression_level, state.verified_slots)
+        state.subgoal_id = step.id
         state.current_turn_id = new_id("turn")
         return self._turn_contract(
             state,
@@ -299,7 +300,7 @@ class ConversationEngine:
                 next_state.direct_note_candidate = self._safe_direct_note(
                     task,
                     analysis.note_candidate,
-                    newly_verified,
+                    next_state.verified_slots,
                 )
             if task.complete(next_state.verified_slots):
                 return self._complete_task(
@@ -312,7 +313,14 @@ class ConversationEngine:
             # A partial answer is useful evidence, but the next prompt should
             # request only the missing piece instead of repeating the original
             # multi-part L4 question.
-            if next_state.expression_level is ExpressionLevel.L4:
+            next_step = task.step_for(
+                next_state.expression_level,
+                next_state.verified_slots,
+            )
+            if (
+                next_state.expression_level is ExpressionLevel.L4
+                and next_step.id == state.subgoal_id
+            ):
                 next_state.expression_level = ExpressionLevel.L3
             return self._decision_for_current_step(
                 next_state,
@@ -815,19 +823,11 @@ def max_hint(left: HintLevel, right: HintLevel) -> HintLevel:
     return order[max(order.index(left), order.index(right))]
 
 
-def select_start_level(
-    profile: LearnerProfile, skill_id: str, practice_rate: float | None
-) -> ExpressionLevel:
+def select_start_level(profile: LearnerProfile, skill_id: str) -> ExpressionLevel:
     skill = profile.skills.get(skill_id)
     if skill:
         return skill.highest_stable_expression_level
-    if practice_rate is None:
-        return ExpressionLevel.L4
-    if practice_rate >= 0.9:
-        return ExpressionLevel.L4
-    if practice_rate >= 0.7:
-        return ExpressionLevel.L3
-    return ExpressionLevel.L2
+    return ExpressionLevel.L4
 
 
 def update_skill_profile(

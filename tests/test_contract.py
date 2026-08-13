@@ -45,16 +45,16 @@ def test_storage_consent_defaults_to_permanent_retention() -> None:
     with pytest.raises(ValidationError):
         SessionCreate(
             learner_id=1,
-            scene="home_teach",
-            scenario_id="home_addition_teach",
+            scene="cafe",
+            scenario_id="cafe_queue_demo",
             conversation_storage_consent=True,
             retention_policy="no_raw",
         )
 
     request = SessionCreate(
         learner_id=1,
-        scene="home_teach",
-        scenario_id="home_addition_teach",
+        scene="cafe",
+        scenario_id="cafe_queue_demo",
     )
     assert request.conversation_storage_consent is True
     assert request.retention_policy.value == "permanent"
@@ -77,9 +77,11 @@ def test_frontend_inline_practice_snapshot_does_not_repeat_ids() -> None:
     request = SessionCreate(
         learner_id=1,
         scene="home_teach",
-        scenario_id="home_addition_teach",
+        scenario_id="home_teach",
+        learning_session_id="session_123",
         practice_result_id="practice_123",
         practice_summary={
+            "curriculum_session_id": "add-pictures",
             "skill_id": "basic_addition",
             "question_count": 5,
             "first_try_correct_count": 3,

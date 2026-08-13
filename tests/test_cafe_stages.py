@@ -12,6 +12,8 @@ from mormi_api.repository import Repository
 from mormi_api.schemas import (
     ChildResponse,
     ExpressionLevel,
+    HintLevel,
+    InputKind,
     LearnerProfile,
     SessionCreate,
     SkillProfile,
@@ -162,6 +164,12 @@ async def test_queue_counts_come_from_the_frontend(tmp_path: object) -> None:
     state = await repository.get_state(started.conversation_id)
     assert state.scenario_data["left_count"] == 2
     assert state.scenario_data["right_count"] == 5
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.hint_level is HintLevel.H0
+    assert started.turn.mormi.text == "왼쪽과 오른쪽 줄에 각각 몇 명이 있어?"
+    assert started.turn.input.kind is InputKind.TEXT
+    assert started.turn.input.target_slots == ["left_count", "right_count"]
+    assert started.turn.help_card is None
     await database.dispose()
 
 
@@ -188,6 +196,8 @@ async def test_budget_menu_uses_frontend_menu_and_allows_correction(
     )
     assert mormi_choice.disabled is True
     assert started.turn.input.config["allow_same_menu"] is False
+    assert "6,000원" in started.turn.mormi.text
+    assert "딸기주스" in started.turn.mormi.text
     over = await choose(service, started.conversation_id, started.turn, "sandwich")
     assert over.turn.status.value == "active"
     assert over.turn.visual.data["budget_status"] == "over"
@@ -215,6 +225,8 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
             cafe_context=cafe_context("americano"),
         )
     )
+
+    assert "예산" not in started.turn.mormi.text
 
     picked = await choose(service, started.conversation_id, started.turn, "milk")
     assert picked.turn.task_id == "cafe_total_calculation"
@@ -304,3 +316,36 @@ def test_integrated_stage_is_not_exposed_in_current_prototype() -> None:
 
     with pytest.raises(KeyError):
         get_scenario("cafe_integrated")
+
+    with pytest.raises(KeyError):
+        get_scenario("home_addition_teach")
+
+
+def test_menu_total_selection_help_never_mentions_a_budget() -> None:
+    from mormi_api.content import create_scenario_data, get_scenario, get_task
+    from mormi_api.schemas import CafeSessionContext
+
+    context = CafeSessionContext.model_validate(cafe_context("americano"))
+    data = create_scenario_data("cafe_menu_total", context)
+    task_id = get_scenario("cafe_menu_total").task_ids[0]
+    task = get_task(task_id, data)
+
+    assert task.visible_facts["budget"] is None
+    assert all("예산" not in hint.body for hint in task.hints.values())
+
+
+def test_calculation_guidance_uses_natural_korean_without_menu_name_particles() -> None:
+    from mormi_api.content import create_scenario_data, get_scenario, get_task
+    from mormi_api.schemas import CafeSessionContext
+
+    context = CafeSessionContext.model_validate(cafe_context("americano"))
+    data = {
+        **create_scenario_data("cafe_menu_total", context),
+        "child_menu_id": "milk",
+    }
+    task_id = get_scenario("cafe_menu_total").task_ids[1]
+    task = get_task(task_id, data)
+    prompt = task.steps[ExpressionLevel.L1][0].prompt
+
+    assert prompt == "두 메뉴 가격은 어떤 계산으로 합칠까?"
+    assert "우유을" not in prompt

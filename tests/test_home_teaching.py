@@ -11,10 +11,15 @@ from mormi_api.repository import Repository
 from mormi_api.schemas import (
     ChildResponse,
     DifficultyClass,
+    ExpressionLevel,
+    HintLevel,
+    InputKind,
+    LearnerProfile,
     PracticeResult,
     ResponseCategory,
     SafetyCategory,
     SessionCreate,
+    SkillProfile,
     SlotClaim,
     UtteranceAnalysis,
 )
@@ -93,12 +98,15 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
                 "curriculum_session_id": curriculum_session_id,
                 "skill_id": curriculum_session_id,
                 "question_count": 5,
-                "first_try_correct_count": 5,
+                # Drill mistakes are concept evidence.  They must never skip
+                # the child's first independent teaching opportunity.
+                "first_try_correct_count": 2,
+                "wrong_attempt_count": 3,
                 "earned_reward": 1000,
                 "attempts": [
                     {
                         "item_id": f"{curriculum_session_id}:{index}",
-                        "correct": True,
+                        "correct": index < 2,
                         "latency_ms": 1000,
                     }
                     for index in range(5)
@@ -107,8 +115,83 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
         )
     )
 
+    state = await repository.get_state(started.conversation_id)
+    spec = HOME_TEACHING_CATALOG[curriculum_session_id]
     assert started.turn.visual.data["curriculum_session_id"] == curriculum_session_id
     assert started.turn.status.value == "active"
+    assert started.turn.mormi.text == spec.misconception_prompt
+    assert started.turn.visual.data["problem"]["prompt"] == spec.sample_problem["prompt"]
+    assert started.turn.input.kind is InputKind.TEXT
+    assert started.turn.input.target_slots == ["answer", "rule"]
+    assert started.turn.input.choices == []
+    assert started.turn.help_card is None
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.hint_level is HintLevel.H0
+    await database.dispose()
+
+
+def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> None:
+    from mormi_api.content import home_teaching_task
+
+    for spec in HOME_TEACHING_CATALOG.values():
+        task = home_teaching_task(spec, skill_id=spec.id)
+        l2_answer, l2_method = task.steps[ExpressionLevel.L2]
+        l1_answer, l1_rule = task.steps[ExpressionLevel.L1]
+        expected_answers = [str(answer) for answer in spec.sample_problem["answers"]]
+
+        assert l2_answer.prompt == spec.sample_problem["prompt"]
+        assert [choice.label for choice in l2_answer.input.choices] == expected_answers
+        assert l2_method.prompt == spec.short_prompt
+        assert [choice.label for choice in l2_method.input.choices] == spec.short_options
+        assert l1_answer.prompt == spec.sample_problem["prompt"]
+        assert [choice.label for choice in l1_answer.input.choices] == expected_answers
+        assert l1_rule.input.kind is InputKind.FILL
+        assert spec.short_prompt != "어떤 방법이 맞을까?"
+
+
+@pytest.mark.asyncio
+async def test_home_first_turn_still_probes_l4_with_an_old_lower_profile(
+    tmp_path: object,
+) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-old-profile.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    await repository.save_profile(
+        LearnerProfile(
+            learner_id=12,
+            skills={
+                "number-count": SkillProfile(
+                    skill_id="number-count",
+                    highest_stable_expression_level=ExpressionLevel.L0,
+                )
+            },
+        )
+    )
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=12,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_old_profile",
+            practice_result_id="practice_old_profile",
+            practice_summary={
+                "curriculum_session_id": "number-count",
+                "skill_id": "number-count",
+                "question_count": 5,
+                "first_try_correct_count": 1,
+            },
+        )
+    )
+
+    assert started.turn.input.kind is InputKind.TEXT
+    assert started.turn.help_card is None
+    state = await repository.get_state(started.conversation_id)
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.hint_level is HintLevel.H0
     await database.dispose()
 
 
@@ -185,6 +268,126 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
             await db.execute(select(TurnRecord).where(TurnRecord.turn_id == started.turn.turn_id))
         ).scalar_one()
         assert answered.response_expires_at is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
+    tmp_path: object,
+) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-partial-answer.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    spec = HOME_TEACHING_CATALOG["number-count"]
+    analyses = [
+        UtteranceAnalysis(
+            safety_category=SafetyCategory.NORMAL,
+            response_category=ResponseCategory.CORRECT_PARTIAL,
+            difficulty_class=DifficultyClass.UNKNOWN,
+            claims=[SlotClaim(slot_id="answer", value="3", factual=True)],
+            confidence=1,
+        ),
+        UtteranceAnalysis(
+            safety_category=SafetyCategory.NORMAL,
+            response_category=ResponseCategory.CORRECT_FULL,
+            difficulty_class=DifficultyClass.UNKNOWN,
+            claims=[SlotClaim(slot_id="rule", value=spec.learned_line, factual=True)],
+            note_candidate="점을 하나씩 가리키며 마지막 수를 말하면 돼",
+            confidence=1,
+        ),
+    ]
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway(analyses)),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=10,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_number_count_partial",
+            practice_result_id="practice_number_count_partial",
+            practice_summary={
+                "curriculum_session_id": "number-count",
+                "skill_id": "number-count",
+                "question_count": 5,
+                "first_try_correct_count": 2,
+            },
+        )
+    )
+
+    after_answer = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="09de4381-f4cb-46ea-9479-095f2a32a96d",
+            type="text",
+            text="3개",
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.verified_slots["answer"] == "3"
+    assert state.expression_level is ExpressionLevel.L3
+    assert state.hint_level is HintLevel.H0
+    assert after_answer.turn.mormi.text.endswith(spec.short_prompt)
+    assert after_answer.turn.input.kind is InputKind.TEXT
+    assert after_answer.turn.input.target_slots == ["rule"]
+    assert after_answer.turn.help_card is None
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=after_answer.turn.turn_id,
+            response_id="b5fa9e9d-23c2-4258-8505-2c6598ab9e38",
+            type="text",
+            text="점을 하나씩 가리키며 마지막 수를 말하면 돼",
+        ),
+    )
+    assert completed.turn.status.value == "completed"
+    assert completed.turn.note_update is not None
+    assert completed.turn.note_update.attribution.value == "coauthored"
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_home_text_turn_rejects_an_unrelated_choice_payload(tmp_path: object) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-input-contract.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=11,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_input_contract",
+            practice_result_id="practice_input_contract",
+            practice_summary={
+                "curriculum_session_id": "number-count",
+                "skill_id": "number-count",
+                "question_count": 5,
+                "first_try_correct_count": 3,
+            },
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not match input kind text"):
+        await service.respond(
+            started.conversation_id,
+            ChildResponse(
+                turn_id=started.turn.turn_id,
+                response_id="406eb34e-0801-4a82-9bd1-538a9ec03364",
+                type="choice",
+                choice_ids=["answer_0"],
+            ),
+        )
+
+    restored = await service.snapshot(started.conversation_id)
+    assert restored.turn.turn_id == started.turn.turn_id
     await database.dispose()
 
 

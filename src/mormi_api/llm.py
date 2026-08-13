@@ -176,8 +176,10 @@ class ClaudeGateway:
         response: ChildResponse,
     ) -> str:
         step = task.step_for(state.expression_level, state.verified_slots)
+        interpreted_slot_ids = [*step.target_slots, *step.optional_slots]
         expected_slots = {
-            slot_id: task.slots[slot_id].model_dump(mode="json") for slot_id in step.target_slots
+            slot_id: task.slots[slot_id].model_dump(mode="json")
+            for slot_id in interpreted_slot_ids
         }
         return json.dumps(
             {
@@ -187,6 +189,8 @@ class ClaudeGateway:
                 "hint_level": state.hint_level.value,
                 "previous_question": previous_question,
                 "expected_slots_for_this_question": expected_slots,
+                "required_slots_for_this_question": step.target_slots,
+                "optional_partial_slots_for_this_question": step.optional_slots,
                 "already_verified_slots": state.verified_slots,
                 "known_misconceptions": task.misconception_tags,
                 "child_response": response.model_dump(mode="json"),
@@ -195,7 +199,8 @@ class ClaudeGateway:
                     "맞은 부분과 틀린 부분을 SlotClaim으로 분리한다.",
                     "아이 원문에 직접 근거가 없는 사실은 claim으로 만들지 않는다.",
                     "표현 막힘과 개념적 오답을 구분한다.",
-                    "L4는 요구한 판단과 이유가 모두 있어야 correct_full이다.",
+                    "required_slots_for_this_question이 모두 있으면 correct_full이다.",
+                    "optional_partial_slots만 있으면 correct_partial이다.",
                     "부분 답은 correct_partial이며 맞은 슬롯을 보존한다.",
                     "note_candidate는 L4의 완결되고 사실인 직접 설명일 때만 작성한다.",
                     "안전 유형은 학습 판정과 독립적으로 분류한다.",
@@ -225,6 +230,7 @@ SPEAKER_SYSTEM = """
 - '다시 생각해', '잘 생각해', '정답', '오답', '쉬운 문제', '힌트'를 말하지 않는다.
 - 모르미는 질문이 길었거나 자신이 헷갈린 점을 조정할 수 있지만 자기비하하지 않는다.
 - verified_facts는 자연스럽게 인정하고 missing_slots에 해당하는 질문만 한다.
+- required_question이 있으면 문구를 바꾸거나 다른 질문으로 대체하지 말고 그대로 포함한다.
 - child_expression은 mode가 quote_safe일 때만 인용할 수 있다.
 - context_only는 말투 맥락으로만 참고하고 사실·숫자로 복창하지 않는다.
 - 도움 카드의 내용은 모르미 지식처럼 설명하지 않는다. 카드가 보이면 같이 보자고만 한다.
@@ -234,7 +240,7 @@ SPEAKER_SYSTEM = """
 
 
 _FORBIDDEN_SPEAKER = re.compile(
-    r"(틀렸|맞았|정답|오답|다시\s*생각|잘\s*생각|쉬운\s*문제|힌트|미션|L[0-4]|H[0-3]|바보|멍청)",
+    r"(틀렸|맞았|맞아|정확해|잘했|옳아|훌륭|정답|오답|다시\s*생각|잘\s*생각|쉬운\s*문제|힌트|미션|L[0-4]|H[0-3]|바보|멍청)",
     re.IGNORECASE,
 )
 
@@ -251,8 +257,13 @@ def validate_speaker_output(output: SpeakerOutput, context: SpeakerContext) -> s
         return None
     if output.used_child_expression and context.child_expression_mode != "quote_safe":
         return None
-    if context.required_question and "?" not in text:
-        return None
+    if context.required_question:
+        if "?" not in text:
+            return None
+        normalized_text = re.sub(r"\s+", "", text)
+        normalized_question = re.sub(r"\s+", "", context.required_question)
+        if normalized_question not in normalized_text:
+            return None
     return text
 
 

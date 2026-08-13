@@ -18,6 +18,50 @@ from mormi_api.schemas import (
 
 
 @pytest.mark.asyncio
+async def test_queue_keeps_l4_after_independent_counts_and_asks_the_comparison_next() -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(slot_id="left_count", value=3, factual=True),
+            SlotClaim(slot_id="right_count", value=5, factual=True),
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(FakeGateway([analysis]), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = SessionState(
+        learner_id=1,
+        scene="cafe",
+        scenario_id="cafe_queue_demo",
+        task_ids=["cafe_queue"],
+        task_start_levels={"cafe_queue": ExpressionLevel.L4},
+        scenario_data={"left_count": 3, "right_count": 5},
+        expression_level=ExpressionLevel.L4,
+        task_start_level=ExpressionLevel.L4,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="6156e551-25dc-4a46-b6d2-f78692c8c567",
+            type="text",
+            text="왼쪽 세 명, 오른쪽 다섯 명",
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert turn.input.target_slots == ["final_choice", "reason"]
+    assert "어느 줄" in turn.mormi.text
+    assert turn.help_card is None
+
+
+@pytest.mark.asyncio
 async def test_partial_answer_preserves_fact_and_asks_only_missing_slot() -> None:
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,

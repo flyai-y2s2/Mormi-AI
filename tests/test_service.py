@@ -7,7 +7,13 @@ from sqlalchemy import select
 from mormi_api.db import Database, TurnRecord
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
-from mormi_api.schemas import ChildResponse, SessionCreate
+from mormi_api.schemas import (
+    ChildResponse,
+    ExpressionLevel,
+    LearnerProfile,
+    SessionCreate,
+    SkillProfile,
+)
 from mormi_api.security import TextCipher
 from mormi_api.service import ConversationService
 
@@ -18,6 +24,17 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
     database = Database(f"sqlite+aiosqlite:///{database_path}")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
+    await repository.save_profile(
+        LearnerProfile(
+            learner_id=1,
+            skills={
+                "compare_quantity_in_context": SkillProfile(
+                    skill_id="compare_quantity_in_context",
+                    highest_stable_expression_level=ExpressionLevel.L2,
+                )
+            },
+        )
+    )
     engine = ConversationEngine(FakeGateway())  # type: ignore[arg-type]
     service = ConversationService(repository, engine)
 
@@ -158,9 +175,11 @@ async def test_inline_practice_snapshot_uses_top_level_ownership(tmp_path: objec
         SessionCreate(
             learner_id=7,
             scene="home_teach",
-            scenario_id="home_addition_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_frontend_123",
             practice_result_id="practice_frontend_123",
             practice_summary={
+                "curriculum_session_id": "add-pictures",
                 "skill_id": "basic_addition",
                 "question_count": 5,
                 "first_try_correct_count": 4,

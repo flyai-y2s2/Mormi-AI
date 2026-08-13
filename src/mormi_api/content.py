@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .schemas import (
     CafeMenuItem,
@@ -52,6 +52,7 @@ class StepDefinition(BaseModel):
     id: str
     prompt: str = Field(max_length=50)
     target_slots: list[str]
+    optional_slots: list[str] = Field(default_factory=list)
     input: InputContract
     choice_effects: dict[str, dict[str, str | int | float | bool]] = Field(default_factory=dict)
     fallback_text: str = Field(max_length=50)
@@ -140,6 +141,26 @@ class HomeTeachingSpec(BaseModel):
     misconception: str
     sample_problem: dict[str, Any]
 
+    @model_validator(mode="after")
+    def validate_turn_coherence_contract(self) -> HomeTeachingSpec:
+        prompt = self.sample_problem.get("prompt")
+        correct = self.sample_problem.get("correct")
+        answers = self.sample_problem.get("answers")
+        visual = self.sample_problem.get("visual")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("sample_problem.prompt is required")
+        if not isinstance(answers, list) or len(answers) < 2:
+            raise ValueError("sample_problem.answers needs at least two choices")
+        if correct not in answers:
+            raise ValueError("sample_problem.correct must be one of answers")
+        if not isinstance(visual, Mapping) or not visual.get("type"):
+            raise ValueError("sample_problem.visual.type is required")
+        if self.short_prompt.strip() == "어떤 방법이 맞을까?":
+            raise ValueError("short_prompt must name the current mathematical action")
+        if self.misconception_prompt.strip() == self.short_prompt.strip():
+            raise ValueError("L4 and L2 prompts must not collapse into the same request")
+        return self
+
 
 def _load_home_teaching_catalog() -> dict[str, HomeTeachingSpec]:
     path = Path(__file__).with_name("home_teaching_catalog.json")
@@ -218,12 +239,19 @@ QUEUE_TASK = TaskDefinition(
     steps={
         ExpressionLevel.L4: [
             StepDefinition(
-                id="free_explanation",
+                id="free_counts",
+                prompt="왼쪽과 오른쪽 줄에 각각 몇 명이 있어?",
+                target_slots=["left_count", "right_count"],
+                input=text_input("left_count", "right_count"),
+                fallback_text="왼쪽과 오른쪽 줄에 각각 몇 명이 있어?",
+            ),
+            StepDefinition(
+                id="free_comparison",
                 prompt="어느 줄에 서면 덜 기다릴까? 어떻게 알았어?",
-                target_slots=["left_count", "right_count", "final_choice", "reason"],
-                input=text_input("left_count", "right_count", "final_choice", "reason"),
+                target_slots=["final_choice", "reason"],
+                input=text_input("final_choice", "reason"),
                 fallback_text="어느 줄에 서면 덜 기다릴까? 어떻게 알았어?",
-            )
+            ),
         ],
         ExpressionLevel.L3: [
             StepDefinition(
@@ -769,14 +797,21 @@ def menu_selection_task(
             "allow_same_menu": False,
         },
     )
-    prompt = f"나는 {mormi_menu.name}을 골랐어. 너는 뭘 고를래?"
+    if budget is not None:
+        prompt = f"{budget:,}원 안에서 고르자. 나는 {mormi_menu.name}, 너는 뭘 고를래?"
+        fallback = f"예산은 {budget:,}원이야. 네 메뉴 하나를 골라줄래?"
+    else:
+        prompt = f"나는 {mormi_menu.name}을 골랐어. 너는 뭘 고를래?"
+        fallback = "계산할 메뉴를 하나 골라줄래?"
+    if len(prompt) > 50:
+        prompt = fallback
     step = StepDefinition(
         id="pick_menu",
         prompt=prompt,
         target_slots=["child_menu"],
         input=input_contract,
         choice_effects={item.id: {"child_menu": item.id} for item in menu_items},
-        fallback_text="네가 먹고 싶은 메뉴 하나를 골라 줄래?",
+        fallback_text=fallback,
     )
     return TaskDefinition(
         id=task_id,
@@ -810,19 +845,39 @@ def menu_selection_task(
         hints={
             HintLevel.H1: HintDefinition(
                 level=HintLevel.H1,
-                body="장바구니 합계와 예산을 나란히 확인해 보세요.",
+                body=(
+                    "장바구니 합계와 예산을 나란히 확인해 보세요."
+                    if budget is not None
+                    else "메뉴판에서 먹고 싶은 메뉴 하나를 골라 보세요."
+                ),
             ),
             HintLevel.H2: HintDefinition(
                 level=HintLevel.H2,
-                body="모르미 메뉴 가격에 고른 메뉴 가격을 더해 보세요.",
-                visual_type="budget_meter",
-                visual_data={"budget": budget, "mormi_price": mormi_menu.price},
+                body=(
+                    "모르미 메뉴 가격에 고른 메뉴 가격을 더해 보세요."
+                    if budget is not None
+                    else "모르미가 고른 메뉴와 다른 메뉴를 하나 골라 보세요."
+                ),
+                visual_type="budget_meter" if budget is not None else "cafe_menu_focus",
+                visual_data=(
+                    {"budget": budget, "mormi_price": mormi_menu.price}
+                    if budget is not None
+                    else {"mormi_menu": mormi_menu.model_dump()}
+                ),
             ),
             HintLevel.H3: HintDefinition(
                 level=HintLevel.H3,
-                body="합계가 예산보다 크면 더 저렴한 메뉴로 바꿔 보세요.",
-                visual_type="budget_menu_help",
-                visual_data={"budget": budget, "mormi_menu": mormi_menu.model_dump()},
+                body=(
+                    "합계가 예산보다 크면 더 저렴한 메뉴로 바꿔 보세요."
+                    if budget is not None
+                    else "메뉴판에서 하나를 골라 장바구니에 담아 보세요."
+                ),
+                visual_type="budget_menu_help" if budget is not None else "cafe_menu_focus",
+                visual_data=(
+                    {"budget": budget, "mormi_menu": mormi_menu.model_dump()}
+                    if budget is not None
+                    else {"mormi_menu": mormi_menu.model_dump()}
+                ),
             ),
         },
         base_visual=VisualContract(
@@ -836,7 +891,9 @@ def menu_selection_task(
                 "budget_status": "pending",
             },
         ),
-        misconception_tags=["budget_exceeded", "price_comparison_error"],
+        misconception_tags=(
+            ["budget_exceeded", "price_comparison_error"] if budget is not None else []
+        ),
         coauthored_note="메뉴 가격을 더한 금액이 예산보다 크면 다른 메뉴를 골라야 해.",
         behavior=behavior,
         note_policy=note_policy,
@@ -927,7 +984,11 @@ def simple_calculation_task(
     l1 = [
         StepDefinition(
             id="guided_operation",
-            prompt=f"{left_label}에서 {right_label}을 어떻게 계산할까?",
+            prompt=(
+                "두 메뉴 가격은 어떤 계산으로 합칠까?"
+                if operation == "addition"
+                else "거스름돈을 구하려면 어떤 계산을 할까?"
+            ),
             target_slots=["operation"],
             input=choice_input(["operation"], operation_choices),
             choice_effects=operation_effects,
@@ -1054,6 +1115,24 @@ def home_teaching_task(
 
     expected_rule = spec.learned_line
 
+    raw_sample = dict(spec.sample_problem)
+    expected_answer = raw_sample.get("correct")
+    sample_answers = raw_sample.get("answers")
+    if not isinstance(expected_answer, (str, int, float, bool)):
+        raise ValueError(f"{spec.id}: sample_problem.correct is required")
+    if not isinstance(sample_answers, list) or len(sample_answers) < 2:
+        raise ValueError(f"{spec.id}: sample_problem.answers needs at least two choices")
+
+    answer_choices = [
+        option(f"answer_{index}", str(label)) for index, label in enumerate(sample_answers)
+    ]
+    answer_effects: dict[str, dict[str, str | int | float | bool]] = {
+        f"answer_{index}": {
+            "answer": expected_answer if label == expected_answer else f"unsupported:{label}"
+        }
+        for index, label in enumerate(sample_answers)
+    }
+
     short_choices = [
         option(f"short_{index}", label) for index, label in enumerate(spec.short_options)
     ]
@@ -1073,7 +1152,7 @@ def home_teaching_task(
     sentence_frame = " ".join(
         part for part in (spec.fill_before.strip(), "□", spec.fill_after.strip()) if part
     )
-    sample = dict(spec.sample_problem)
+    sample = raw_sample
     sample.pop("correct", None)
 
     return TaskDefinition(
@@ -1086,9 +1165,21 @@ def home_teaching_task(
         visible_facts={
             "curriculum_session_id": spec.id,
             "target_rule": expected_rule,
+            "sample_answer": expected_answer,
             "sample_problem": sample,
         },
         slots={
+            # The concrete answer is useful partial evidence: when a child only
+            # corrects Mormi's answer, preserve it and ask only for the method.
+            # It is intentionally not required for completion because the
+            # teaching goal and star-note evidence are the general rule.
+            "answer": SlotDefinition(
+                id="answer",
+                description=f"화면의 {spec.title} 예시 문제 답",
+                expected=expected_answer,
+                aliases=[str(expected_answer).replace(",", "")],
+                fact_sentence=f"이 문제의 답은 {expected_answer}이야.",
+            ),
             "rule": SlotDefinition(
                 id="rule",
                 description=f"{spec.title}에서 사용하는 핵심 방법 전체",
@@ -1104,20 +1195,40 @@ def home_teaching_task(
                     id="free_explanation",
                     prompt=spec.misconception_prompt,
                     target_slots=["rule"],
-                    input=text_input("rule", placeholder="모르미에게 네 말로 알려줘"),
+                    optional_slots=["answer"],
+                    input=text_input(
+                        "answer",
+                        "rule",
+                        placeholder="답과 방법을 네 말로 알려줘",
+                    ),
                     fallback_text=spec.misconception_prompt,
                 )
             ],
             ExpressionLevel.L3: [
                 StepDefinition(
+                    id="short_answer",
+                    prompt=str(sample["prompt"]),
+                    target_slots=["answer"],
+                    input=text_input("answer", placeholder="답만 짧게 알려줘"),
+                    fallback_text="내가 한꺼번에 물어봤네. 답부터 알려줘.",
+                ),
+                StepDefinition(
                     id="short_explanation",
-                    prompt="내가 어디서 헷갈렸는지 짧게 알려줄래?",
+                    prompt=spec.short_prompt,
                     target_slots=["rule"],
                     input=text_input("rule", placeholder="방법만 짧게 알려줘"),
                     fallback_text="내가 길게 물어봤네. 방법만 짧게 알려줘.",
                 )
             ],
             ExpressionLevel.L2: [
+                StepDefinition(
+                    id="choose_answer",
+                    prompt=str(sample["prompt"]),
+                    target_slots=["answer"],
+                    input=choice_input(["answer"], answer_choices),
+                    choice_effects=answer_effects,
+                    fallback_text="말로 어렵다면 답부터 같이 골라 보자.",
+                ),
                 StepDefinition(
                     id="choose_method",
                     prompt=spec.short_prompt,
@@ -1128,6 +1239,14 @@ def home_teaching_task(
                 )
             ],
             ExpressionLevel.L1: [
+                StepDefinition(
+                    id="guided_answer",
+                    prompt=str(sample["prompt"]),
+                    target_slots=["answer"],
+                    input=choice_input(["answer"], answer_choices),
+                    choice_effects=answer_effects,
+                    fallback_text="화면을 보며 답부터 하나 골라 보자.",
+                ),
                 StepDefinition(
                     id="complete_rule",
                     prompt=sentence_frame,
@@ -1188,18 +1307,6 @@ def home_teaching_task(
         coauthored_note=expected_rule,
     )
 
-HOME_ADD_TASK = calculation_task(
-    task_id="home_teach_3_plus_5",
-    title="집에서 모르미 가르치기",
-    skill_id="basic_addition",
-    left=3,
-    right=5,
-    operation="addition",
-    result=8,
-    scene=SceneType.HOME_TEACH,
-    stage_id="home_teach",
-)
-
 QUEUE_TASK_ID = "cafe_queue"
 HOME_TEACH_TASK_ID = "home_teaching"
 BUDGET_MENU_TASK_ID = "cafe_budget_menu_pick"
@@ -1245,12 +1352,6 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         scene=SceneType.CAFE,
         title="4단계 거스름돈 받기",
         task_ids=[CHANGE_TASK_ID],
-    ),
-    "home_addition_teach": ScenarioDefinition(
-        id="home_addition_teach",
-        scene=SceneType.HOME_TEACH,
-        title="덧셈을 모르미에게 알려주기",
-        task_ids=[HOME_ADD_TASK.id],
     ),
 }
 
@@ -1339,8 +1440,6 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
         if not isinstance(skill_id, str) or not skill_id:
             raise ValueError("scenario_data.skill_id is required")
         return home_teaching_task(HomeTeachingSpec.model_validate(raw_spec), skill_id=skill_id)
-    if task_id == HOME_ADD_TASK.id:
-        return HOME_ADD_TASK
     menu_items = _menu_items_from_data(data)
     mormi_menu = _menu_from_data(data, "mormi_menu_id", menu_items)
     if task_id == BUDGET_MENU_TASK_ID:
@@ -1481,6 +1580,8 @@ def validate_content() -> None:
         for step in (item for steps in task.steps.values() for item in steps):
             if set(step.target_slots) - set(task.slots):
                 raise ValueError(f"{task.id}/{step.id}: target slot is undefined")
+            if set(step.optional_slots) - set(task.slots):
+                raise ValueError(f"{task.id}/{step.id}: optional slot is undefined")
             if step.input.kind is InputKind.JOINT:
                 completion_values = step.input.config.get("completion_values")
                 if not isinstance(completion_values, Mapping):
