@@ -14,6 +14,7 @@ from .schemas import (
     HintLevel,
     InputContract,
     InputKind,
+    QueueSessionContext,
     SceneType,
     VisualContract,
 )
@@ -1042,13 +1043,22 @@ def create_scenario_data(
     scenario_id: str,
     cafe_context: CafeSessionContext | None = None,
     rng: Any | None = None,
+    *,
+    queue_context: QueueSessionContext | None = None,
 ) -> dict[str, Any]:
     chooser = rng or random.SystemRandom()
     data: dict[str, Any] = {}
     if scenario_id in {"cafe_queue", "cafe_queue_demo"}:
-        left = chooser.choice(range(1, 6))
-        right = chooser.choice([value for value in range(1, 6) if value != left])
-        data.update(left_count=left, right_count=right)
+        if queue_context is not None:
+            # The screen already drew the lines. Mormi must count what the child sees.
+            data.update(
+                left_count=queue_context.left_count,
+                right_count=queue_context.right_count,
+            )
+        else:
+            left = chooser.choice(range(1, 6))
+            right = chooser.choice([value for value in range(1, 6) if value != left])
+            data.update(left_count=left, right_count=right)
     if scenario_id in MENU_SCENARIO_IDS:
         if cafe_context is None:
             raise ValueError("cafe_context is required for menu scenarios")

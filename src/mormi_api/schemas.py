@@ -223,6 +223,24 @@ class CafeSessionContext(BaseModel):
         return self
 
 
+class QueueSessionContext(BaseModel):
+    """Frontend-owned queue facts frozen for one AI conversation.
+
+    The screen draws the two lines before the conversation starts, so Mormi has
+    to talk about the counts the child is actually looking at. Letting this side
+    draw its own would put different numbers in the speech bubble and the scene.
+    """
+
+    left_count: int = Field(ge=1, le=9)
+    right_count: int = Field(ge=1, le=9)
+
+    @model_validator(mode="after")
+    def lines_must_differ(self) -> QueueSessionContext:
+        if self.left_count == self.right_count:
+            raise ValueError("left_count and right_count must differ")
+        return self
+
+
 class SessionCreate(BaseModel):
     learner_id: int = Field(ge=1)
     scene: SceneType
@@ -231,6 +249,7 @@ class SessionCreate(BaseModel):
     practice_result_id: str | None = Field(default=None, max_length=100)
     practice_summary: PracticeSummary | None = None
     cafe_context: CafeSessionContext | None = None
+    queue_context: QueueSessionContext | None = None
     conversation_storage_consent: bool = False
     retention_policy: RetentionPolicy = RetentionPolicy.NO_RAW
 
@@ -248,6 +267,12 @@ class SessionCreate(BaseModel):
             raise ValueError("cafe_context is required for menu scenarios")
         if self.cafe_context is not None and self.scenario_id not in menu_scenarios:
             raise ValueError("cafe_context is not used by this scenario")
+        # `cafe_queue_demo` keeps drawing its own line-up so demos and tests can
+        # start a queue conversation without a screen behind them.
+        if self.scenario_id == "cafe_queue" and self.queue_context is None:
+            raise ValueError("queue_context is required for cafe_queue")
+        if self.queue_context is not None and self.scenario_id != "cafe_queue":
+            raise ValueError("queue_context is not used by this scenario")
         if self.scenario_id == "cafe_budget_menu" and (
             self.cafe_context is None or self.cafe_context.budget is None
         ):

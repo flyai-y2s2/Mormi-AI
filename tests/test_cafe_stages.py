@@ -124,6 +124,47 @@ def test_menu_scenarios_require_frontend_context() -> None:
         )
 
 
+def test_queue_scenario_requires_frontend_counts() -> None:
+    with pytest.raises(ValidationError):
+        SessionCreate(learner_id=1, scene="cafe", scenario_id="cafe_queue")
+
+    # Two equal lines have no shorter side to count.
+    with pytest.raises(ValidationError):
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_queue",
+            queue_context={"left_count": 3, "right_count": 3},
+        )
+
+    # The demo id keeps drawing its own line-up, so it must refuse a screen's counts.
+    with pytest.raises(ValidationError):
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_queue_demo",
+            queue_context={"left_count": 2, "right_count": 5},
+        )
+
+
+@pytest.mark.asyncio
+async def test_queue_counts_come_from_the_frontend(tmp_path: object) -> None:
+    service, repository, database = await make_service(tmp_path)
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_queue",
+            queue_context={"left_count": 2, "right_count": 5},
+        )
+    )
+
+    state = await repository.get_state(started.conversation_id)
+    assert state.scenario_data["left_count"] == 2
+    assert state.scenario_data["right_count"] == 5
+    await database.dispose()
+
+
 @pytest.mark.asyncio
 async def test_budget_menu_uses_frontend_menu_and_allows_correction(
     tmp_path: object,

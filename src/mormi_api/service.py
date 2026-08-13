@@ -50,7 +50,11 @@ class ConversationService:
         practice_rate = practice_summary.success_rate if practice_summary else None
 
         profile = await self.repository.get_profile(request.learner_id)
-        scenario_data = create_scenario_data(request.scenario_id, request.cafe_context)
+        scenario_data = create_scenario_data(
+            request.scenario_id,
+            request.cafe_context,
+            queue_context=request.queue_context,
+        )
         task_start_levels = {
             task_id: (
                 ExpressionLevel.L2
