@@ -494,6 +494,9 @@ async def test_repeated_no_response_walks_every_ladder_step_without_changing_pro
         assert turn.pedagogy is not None
         assert turn.pedagogy.expression_level is level
         assert turn.pedagogy.hint_level is hint
+        task = get_task(state.current_task_id, state.scenario_data)
+        current_question = task.step_for(level, state.verified_slots).prompt
+        assert current_question in turn.mormi.text
 
     assert state.status.value == "active"
 
