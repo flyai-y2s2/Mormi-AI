@@ -6,7 +6,10 @@ from typing import Annotated
 
 import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from .db import Database
 from .engine import ConversationEngine
@@ -97,6 +100,73 @@ Auth = Annotated[None, Depends(require_service_key)]
 Service = Annotated[ConversationService, Depends(service)]
 Repo = Annotated[Repository, Depends(repository)]
 
+ERROR_CODE_HEADER = "X-Mormi-Error-Code"
+ERROR_PATH_HEADER = "X-Mormi-Error-Path"
+
+
+def _validation_issues(error: RequestValidationError | ValidationError) -> list[dict[str, str]]:
+    """Return field paths and rule names without echoing request values.
+
+    FastAPI's default 422 body includes the rejected ``input``. That is useful
+    for ordinary APIs, but this service can receive a child's utterance on
+    other endpoints. Operational diagnostics therefore expose only the schema
+    location and validation rule.
+    """
+
+    issues: list[dict[str, str]] = []
+    for issue in error.errors()[:5]:
+        location = ".".join(str(part) for part in issue.get("loc", ())) or "request"
+        issues.append(
+            {
+                "location": location[:160],
+                "type": str(issue.get("type", "value_error"))[:80],
+            }
+        )
+    return issues or [{"location": "request", "type": "value_error"}]
+
+
+def _diagnostic_headers(code: str, path: str | None = None) -> dict[str, str]:
+    headers = {ERROR_CODE_HEADER: code[:80]}
+    if path:
+        # Pydantic locations contain field names and numeric list indexes only.
+        headers[ERROR_PATH_HEADER] = path[:160]
+    return headers
+
+
+def _service_error_code(error: ValueError) -> tuple[str, str | None, list[dict[str, str]]]:
+    if isinstance(error, ValidationError):
+        issues = _validation_issues(error)
+        return "stored_state_validation_failed", issues[0]["location"], issues
+
+    message = str(error)
+    known_codes = (
+        ("unsupported home curriculum_session_id", "home_curriculum_unsupported"),
+        ("curriculum_session_id is required", "home_curriculum_missing"),
+        ("practice result does not belong", "practice_result_owner_mismatch"),
+        ("practice_result_id is unavailable", "practice_result_unavailable"),
+        ("practice_summary or practice_result_id is required", "practice_summary_missing"),
+        ("scenario_id does not belong", "scenario_scene_mismatch"),
+        ("cafe_context is required", "cafe_context_missing"),
+        ("queue_context is required", "queue_context_missing"),
+    )
+    for fragment, code in known_codes:
+        if fragment in message:
+            return code, None, []
+    return "conversation_configuration_invalid", None, []
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(
+    _: Request,
+    error: RequestValidationError,
+) -> JSONResponse:
+    issues = _validation_issues(error)
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": {"code": "request_validation_failed", "issues": issues}},
+        headers=_diagnostic_headers("request_validation_failed", issues[0]["location"]),
+    )
+
 
 @app.get("/health", response_model=HealthResponse, tags=["operations"])
 async def health(request: Request) -> HealthResponse:
@@ -149,7 +219,12 @@ async def create_conversation(
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        code, path, issues = _service_error_code(error)
+        raise HTTPException(
+            status_code=422,
+            detail={"code": code, "issues": issues},
+            headers=_diagnostic_headers(code, path),
+        ) from error
 
 
 @app.post(

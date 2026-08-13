@@ -66,6 +66,52 @@ def test_home_catalog_covers_current_frontend_curriculum() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("curriculum_session_id", sorted(CURRENT_FRONTEND_HOME_SESSION_IDS))
+async def test_every_frontend_home_session_can_create_its_first_turn(
+    curriculum_session_id: str,
+    tmp_path: object,
+) -> None:
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-first-turn.db"
+    )
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id=f"session_{curriculum_session_id}",
+            practice_result_id=f"practice_{curriculum_session_id}",
+            practice_summary={
+                "curriculum_session_id": curriculum_session_id,
+                "skill_id": curriculum_session_id,
+                "question_count": 5,
+                "first_try_correct_count": 5,
+                "earned_reward": 1000,
+                "attempts": [
+                    {
+                        "item_id": f"{curriculum_session_id}:{index}",
+                        "correct": True,
+                        "latency_ms": 1000,
+                    }
+                    for index in range(5)
+                ],
+            },
+        )
+    )
+
+    assert started.turn.visual.data["curriculum_session_id"] == curriculum_session_id
+    assert started.turn.status.value == "active"
+    await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn(
     tmp_path: object,
 ) -> None:

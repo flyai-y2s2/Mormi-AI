@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from mormi_api.main import app
+from mormi_api.main import _service_error_code, _validation_issues, app
 from mormi_api.schemas import PracticeResult, PracticeSummary, SessionCreate
 
 
@@ -128,3 +128,54 @@ def test_practice_summary_rejects_free_text_child_utterance() -> None:
                 }
             ],
         )
+
+
+def test_validation_diagnostics_never_echo_rejected_input() -> None:
+    secret_child_text = "저장하면 안 되는 아이 원문"
+    with pytest.raises(ValidationError) as raised:
+        PracticeSummary(
+            skill_id="number_count",
+            attempts=[
+                {
+                    "item_id": "number-count:0",
+                    "correct": True,
+                    "response": secret_child_text,
+                }
+            ],
+        )
+
+    issues = _validation_issues(raised.value)
+    assert issues == [
+        {
+            "location": "attempts.0.response.int",
+            "type": "int_parsing",
+        },
+        {
+            "location": "attempts.0.response.float",
+            "type": "float_parsing",
+        },
+        {
+            "location": "attempts.0.response.list[str]",
+            "type": "list_type",
+        },
+    ]
+    assert secret_child_text not in str(issues)
+
+
+def test_service_validation_error_gets_a_stable_safe_code() -> None:
+    with pytest.raises(ValidationError) as raised:
+        PracticeSummary(skill_id="number_count", question_count=1, first_try_correct_count=2)
+
+    code, path, issues = _service_error_code(raised.value)
+    assert code == "stored_state_validation_failed"
+    assert path == "request"
+    assert issues
+
+
+def test_known_service_error_gets_a_stable_safe_code() -> None:
+    code, path, issues = _service_error_code(
+        ValueError("unsupported home curriculum_session_id: child-secret")
+    )
+    assert code == "home_curriculum_unsupported"
+    assert path is None
+    assert issues == []
