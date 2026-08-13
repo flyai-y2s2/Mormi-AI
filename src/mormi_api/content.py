@@ -5,7 +5,7 @@ import random
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -103,6 +103,13 @@ class TaskDefinition(BaseModel):
     # span.  A bare result may fill an answer slot, but cannot satisfy a method
     # or reason slot even if the classifier overclaims it.
     text_explanation_slots: list[str] = Field(default_factory=list)
+    # A reviewed wrong guess may precede the actual L4 teaching prompt.  It is
+    # a conversational entry, not a separate learning level or required
+    # knowledge slot.  Other entry modes start directly from the L4 steps.
+    entry_mode: Literal["wrong_guess", "incomplete_attempt", "genuine_question"] = (
+        "genuine_question"
+    )
+    entry_step: StepDefinition | None = None
     behavior: str = "teaching"
     note_policy: str = "stage"
     transition_text: str | None = None
@@ -117,6 +124,25 @@ class TaskDefinition(BaseModel):
             if any(slot not in verified_slots for slot in step.target_slots):
                 return step
         return level_steps[-1]
+
+    def active_step(
+        self,
+        level: ExpressionLevel,
+        verified_slots: Mapping[str, object],
+        *,
+        entry_active: bool,
+        targeted_followup: bool = False,
+    ) -> StepDefinition:
+        """Resolve the exact prompt whose response is being interpreted."""
+
+        if self.entry_step is not None and entry_active:
+            return self.entry_step
+        # A substantive but incomplete response to the entry sequence keeps
+        # the child's L4 credit.  Only the next question is split so it asks
+        # for the one missing idea instead of repeating a two-part prompt.
+        if targeted_followup and level is ExpressionLevel.L4:
+            return self.step_for(ExpressionLevel.L3, verified_slots)
+        return self.step_for(level, verified_slots)
 
     def missing_slots(self, verified_slots: Mapping[str, object]) -> list[str]:
         return [slot for slot in self.required_slots if slot not in verified_slots]
@@ -154,7 +180,15 @@ class HomeTeachingSpec(BaseModel):
     subject: str
     unit: str
     title: str
-    misconception_prompt: str = Field(max_length=50)
+    # ``misconception_prompt`` is retained only so conversations snapshotted
+    # before content v2 can still resume.  New catalog entries use l4_prompt.
+    content_version: int = Field(default=1, ge=1)
+    entry_mode: Literal["wrong_guess", "incomplete_attempt", "genuine_question"] = (
+        "genuine_question"
+    )
+    entry_prompt: str | None = Field(default=None, max_length=50)
+    l4_prompt: str | None = Field(default=None, max_length=50)
+    misconception_prompt: str | None = Field(default=None, max_length=50)
     learned_line: str = Field(max_length=120)
     note_context: str = Field(min_length=1, max_length=80)
     fill_before: str
@@ -171,6 +205,13 @@ class HomeTeachingSpec(BaseModel):
     valid_explanations: list[str] = Field(default_factory=list)
     misconception: str
     sample_problem: dict[str, Any]
+
+    @property
+    def effective_l4_prompt(self) -> str:
+        prompt = self.l4_prompt or self.misconception_prompt
+        if not prompt:
+            raise ValueError(f"{self.id}: l4_prompt is required")
+        return prompt
 
     @model_validator(mode="after")
     def validate_turn_coherence_contract(self) -> HomeTeachingSpec:
@@ -190,8 +231,23 @@ class HomeTeachingSpec(BaseModel):
             raise ValueError("sample_problem.visual.type is required")
         if self.short_prompt.strip() == "어떤 방법이 맞을까?":
             raise ValueError("short_prompt must name the current mathematical action")
-        if self.misconception_prompt.strip() == self.short_prompt.strip():
+        l4_prompt = self.effective_l4_prompt
+        if l4_prompt.strip() == self.short_prompt.strip():
             raise ValueError("L4 and L2 prompts must not collapse into the same request")
+        if not l4_prompt.rstrip().endswith("?"):
+            raise ValueError("l4_prompt must be a complete child-facing question")
+        if self.content_version >= 2:
+            if self.entry_mode == "wrong_guess":
+                if not self.entry_prompt:
+                    raise ValueError("wrong_guess entry needs entry_prompt")
+                if self.entry_prompt.strip() == l4_prompt.strip():
+                    raise ValueError("wrong_guess entry and L4 follow-up must differ")
+                if re.search(r"(라고\s*했어|이라고\s*했어|보고)", self.entry_prompt):
+                    raise ValueError("wrong_guess entry must sound like a present guess")
+            elif self.entry_prompt is not None:
+                raise ValueError("only wrong_guess entries may add a pre-evaluation turn")
+        if self.entry_prompt and not self.entry_prompt.rstrip().endswith("?"):
+            raise ValueError("entry_prompt must be a complete child-facing question")
         if not self.short_prompt.rstrip().endswith("?"):
             raise ValueError("short_prompt must be a complete child-facing question")
         if self.short_correct not in self.short_options:
@@ -203,7 +259,8 @@ class HomeTeachingSpec(BaseModel):
         if len(set(self.fill_options)) != len(self.fill_options):
             raise ValueError("fill_options must be unique")
         child_facing_copy = [
-            self.misconception_prompt,
+            l4_prompt,
+            *([self.entry_prompt] if self.entry_prompt else []),
             self.short_prompt,
             self.learned_line,
             self.note_context,
@@ -513,8 +570,7 @@ QUEUE_TASK = TaskDefinition(
         "relation_mapping_error",
     ],
     coauthored_note=(
-        "각 줄의 사람을 세고, 앞에 기다리는 사람이 적은 줄에 서면 "
-        "내 차례가 더 빨리 와."
+        "각 줄의 사람을 세고, 앞에 기다리는 사람이 적은 줄에 서면 내 차례가 더 빨리 와."
     ),
     note_context="왼쪽 줄과 오른쪽 줄의 사람 수를 비교하는 방법",
 )
@@ -826,12 +882,8 @@ def queue_task(
         str(right): {"smaller_number": right},
     }
     task.steps[ExpressionLevel.L1][2].prompt = f"{smaller}명이 있는 줄은 어느 쪽이야?"
-    task.steps[ExpressionLevel.L3][2].prompt = (
-        f"왜 {side_label} 줄에서는 내 차례가 더 빨리 와?"
-    )
-    task.steps[ExpressionLevel.L3][2].fallback_text = (
-        "왜 내 차례가 더 빨리 오는지만 알려줘."
-    )
+    task.steps[ExpressionLevel.L3][2].prompt = f"왜 {side_label} 줄에서는 내 차례가 더 빨리 와?"
+    task.steps[ExpressionLevel.L3][2].fallback_text = "왜 내 차례가 더 빨리 오는지만 알려줘."
     for level, step_index in (
         (ExpressionLevel.L2, 3),
         (ExpressionLevel.L1, 3),
@@ -1319,14 +1371,14 @@ def home_teaching_task(
                     )
                 ),
                 fact_sentence=expected_rule,
-            )
+            ),
         },
         required_slots=["rule"],
         steps={
             ExpressionLevel.L4: [
                 StepDefinition(
                     id="free_explanation",
-                    prompt=spec.misconception_prompt,
+                    prompt=spec.effective_l4_prompt,
                     target_slots=["rule"],
                     optional_slots=["answer"],
                     input=text_input(
@@ -1334,7 +1386,7 @@ def home_teaching_task(
                         "rule",
                         placeholder="답과 방법을 네 말로 알려줘",
                     ),
-                    fallback_text=spec.misconception_prompt,
+                    fallback_text=spec.effective_l4_prompt,
                 )
             ],
             ExpressionLevel.L3: [
@@ -1351,7 +1403,7 @@ def home_teaching_task(
                     target_slots=["rule"],
                     input=text_input("rule", placeholder="방법만 짧게 알려줘"),
                     fallback_text="내가 길게 물어봤네. 방법만 짧게 알려줘.",
-                )
+                ),
             ],
             ExpressionLevel.L2: [
                 StepDefinition(
@@ -1369,7 +1421,7 @@ def home_teaching_task(
                     input=choice_input(["rule"], short_choices),
                     choice_effects=short_effects,
                     fallback_text="말로 어렵다면 필요한 방법을 같이 골라 보자.",
-                )
+                ),
             ],
             ExpressionLevel.L1: [
                 StepDefinition(
@@ -1392,7 +1444,7 @@ def home_teaching_task(
                     ),
                     choice_effects=fill_effects,
                     fallback_text="도움 카드 문장의 빈칸을 같이 채워 보자.",
-                )
+                ),
             ],
             ExpressionLevel.L0: [
                 StepDefinition(
@@ -1448,6 +1500,7 @@ def home_teaching_task(
             expected_answer=expected_answer,
             answer_choices=answer_choices,
             answer_effects=answer_effects,
+            l4_prompt=spec.effective_l4_prompt,
             short_prompt=spec.short_prompt,
             short_options=spec.short_options,
             short_correct=spec.short_correct,
@@ -1460,7 +1513,40 @@ def home_teaching_task(
             answer_effects=answer_effects,
             spec=spec,
         )
+    _configure_home_entry(task, spec)
     return task
+
+
+def _configure_home_entry(task: TaskDefinition, spec: HomeTeachingSpec) -> None:
+    """Add a pre-evaluation wrong-guess turn only when content requests one.
+
+    Incomplete attempts and genuine questions begin directly at the ordinary
+    L4 step.  This prevents the character from manufacturing an error in
+    lessons where a natural, evidence-based misconception does not exist.
+    """
+
+    task.entry_mode = spec.entry_mode
+    if spec.content_version < 2 or spec.entry_mode != "wrong_guess":
+        task.entry_step = None
+        return
+    if not spec.entry_prompt:  # guarded by HomeTeachingSpec validation
+        raise ValueError(f"{spec.id}: wrong_guess entry_prompt is required")
+    target_slots = list(task.required_slots)
+    optional_slots = [slot_id for slot_id in task.slots if slot_id not in target_slots]
+    # Preserve the reviewed L4 field order expected by the UI (for example,
+    # answer before method) while stance itself remains outside all slots.
+    input_slots = list(task.steps[ExpressionLevel.L4][0].input.target_slots)
+    task.entry_step = StepDefinition(
+        id="entry_check",
+        prompt=spec.entry_prompt,
+        target_slots=target_slots,
+        optional_slots=optional_slots,
+        input=text_input(
+            *input_slots,
+            placeholder="모르미에게 네 생각을 알려줘",
+        ),
+        fallback_text=spec.entry_prompt,
+    )
 
 
 def _configure_number_count_task(
@@ -1469,6 +1555,7 @@ def _configure_number_count_task(
     expected_answer: str | int | float | bool,
     answer_choices: list[ChoiceOption],
     answer_effects: dict[str, dict[str, str | int | float | bool]],
+    l4_prompt: str,
     short_prompt: str,
     short_options: list[str],
     short_correct: str,
@@ -1532,7 +1619,7 @@ def _configure_number_count_task(
         ExpressionLevel.L4: [
             StepDefinition(
                 id="free_count_and_method",
-                prompt="점이 두 개 있는 것 같은데, 너는 몇 개로 셌어?",
+                prompt=l4_prompt,
                 target_slots=["answer", "tracking"],
                 optional_slots=["count_sequence"],
                 input=text_input(
@@ -1541,7 +1628,7 @@ def _configure_number_count_task(
                     "count_sequence",
                     placeholder="네가 센 수나 방법을 알려줘",
                 ),
-                fallback_text="점이 두 개 있는 것 같은데, 너는 몇 개로 셌어?",
+                fallback_text=l4_prompt,
             )
         ],
         ExpressionLevel.L3: [
@@ -1686,8 +1773,7 @@ def _configure_number_compare_task(
         "reason": SlotDefinition(
             id="reason",
             description=(
-                "왼쪽 3개와 오른쪽 5개를 세거나 3과 5를 비교해 "
-                "오른쪽이 더 많음을 설명한 근거"
+                "왼쪽 3개와 오른쪽 5개를 세거나 3과 5를 비교해 오른쪽이 더 많음을 설명한 근거"
             ),
             expected="count_comparison",
             aliases=[
@@ -1709,14 +1795,14 @@ def _configure_number_compare_task(
         ExpressionLevel.L4: [
             StepDefinition(
                 id="free_comparison_and_reason",
-                prompt=spec.misconception_prompt,
+                prompt=spec.effective_l4_prompt,
                 target_slots=["answer", "reason"],
                 input=text_input(
                     "answer",
                     "reason",
                     placeholder="어느 쪽인지와 까닭을 알려줘",
                 ),
-                fallback_text=spec.misconception_prompt,
+                fallback_text=spec.effective_l4_prompt,
             )
         ],
         ExpressionLevel.L3: [
@@ -1815,6 +1901,7 @@ def _configure_number_compare_task(
             )
         ],
     }
+
 
 QUEUE_TASK_ID = "cafe_queue"
 HOME_TEACH_TASK_ID = "home_teaching"
@@ -2078,8 +2165,7 @@ def validate_content() -> None:
         for task_id in task_ids
     ]
     tasks_to_validate.extend(
-        home_teaching_task(spec, skill_id=spec.id)
-        for spec in HOME_TEACHING_CATALOG.values()
+        home_teaching_task(spec, skill_id=spec.id) for spec in HOME_TEACHING_CATALOG.values()
     )
     for task in tasks_to_validate:
         if set(task.required_slots) - set(task.slots):
@@ -2096,7 +2182,10 @@ def validate_content() -> None:
         for level in ExpressionLevel:
             if level not in task.steps or not task.steps[level]:
                 raise ValueError(f"{task.id}: missing steps for {level}")
-        for step in (item for steps in task.steps.values() for item in steps):
+        reviewed_steps = [item for steps in task.steps.values() for item in steps]
+        if task.entry_step is not None:
+            reviewed_steps.append(task.entry_step)
+        for step in reviewed_steps:
             if set(step.target_slots) - set(task.slots):
                 raise ValueError(f"{task.id}/{step.id}: target slot is undefined")
             if set(step.optional_slots) - set(task.slots):
@@ -2113,8 +2202,7 @@ def validate_content() -> None:
                     if effects
                     and set(step.target_slots).issubset(effects)
                     and all(
-                        task.slots[slot_id].accepts(value)
-                        for slot_id, value in effects.items()
+                        task.slots[slot_id].accepts(value) for slot_id, value in effects.items()
                     )
                 }
                 if not correct_choice_ids:
@@ -2124,9 +2212,7 @@ def validate_content() -> None:
             if step.input.kind is InputKind.JOINT:
                 completion_values = step.input.config.get("completion_values")
                 if not isinstance(completion_values, Mapping):
-                    raise ValueError(
-                        f"{task.id}/{step.id}: joint input requires completion_values"
-                    )
+                    raise ValueError(f"{task.id}/{step.id}: joint input requires completion_values")
                 if set(step.target_slots) - set(completion_values):
                     raise ValueError(
                         f"{task.id}/{step.id}: completion_values must cover target slots"

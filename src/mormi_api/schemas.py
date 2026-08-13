@@ -94,6 +94,29 @@ class ResponseCategory(StrEnum):
     SELF_CORRECTION = "self_correction"
 
 
+class EntryStance(StrEnum):
+    """How the child responded to a reviewed wrong-guess entry.
+
+    This is deliberately separate from mathematical claims.  Rejecting
+    Mormi's guess is useful conversational evidence, but it is not by itself
+    an answer, an explanation, or star-note material.
+    """
+
+    NOT_APPLICABLE = "not_applicable"
+    REJECT_WRONG_GUESS = "reject_wrong_guess"
+    ACCEPT_WRONG_GUESS = "accept_wrong_guess"
+    UNCLEAR = "unclear"
+
+
+class EntryPhase(StrEnum):
+    """Conversation phase before the ordinary expression ladder begins."""
+
+    AWAITING_ENTRY_RESPONSE = "awaiting_entry_response"
+    AWAITING_OPEN_FOLLOWUP = "awaiting_open_followup"
+    AWAITING_TARGETED_FOLLOWUP = "awaiting_targeted_followup"
+    RESOLVED = "resolved"
+
+
 class DifficultyClass(StrEnum):
     EXPRESSION = "expression"
     CONCEPT = "concept"
@@ -340,6 +363,7 @@ class UtteranceAnalysis(BaseModel):
     safety_category: SafetyCategory = SafetyCategory.UNKNOWN
     response_category: ResponseCategory = ResponseCategory.RECOGNITION_OR_INPUT_ERROR
     difficulty_class: DifficultyClass = DifficultyClass.UNKNOWN
+    entry_stance: EntryStance = EntryStance.NOT_APPLICABLE
     claims: list[SlotClaim] = Field(default_factory=list)
     misconception_tag: str | None = None
     bottleneck: str = "unknown"
@@ -446,6 +470,10 @@ class SessionState(BaseModel):
     expression_level: ExpressionLevel
     hint_level: HintLevel = HintLevel.H0
     subgoal_id: str = "initial"
+    # Version 1 sessions predate conditional entry turns.  Defaults must keep
+    # those persisted sessions on their original path after a deployment.
+    dialogue_policy_version: int = Field(default=1, ge=1)
+    entry_phase: EntryPhase = EntryPhase.RESOLVED
     verified_slots: dict[str, str | int | float | bool] = Field(default_factory=dict)
     status: SessionStatus = SessionStatus.ACTIVE
     current_turn_id: str | None = None

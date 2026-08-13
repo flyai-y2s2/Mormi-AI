@@ -14,6 +14,8 @@ from .schemas import (
     CompletionContract,
     CompletionOutcome,
     DifficultyClass,
+    EntryPhase,
+    EntryStance,
     ExpressionLevel,
     HelpCardContract,
     HintLevel,
@@ -105,7 +107,15 @@ class ConversationEngine:
 
     def initial_turn(self, state: SessionState) -> TurnContract:
         task = get_task(state.current_task_id, state.scenario_data)
-        step = task.step_for(state.expression_level, state.verified_slots)
+        step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=(
+                state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE
+                and state.expression_level is ExpressionLevel.L4
+            ),
+            targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
+        )
         state.subgoal_id = step.id
         state.current_turn_id = new_id("turn")
         return self._turn_contract(
@@ -245,12 +255,25 @@ class ConversationEngine:
         next_state = state.model_copy(deep=True)
         next_state.state_version += 1
         next_state.current_turn_id = None
+        entry_active = (
+            task.entry_step is not None and state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE
+        )
+        open_followup_active = state.entry_phase is EntryPhase.AWAITING_OPEN_FOLLOWUP
+        targeted_followup_active = state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
+        interpreted_step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=entry_active,
+            targeted_followup=targeted_followup_active,
+        )
+        interpreted_slots = {
+            *interpreted_step.target_slots,
+            *interpreted_step.optional_slots,
+        }
 
         if analysis.safety_category is not SafetyCategory.NORMAL:
             if analysis.safety_category is SafetyCategory.PLAYFUL_OFFTOPIC:
                 next_state.unrelated_count += 1
-                if next_state.unrelated_count >= 3:
-                    next_state.expression_level = next_state.expression_level.lower()
                 return self._decision_for_current_step(
                     next_state,
                     task,
@@ -269,6 +292,13 @@ class ConversationEngine:
                 analysis=analysis,
                 previous_question=previous_question,
             )
+
+        # Accepting a reviewed wrong guess is concept evidence, never a
+        # successful conversational answer.  Conversely, rejecting it is only
+        # a stance: it cannot fill answer/reason slots or enter the star note.
+        if entry_active and analysis.entry_stance is EntryStance.ACCEPT_WRONG_GUESS:
+            analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
+            analysis.difficulty_class = DifficultyClass.CONCEPT
 
         if task.behavior == "budget_menu_selection" and response.choice_ids:
             menu_items = [
@@ -315,7 +345,9 @@ class ConversationEngine:
         # never fill a slot even if a malformed model/client supplies a value.
         newly_verified = (
             task.validated_claims(
-                (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
+                (claim.slot_id, claim.value, claim.factual)
+                for claim in analysis.claims
+                if claim.slot_id in interpreted_slots
             )
             if analysis.response_category in successful_categories
             else {}
@@ -328,6 +360,27 @@ class ConversationEngine:
                 newly_verified,
             )
         next_state.verified_slots.update(newly_verified)
+        if (
+            entry_active
+            and analysis.entry_stance is EntryStance.REJECT_WRONG_GUESS
+            and not newly_verified
+        ):
+            next_state.entry_phase = EntryPhase.AWAITING_OPEN_FOLLOWUP
+            next_state.unrelated_count = 0
+            return self._decision_for_current_step(
+                next_state,
+                task,
+                dialogue_act="entry_rejection_followup",
+                fallback=task.step_for(
+                    next_state.expression_level,
+                    next_state.verified_slots,
+                ).prompt,
+                child_text=response.text,
+                analysis=analysis,
+                previous_question=previous_question,
+            )
+        if (entry_active or open_followup_active or targeted_followup_active) and newly_verified:
+            next_state.entry_phase = EntryPhase.RESOLVED
         if newly_verified:
             self._record_note_provenance(
                 next_state,
@@ -349,6 +402,8 @@ class ConversationEngine:
                     response.text,
                     previous_question,
                 )
+            if entry_active or open_followup_active or targeted_followup_active:
+                next_state.entry_phase = EntryPhase.AWAITING_TARGETED_FOLLOWUP
             # A partial answer is useful evidence, but the next prompt should
             # request only the missing piece instead of repeating the original
             # multi-part L4 question.
@@ -356,7 +411,7 @@ class ConversationEngine:
                 next_state.expression_level,
                 next_state.verified_slots,
             )
-            if (
+            if not (entry_active or open_followup_active or targeted_followup_active) and (
                 next_state.expression_level is ExpressionLevel.L4
                 and next_step.id == state.subgoal_id
             ):
@@ -378,6 +433,8 @@ class ConversationEngine:
         # not erase that understanding by falling through to the unrelated
         # branch; move to a more concrete expression step instead.
         if analysis.response_category in successful_categories:
+            if entry_active or open_followup_active or targeted_followup_active:
+                next_state.entry_phase = EntryPhase.RESOLVED
             if next_state.expression_level is not ExpressionLevel.L0:
                 next_state.expression_level = next_state.expression_level.lower()
             return self._decision_for_current_step(
@@ -395,6 +452,8 @@ class ConversationEngine:
             ResponseCategory.EXPRESSION_BLOCK,
             ResponseCategory.NO_RESPONSE,
         }:
+            if entry_active or open_followup_active or targeted_followup_active:
+                next_state.entry_phase = EntryPhase.RESOLVED
             next_state.expression_failures += 1
             next_state.expression_level = next_state.expression_level.lower()
             return self._decision_for_current_step(
@@ -408,6 +467,8 @@ class ConversationEngine:
             )
 
         if category is ResponseCategory.HELP_REQUEST:
+            if entry_active or open_followup_active or targeted_followup_active:
+                next_state.entry_phase = EntryPhase.RESOLVED
             next_state.expression_failures += 1
             next_state.expression_level = next_state.expression_level.lower()
             if next_state.hint_level is HintLevel.H0:
@@ -449,6 +510,8 @@ class ConversationEngine:
             ResponseCategory.CONCEPTUAL_ERROR,
             ResponseCategory.CONCEPTUAL_BLOCK,
         } or analysis.difficulty_class in {DifficultyClass.CONCEPT, DifficultyClass.BOTH}:
+            if entry_active or open_followup_active or targeted_followup_active:
+                next_state.entry_phase = EntryPhase.RESOLVED
             next_state.concept_failures += 1
             next_state.task_max_hint = max_hint(
                 next_state.task_max_hint, next_state.hint_level.increase()
@@ -491,8 +554,6 @@ class ConversationEngine:
             )
 
         next_state.unrelated_count += 1
-        if next_state.unrelated_count >= 3:
-            next_state.expression_level = next_state.expression_level.lower()
         return self._decision_for_current_step(
             next_state,
             task,
@@ -535,7 +596,18 @@ class ConversationEngine:
             state.child_note_evidence = {}
             state.supported_note_slots = []
             next_task = get_task(state.current_task_id, state.scenario_data)
-            next_step = next_task.step_for(state.expression_level, state.verified_slots)
+            state.entry_phase = (
+                EntryPhase.AWAITING_ENTRY_RESPONSE
+                if state.dialogue_policy_version >= 2
+                and next_task.entry_step is not None
+                and state.expression_level is ExpressionLevel.L4
+                else EntryPhase.RESOLVED
+            )
+            next_step = next_task.active_step(
+                state.expression_level,
+                state.verified_slots,
+                entry_active=state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE,
+            )
             fallback = self._success_then_question(contribution, next_step.prompt)
             return PedagogicalDecision(
                 state=state,
@@ -601,7 +673,12 @@ class ConversationEngine:
     ) -> PedagogicalDecision:
         if state.hint_level is HintLevel.H3:
             state.expression_level = ExpressionLevel.L0
-        step = task.step_for(state.expression_level, state.verified_slots)
+        step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=(state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE),
+            targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
+        )
         state.subgoal_id = step.id
         help_card = self._help_card(task, state.hint_level)
         visual = self._visual_for(task, state.hint_level)
@@ -743,7 +820,12 @@ class ConversationEngine:
         task: TaskDefinition,
         response: ChildResponse,
     ) -> UtteranceAnalysis:
-        step = task.step_for(state.expression_level, state.verified_slots)
+        step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE,
+            targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
+        )
         candidate_values: dict[str, object] = {}
         selected_labels: list[str] = []
         if response.type in {ResponseType.CHOICE, ResponseType.FILL}:
@@ -809,8 +891,9 @@ class ConversationEngine:
                 "difficulty_class": difficulty,
                 "claims": claims,
                 "misconception_tag": (
-                    task.misconception_tags[0] if category is ResponseCategory.CONCEPTUAL_ERROR
-                    and task.misconception_tags else None
+                    task.misconception_tags[0]
+                    if category is ResponseCategory.CONCEPTUAL_ERROR and task.misconception_tags
+                    else None
                 ),
                 "bottleneck": "concept" if difficulty is DifficultyClass.CONCEPT else "unknown",
                 "confidence": 1,
@@ -843,7 +926,12 @@ class ConversationEngine:
         newly_verified: Mapping[str, object],
         state: SessionState,
     ) -> str:
-        step = task.step_for(state.expression_level, state.verified_slots)
+        step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE,
+            targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
+        )
         return ConversationEngine._preface_question("그 부분은 기억했어.", step.prompt)
 
     @staticmethod

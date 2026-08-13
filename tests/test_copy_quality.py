@@ -21,7 +21,8 @@ VAGUE_COPY = (
 def test_every_home_turn_uses_reviewed_specific_copy() -> None:
     for spec in HOME_TEACHING_CATALOG.values():
         copy = [
-            spec.misconception_prompt,
+            spec.effective_l4_prompt,
+            *([spec.entry_prompt] if spec.entry_prompt else []),
             spec.short_prompt,
             spec.learned_line,
             *spec.short_options,

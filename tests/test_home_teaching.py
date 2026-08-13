@@ -4,13 +4,15 @@ import pytest
 from conftest import FakeGateway
 from sqlalchemy import select
 
-from mormi_api.content import HOME_TEACHING_CATALOG
+from mormi_api.content import HOME_TEACHING_CATALOG, HomeTeachingSpec, home_teaching_task
 from mormi_api.db import ConversationRecord, Database, TurnRecord
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
     ChildResponse,
     DifficultyClass,
+    EntryPhase,
+    EntryStance,
     ExpressionLevel,
     HintLevel,
     InputKind,
@@ -19,6 +21,7 @@ from mormi_api.schemas import (
     ResponseCategory,
     SafetyCategory,
     SessionCreate,
+    SessionEnvelope,
     SkillProfile,
     SlotClaim,
     SpeakerContext,
@@ -70,7 +73,14 @@ CURRENT_FRONTEND_HOME_SESSION_IDS = {
 
 def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert set(HOME_TEACHING_CATALOG) == CURRENT_FRONTEND_HOME_SESSION_IDS
-    assert all(len(spec.misconception_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
+    assert all(spec.content_version == 2 for spec in HOME_TEACHING_CATALOG.values())
+    assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
+    assert all(
+        spec.entry_prompt is not None
+        if spec.entry_mode == "wrong_guess"
+        else spec.entry_prompt is None
+        for spec in HOME_TEACHING_CATALOG.values()
+    )
 
 
 @pytest.mark.asyncio
@@ -79,9 +89,7 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
     curriculum_session_id: str,
     tmp_path: object,
 ) -> None:
-    database = Database(
-        f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-first-turn.db"
-    )
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-first-turn.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
     service = ConversationService(
@@ -121,7 +129,10 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
     spec = HOME_TEACHING_CATALOG[curriculum_session_id]
     assert started.turn.visual.data["curriculum_session_id"] == curriculum_session_id
     assert started.turn.status.value == "active"
-    assert started.turn.mormi.text == spec.misconception_prompt
+    expected_first_prompt = (
+        spec.entry_prompt if spec.entry_mode == "wrong_guess" else spec.effective_l4_prompt
+    )
+    assert started.turn.mormi.text == expected_first_prompt
     assert started.turn.visual.data["problem"]["prompt"] == spec.sample_problem["prompt"]
     assert started.turn.input.kind is InputKind.TEXT
     if curriculum_session_id == "number-count":
@@ -135,6 +146,12 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
     assert started.turn.help_card is None
     assert state.expression_level is ExpressionLevel.L4
     assert state.hint_level is HintLevel.H0
+    assert state.dialogue_policy_version == 2
+    assert state.entry_phase is (
+        EntryPhase.AWAITING_ENTRY_RESPONSE
+        if spec.entry_mode == "wrong_guess"
+        else EntryPhase.RESOLVED
+    )
     await database.dispose()
 
 
@@ -216,6 +233,273 @@ async def test_home_first_turn_still_probes_l4_with_an_old_lower_profile(
     await database.dispose()
 
 
+async def _start_money_count_conversation(
+    tmp_path: object,
+    analyses: list[UtteranceAnalysis],
+    suffix: str,
+) -> tuple[Database, Repository, ConversationService, SessionEnvelope]:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/entry-{suffix}.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway(analyses)),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=31,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id=f"entry-session-{suffix}",
+            practice_result_id=f"entry-practice-{suffix}",
+            practice_summary={
+                "curriculum_session_id": "money-count",
+                "skill_id": "money-count",
+                "question_count": 5,
+                "first_try_correct_count": 5,
+            },
+        )
+    )
+    return database, repository, service, started
+
+
+@pytest.mark.asyncio
+async def test_wrong_guess_rejection_is_stance_only_and_opens_l4_question(
+    tmp_path: object,
+) -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        entry_stance=EntryStance.REJECT_WRONG_GUESS,
+        claims=[],
+        confidence=1,
+    )
+    database, repository, service, started = await _start_money_count_conversation(
+        tmp_path, [analysis], "reject-only"
+    )
+
+    followed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="521dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text="아니야",
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.entry_phase is EntryPhase.AWAITING_OPEN_FOLLOWUP
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.hint_level is HintLevel.H0
+    assert state.verified_slots == {}
+    assert state.child_note_evidence == {}
+    assert followed.turn.mormi.text == HOME_TEACHING_CATALOG["money-count"].effective_l4_prompt
+    assert followed.turn.note_update is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_wrong_guess_full_correction_can_complete_in_one_l4_response(
+    tmp_path: object,
+) -> None:
+    child_text = "아니, 600원이야. 500원과 100원을 더했어"
+    rule_span = "500원과 100원을 더했어"
+    expected_rule = HOME_TEACHING_CATALOG["money-count"].learned_line
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        entry_stance=EntryStance.REJECT_WRONG_GUESS,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="600원",
+                factual=True,
+                evidence_span="600원이야",
+            ),
+            SlotClaim(
+                slot_id="rule",
+                value=expected_rule,
+                factual=True,
+                evidence_span=rule_span,
+            ),
+        ],
+        confidence=1,
+    )
+    database, _, service, started = await _start_money_count_conversation(
+        tmp_path, [analysis], "full-correction"
+    )
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="531dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text=child_text,
+        ),
+    )
+
+    assert completed.turn.status.value == "completed"
+    assert completed.turn.note_update is not None
+    assert rule_span in completed.turn.note_update.text
+    assert "아니" not in completed.turn.note_update.text
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_wrong_guess_answer_only_keeps_l4_and_asks_only_for_method(
+    tmp_path: object,
+) -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        entry_stance=EntryStance.REJECT_WRONG_GUESS,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="600원",
+                factual=True,
+                evidence_span="600원이야",
+            )
+        ],
+        confidence=1,
+    )
+    database, repository, service, started = await _start_money_count_conversation(
+        tmp_path, [analysis], "answer-only"
+    )
+
+    followed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="541dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text="아니, 600원이야",
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.verified_slots == {"answer": "600원"}
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
+    assert followed.turn.mormi.text.endswith(HOME_TEACHING_CATALOG["money-count"].short_prompt)
+    assert followed.turn.input.target_slots == ["rule"]
+    assert followed.turn.help_card is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_accepting_wrong_guess_never_becomes_a_verified_fact(
+    tmp_path: object,
+) -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        entry_stance=EntryStance.ACCEPT_WRONG_GUESS,
+        claims=[],
+        confidence=1,
+    )
+    database, repository, service, started = await _start_money_count_conversation(
+        tmp_path, [analysis], "accept-wrong"
+    )
+
+    supported = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="551dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text="응",
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.verified_slots == {}
+    assert state.entry_phase is EntryPhase.RESOLVED
+    assert state.hint_level is HintLevel.H1
+    assert supported.turn.help_card is not None
+    assert supported.turn.note_update is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_no_response_from_entry_lowers_one_step_and_opens_first_help_card(
+    tmp_path: object,
+) -> None:
+    database, repository, service, started = await _start_money_count_conversation(
+        tmp_path, [], "entry-help"
+    )
+    original_visual = started.turn.visual
+
+    supported = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="561dbf5d-6038-4658-971d-39d719d807ea",
+            type="no_response",
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.expression_level is ExpressionLevel.L3
+    assert state.hint_level is HintLevel.H1
+    assert state.entry_phase is EntryPhase.RESOLVED
+    assert supported.turn.visual == original_visual
+    assert supported.turn.help_card is not None
+    assert supported.turn.input.kind is InputKind.TEXT
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unsafe_text_does_not_consume_or_change_wrong_guess_entry(
+    tmp_path: object,
+) -> None:
+    database, repository, service, started = await _start_money_count_conversation(
+        tmp_path, [], "entry-safety"
+    )
+
+    redirected = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="571dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text="씨발",
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.hint_level is HintLevel.H0
+    assert state.verified_slots == {}
+    assert redirected.turn.input == started.turn.input
+    assert redirected.turn.visual == started.turn.visual
+    assert HOME_TEACHING_CATALOG["money-count"].entry_prompt in redirected.turn.mormi.text
+    await database.dispose()
+
+
+def test_legacy_home_snapshot_resumes_without_new_entry_turn() -> None:
+    current = HOME_TEACHING_CATALOG["money-count"].model_dump(mode="json")
+    current.pop("content_version")
+    current.pop("entry_mode")
+    current.pop("entry_prompt")
+    old_l4 = current.pop("l4_prompt")
+    current["misconception_prompt"] = old_l4
+
+    legacy_spec = HomeTeachingSpec.model_validate(current)
+    task = home_teaching_task(legacy_spec, skill_id=legacy_spec.id)
+
+    assert legacy_spec.content_version == 1
+    assert task.entry_step is None
+    assert task.steps[ExpressionLevel.L4][0].prompt == old_l4
+
+
 @pytest.mark.asyncio
 async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn(
     tmp_path: object,
@@ -271,7 +555,7 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
     assert state.scenario_data["curriculum_session_id"] == "money-count"
     assert state.scenario_data["practice_result_id"] == practice.practice_result_id
     assert state.current_task_id == "home_teaching"
-    assert started.turn.mormi.text == HOME_TEACHING_CATALOG["money-count"].misconception_prompt
+    assert started.turn.mormi.text == HOME_TEACHING_CATALOG["money-count"].entry_prompt
     assert started.turn.visual.data["curriculum_session_id"] == "money-count"
 
     completed = await service.respond(
@@ -287,8 +571,7 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
     assert completed.turn.status.value == "completed"
     assert completed.turn.note_update is not None
     assert completed.turn.note_update.text == (
-        f"{HOME_TEACHING_CATALOG['money-count'].note_context}에 대해 "
-        f"“{child_text}”라고 배웠어."
+        f"{HOME_TEACHING_CATALOG['money-count'].note_context}에 대해 “{child_text}”라고 배웠어."
     )
     assert completed.turn.note_update.attribution.value == "child"
     transcript = await repository.raw_turns(started.conversation_id)
@@ -375,7 +658,10 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     state = await repository.get_state(started.conversation_id)
 
     assert state.verified_slots["answer"] == "3"
-    assert state.expression_level is ExpressionLevel.L3
+    # The first substantive answer was produced independently at L4.  Splitting
+    # the remaining method question does not erase that expression credit.
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
     assert state.hint_level is HintLevel.H0
     assert after_answer.turn.mormi.text.endswith(
         "나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?"
@@ -396,8 +682,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     assert completed.turn.status.value == "completed"
     assert completed.turn.note_update is not None
     assert completed.turn.note_update.text == (
-        f"{HOME_TEACHING_CATALOG['number-count'].note_context}에 대해 "
-        f"“{child_method}”라고 배웠어."
+        f"{HOME_TEACHING_CATALOG['number-count'].note_context}에 대해 “{child_method}”라고 배웠어."
     )
     assert child_method in completed.turn.note_update.text
     assert completed.turn.note_update.attribution.value == "child"

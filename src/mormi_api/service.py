@@ -5,6 +5,7 @@ from .engine import ConversationEngine, select_start_level, update_skill_profile
 from .repository import DuplicateResponseError, Repository
 from .schemas import (
     ChildResponse,
+    EntryPhase,
     ExpressionLevel,
     InputContract,
     InputKind,
@@ -102,6 +103,7 @@ class ConversationService:
             for task_id in scenario.task_ids
         }
         start_level = task_start_levels[scenario.task_ids[0]]
+        first_task = get_task(scenario.task_ids[0], scenario_data)
         started_at = utc_now()
         state = SessionState(
             learner_id=request.learner_id,
@@ -113,6 +115,12 @@ class ConversationService:
             task_start_levels=task_start_levels,
             expression_level=start_level,
             task_start_level=start_level,
+            dialogue_policy_version=2,
+            entry_phase=(
+                EntryPhase.AWAITING_ENTRY_RESPONSE
+                if first_task.entry_step is not None and start_level is ExpressionLevel.L4
+                else EntryPhase.RESOLVED
+            ),
             raw_storage_enabled=request.conversation_storage_consent,
             retention_policy=request.retention_policy,
             raw_retention_until=request.retention_policy.expires_at(started_at),

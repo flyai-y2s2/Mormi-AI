@@ -417,9 +417,7 @@ async def test_abusive_text_sets_a_clear_boundary_without_changing_learning_stat
     )
 
     assert analysis.safety_category is SafetyCategory.ABUSIVE
-    assert turn.mormi.text == (
-        "그 말은 듣기 싫어. 점이 두 개 있는 것 같은데, 너는 몇 개로 셌어?"
-    )
+    assert turn.mormi.text == "그 말은 듣기 싫어. 그럼 점은 몇 개고, 어떻게 세었어?"
     assert next_state.status.value == "active"
     assert next_state.expression_level is ExpressionLevel.L4
     assert next_state.hint_level is HintLevel.H0
