@@ -690,6 +690,26 @@
           "teach_reward_eligible": {
             "type": "boolean",
             "title": "Teach Reward Eligible"
+          },
+          "verified_facts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Verified Facts"
           }
         },
         "type": "object",
@@ -1080,9 +1100,6 @@
           },
           "response": {
             "anyOf": [
-              {
-                "type": "string"
-              },
               {
                 "type": "integer"
               },

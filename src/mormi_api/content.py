@@ -366,7 +366,15 @@ QUEUE_TASK = TaskDefinition(
                 input=InputContract(
                     kind=InputKind.JOINT,
                     target_slots=["left_count", "right_count", "final_choice", "reason"],
-                    config={"steps": ["count_left", "count_right", "compare", "choose_queue"]},
+                    config={
+                        "steps": ["count_left", "count_right", "compare", "choose_queue"],
+                        "completion_values": {
+                            "left_count": 3,
+                            "right_count": 5,
+                            "final_choice": "left",
+                            "reason": "fewer_people",
+                        },
+                    },
                 ),
                 fallback_text="도움 카드 순서대로 나와 같이 해볼까?",
             )
@@ -563,6 +571,11 @@ def calculation_task(
                             "right": right,
                             "operation": operation,
                             "result": result,
+                            "completion_values": {
+                                "operation": operation,
+                                "result": result,
+                                "method": method,
+                            },
                         },
                     ),
                     fallback_text="도움 카드 순서대로 세로식을 같이 채울까?",
@@ -691,6 +704,12 @@ def queue_task(
         str(right): {"smaller_number": right},
     }
     task.steps[ExpressionLevel.L1][2].prompt = f"{smaller}명이 있는 줄은 어느 쪽이야?"
+    task.steps[ExpressionLevel.L0][0].input.config["completion_values"] = {
+        "left_count": left,
+        "right_count": right,
+        "final_choice": side,
+        "reason": "fewer_people",
+    }
     task.hints[HintLevel.H2] = HintDefinition(
         level=HintLevel.H2,
         body=f"숫자 카드 {left}과 {right}를 보고 더 작은 수를 찾아보세요.",
@@ -930,7 +949,13 @@ def simple_calculation_task(
         input=InputContract(
             kind=InputKind.JOINT,
             target_slots=["operation", "result"],
-            config={"left": left, "right": right, "operation": operation, "result": result},
+            config={
+                "left": left,
+                "right": right,
+                "operation": operation,
+                "result": result,
+                "completion_values": {"operation": operation, "result": result},
+            },
         ),
         fallback_text="도움 카드 순서대로 계산을 같이 해볼까?",
     )
@@ -1456,6 +1481,16 @@ def validate_content() -> None:
         for step in (item for steps in task.steps.values() for item in steps):
             if set(step.target_slots) - set(task.slots):
                 raise ValueError(f"{task.id}/{step.id}: target slot is undefined")
+            if step.input.kind is InputKind.JOINT:
+                completion_values = step.input.config.get("completion_values")
+                if not isinstance(completion_values, Mapping):
+                    raise ValueError(
+                        f"{task.id}/{step.id}: joint input requires completion_values"
+                    )
+                if set(step.target_slots) - set(completion_values):
+                    raise ValueError(
+                        f"{task.id}/{step.id}: completion_values must cover target slots"
+                    )
         for hint_level in (HintLevel.H1, HintLevel.H2, HintLevel.H3):
             if hint_level not in task.hints:
                 raise ValueError(f"{task.id}: missing {hint_level} hint")

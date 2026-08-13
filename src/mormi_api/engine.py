@@ -643,12 +643,31 @@ class ConversationEngine:
                 CompletionContract(
                     outcome=state.completion_outcome,
                     teach_reward_eligible=state.teach_reward_eligible,
+                    verified_facts=self._completion_facts(state),
                 )
                 if state.status is SessionStatus.COMPLETED and state.completion_outcome is not None
                 else None
             ),
             pedagogy=pedagogy,
         )
+
+    @staticmethod
+    def _completion_facts(
+        state: SessionState,
+    ) -> dict[str, str | int | float | bool]:
+        """Return only deterministic curriculum facts for backend sync.
+
+        Raw child text and LLM-authored note candidates never enter this field.
+        Multi-task cafe scenarios keep the selected menu in ``scenario_data``
+        while the final task owns the current verified slots, so both sources
+        are normalized into one small machine contract.
+        """
+
+        facts = dict(state.verified_slots)
+        child_menu = facts.get("child_menu") or state.scenario_data.get("child_menu_id")
+        if isinstance(child_menu, str) and child_menu:
+            facts["child_menu_id"] = child_menu
+        return facts
 
     @staticmethod
     def _deterministic_analysis(

@@ -147,7 +147,11 @@ class NoteEvidence(StrEnum):
 class PracticeAttempt(BaseModel):
     item_id: str = Field(min_length=1, max_length=100)
     correct: bool
-    response: str | int | float | list[str] | None = None
+    # Practice summaries are service telemetry, not dialogue transcripts.
+    # Keep only a non-linguistic answer value (for example, a count, equation
+    # result, or selected choice IDs). Free-text child utterances belong only
+    # in ChildResponse, where consent-controlled encrypted storage applies.
+    response: int | float | list[str] | None = None
     misconception_tag: str | None = Field(default=None, max_length=80)
     latency_ms: int | None = Field(default=None, ge=0, le=600_000)
 
@@ -263,6 +267,11 @@ class SessionCreate(BaseModel):
             and self.retention_policy is not RetentionPolicy.NO_RAW
         ):
             raise ValueError("retention_policy must be no_raw without storage consent")
+        if self.scenario_id == "home_teach":
+            if not self.learning_session_id or not self.learning_session_id.strip():
+                raise ValueError("learning_session_id is required for home_teach")
+            if not self.practice_result_id or not self.practice_result_id.strip():
+                raise ValueError("practice_result_id is required for home_teach")
         menu_scenarios = {"cafe_budget_menu", "cafe_menu_total", "cafe_change"}
         if self.scenario_id in menu_scenarios and self.cafe_context is None:
             raise ValueError("cafe_context is required for menu scenarios")
@@ -389,6 +398,9 @@ class NoteUpdate(BaseModel):
 class CompletionContract(BaseModel):
     outcome: CompletionOutcome
     teach_reward_eligible: bool
+    # LLM 요약이 아니라 오케스트레이터가 슬롯 정의로 검증한 값만 담는다.
+    # Spring BE가 카페 단계 완료를 안전하게 동기화할 때 사용한다.
+    verified_facts: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
 
 class PedagogySnapshot(BaseModel):

@@ -197,6 +197,8 @@ async def test_budget_menu_uses_frontend_menu_and_allows_correction(
 
     corrected = await choose(service, started.conversation_id, over.turn, "milk")
     assert corrected.turn.status.value == "completed"
+    assert corrected.turn.completion is not None
+    assert corrected.turn.completion.verified_facts["child_menu_id"] == "milk"
     assert corrected.turn.note_update is not None
     assert len(await repository.list_notes(1)) == 1
     await database.dispose()
@@ -223,6 +225,9 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
     completed = await choose(service, started.conversation_id, operation.turn, "5000")
 
     assert completed.turn.status.value == "completed"
+    assert completed.turn.completion is not None
+    assert completed.turn.completion.verified_facts["child_menu_id"] == "milk"
+    assert completed.turn.completion.verified_facts["result"] == 5000
     notes = await repository.list_notes(1)
     assert len(notes) == 1
     assert "더해서" in notes[0].text
@@ -254,6 +259,8 @@ async def test_change_subtracts_mormi_menu_from_fixed_10000(
     completed = await choose(service, started.conversation_id, operation.turn, "5500")
 
     assert completed.turn.status.value == "completed"
+    assert completed.turn.completion is not None
+    assert completed.turn.completion.verified_facts["result"] == 5500
     assert "받아내림" not in completed.turn.note_update.text  # type: ignore[union-attr]
     assert len(await repository.list_notes(1)) == 1
     await database.dispose()

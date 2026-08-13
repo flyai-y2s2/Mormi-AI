@@ -20,7 +20,8 @@
 
 브라우저가 FastAPI를 직접 호출하지 않습니다. Spring 백엔드가 사용자 인증과
 서비스 데이터 연동을 처리한 뒤 Mormi-AI를 호출합니다. 서비스 키는 Spring 서버
-환경 변수에만 보관합니다.
+환경 변수에만 보관합니다. Next.js/프론트의 직접 BFF 호출은 로컬 개발과 계약
+테스트에만 허용하며, 운영 호출자가 아닙니다.
 
 ### 공통 헤더
 
@@ -227,6 +228,16 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 `practice_summary` 안에는 `learner_id`와 `practice_result_id`를 반복하지 않습니다.
 바깥 필드를 단일 출처로 사용합니다.
 
+`practice_summary.attempts[].response`에는 수치 결과 또는 선택 ID 목록처럼 구조화된
+결과만 넣습니다. 아이의 자유 발화 원문·음성 전사·문제 문장은 넣지 않습니다. 자유
+발화는 이후 `ChildResponse.text`로만 전송되며, 저장 동의가 있을 때에만 암호화된
+대화 기록으로 보관됩니다.
+
+`scenario_id=home_teach` 요청에는 비어 있지 않은 `learning_session_id`와
+`practice_result_id`가 모두 필요합니다. `practice_summary`는 같은 요청에 인라인으로
+넣을 수 있고, 생략할 경우 해당 `practice_result_id`가 사전에 저장되어 있어야 합니다.
+같은 `practice_result_id`를 재시도해도 최초 저장된 반복 결과가 정본으로 유지됩니다.
+
 AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionState.scenario_data`에
 복사되어 고정됩니다. 따라서 이후 카탈로그가 갱신되거나 요청을 재시도해도 진행 중인
 대화의 질문과 정답 기준은 바뀌지 않습니다.
@@ -390,6 +401,7 @@ type TurnContract = {
     completion: null | {
       outcome: "taught" | "supported" | "bright_exit";
       teach_reward_eligible: boolean;
+      verified_facts: Record<string, string | number | boolean>;
     };
     pedagogy?: unknown;
   };
@@ -404,6 +416,9 @@ type TurnContract = {
 - 정오, 오개념, L/H 전환, 별노트 귀속을 프론트가 다시 계산하지 않습니다.
 - `status=completed`이면 입력을 보내지 않고 완료 연출로 이동합니다.
 - 보상 여부는 `completion.teach_reward_eligible`만 사용합니다.
+- `completion.verified_facts`에는 LLM 요약이 아니라 오케스트레이터가 정답
+  슬롯으로 검증한 값만 들어갑니다. Spring BE는 이 값으로 카페 단계 완료를
+  동기화할 수 있으며, 아이 원문은 포함되지 않습니다.
 
 시각자료별 필드는 [`VISUAL_CONTRACTS.md`](./VISUAL_CONTRACTS.md)를 참고합니다.
 
@@ -414,7 +429,11 @@ type TurnContract = {
   "status": "completed",
   "completion": {
     "outcome": "supported",
-    "teach_reward_eligible": true
+    "teach_reward_eligible": true,
+    "verified_facts": {
+      "operation": "subtraction",
+      "result": 5500
+    }
   }
 }
 ```

@@ -85,6 +85,8 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
     assert completed.turn.completion is not None
     assert completed.turn.completion.outcome.value == "supported"
     assert completed.turn.completion.teach_reward_eligible is True
+    assert completed.turn.completion.verified_facts["left_count"] == left_count
+    assert completed.turn.completion.verified_facts["right_count"] == right_count
     assert completed.turn.note_update is not None
     assert completed.turn.note_update.attribution.value == "coauthored"
 

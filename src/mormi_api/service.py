@@ -37,6 +37,18 @@ class ConversationService:
                     learner_id=request.learner_id,
                 )
                 await self.repository.save_practice_summary(inline_result)
+                # `practice_result_id` is the existing idempotency identity for
+                # a completed drill. A retry must use the first persisted
+                # snapshot instead of allowing a later payload to alter the
+                # teaching scenario for that same result.
+                stored_result = await self.repository.get_practice_summary(
+                    request.practice_result_id
+                )
+                if not stored_result:
+                    raise RuntimeError("practice result was not persisted")
+                if stored_result.learner_id != request.learner_id:
+                    raise ValueError("practice result does not belong to learner_id")
+                practice_summary = PracticeSummary.model_validate(stored_result.model_dump())
         elif request.practice_result_id:
             loaded_result = await self.repository.get_practice_summary(request.practice_result_id)
             if not loaded_result:

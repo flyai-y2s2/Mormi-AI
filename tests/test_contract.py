@@ -90,3 +90,41 @@ def test_frontend_inline_practice_snapshot_does_not_repeat_ids() -> None:
     )
     assert stored.practice_result_id == "practice_123"
     assert stored.learner_id == 1
+
+
+@pytest.mark.parametrize(
+    ("learning_session_id", "practice_result_id", "message"),
+    [
+        (None, "practice_123", "learning_session_id is required"),
+        ("   ", "practice_123", "learning_session_id is required"),
+        ("session_123", None, "practice_result_id is required"),
+        ("session_123", "   ", "practice_result_id is required"),
+    ],
+)
+def test_home_teach_requires_non_empty_session_and_practice_ids(
+    learning_session_id: str | None,
+    practice_result_id: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        SessionCreate(
+            learner_id=1,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id=learning_session_id,
+            practice_result_id=practice_result_id,
+        )
+
+
+def test_practice_summary_rejects_free_text_child_utterance() -> None:
+    with pytest.raises(ValidationError):
+        PracticeSummary(
+            skill_id="number_count",
+            attempts=[
+                {
+                    "item_id": "number-count:0",
+                    "correct": True,
+                    "response": "사람을 한 명씩 세면 돼",
+                }
+            ],
+        )
