@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
-from mormi_api.llm import structured_output_schema, validate_speaker_output
-from mormi_api.schemas import SpeakerContext, SpeakerOutput, UtteranceAnalysis
+import pytest
+
+from mormi_api.content import HOME_TEACH_TASK_ID, HOME_TEACHING_CATALOG, home_teaching_task
+from mormi_api.llm import ClaudeGateway, structured_output_schema, validate_speaker_output
+from mormi_api.schemas import (
+    ChildResponse,
+    DifficultyClass,
+    ExpressionLevel,
+    ResponseCategory,
+    ResponseType,
+    SafetyCategory,
+    SceneType,
+    SessionState,
+    SlotClaim,
+    SpeakerContext,
+    SpeakerOutput,
+    UtteranceAnalysis,
+)
+from mormi_api.settings import Settings
 
 
 def object_schemas(node: object) -> list[dict[str, Any]]:
@@ -72,3 +91,68 @@ def test_speaker_must_keep_the_orchestrator_question() -> None:
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_unrelated_classification_is_semantically_rechecked_once() -> None:
+    first = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.UNRELATED_RESPONSE,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        confidence=0.7,
+    )
+    audited = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="count_sequence",
+                value="one_by_one_order",
+                factual=True,
+                evidence_span="하나 둘 셋",
+            )
+        ],
+        confidence=0.95,
+    )
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.outputs = [first.model_dump_json(), audited.model_dump_json()]
+            self.prompts: list[str] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.prompts.append(kwargs["messages"][0]["content"])
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=self.outputs.pop(0))],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None))
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+    task = home_teaching_task(HOME_TEACHING_CATALOG["number-count"], skill_id="number-count")
+    state = SessionState(
+        learner_id=1,
+        scene=SceneType.HOME_TEACH,
+        scenario_id="home_teach",
+        task_ids=[HOME_TEACH_TASK_ID],
+        expression_level=ExpressionLevel.L4,
+    )
+
+    result = await gateway.classify(
+        state=state,
+        task=task,
+        previous_question="점이 두 개 있는 것 같은데, 너는 몇 개로 셌어?",
+        response=ChildResponse(
+            turn_id="turn_1",
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="하나, 둘, 셋 하고 세면 돼",
+        ),
+    )
+
+    assert result.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert result.claims[0].slot_id == "count_sequence"
+    assert len(messages.prompts) == 2
+    assert "semantic_relation_audit" in messages.prompts[1]

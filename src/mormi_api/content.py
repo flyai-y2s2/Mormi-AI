@@ -1243,7 +1243,7 @@ def home_teaching_task(
     sample = raw_sample
     sample.pop("correct", None)
 
-    return TaskDefinition(
+    task = TaskDefinition(
         id=HOME_TEACH_TASK_ID,
         scene=SceneType.HOME_TEACH,
         stage_id="home_teach",
@@ -1394,6 +1394,199 @@ def home_teaching_task(
         misconception_tags=[spec.misconception],
         coauthored_note=expected_rule,
     )
+    if spec.id == "number-count":
+        _configure_number_count_task(
+            task,
+            expected_answer=expected_answer,
+            answer_choices=answer_choices,
+            answer_effects=answer_effects,
+            short_prompt=spec.short_prompt,
+            short_options=spec.short_options,
+            short_correct=spec.short_correct,
+        )
+    return task
+
+
+def _configure_number_count_task(
+    task: TaskDefinition,
+    *,
+    expected_answer: str | int | float | bool,
+    answer_choices: list[ChoiceOption],
+    answer_effects: dict[str, dict[str, str | int | float | bool]],
+    short_prompt: str,
+    short_options: list[str],
+    short_correct: str,
+) -> None:
+    """Give procedural counting its own small semantic slots.
+
+    A child can demonstrate useful knowledge with everyday language such as
+    "하나, 둘, 셋 하고 세면 돼" without reciting the full reviewed rule.
+    Keeping that evidence separate prevents a valid partial explanation from
+    being discarded just because it does not fill one monolithic rule slot.
+    """
+
+    task.slots = {
+        "answer": SlotDefinition(
+            id="answer",
+            description="화면에 보이는 점의 전체 개수",
+            expected=expected_answer,
+            aliases=["3개", "세개", "세 개", "셋", "하나둘셋", "하나,둘,셋"],
+            fact_sentence="점은 모두 3개야.",
+        ),
+        "count_sequence": SlotDefinition(
+            id="count_sequence",
+            description="점을 하나씩 순서대로 세는 방법",
+            expected="one_by_one_order",
+            aliases=[
+                "하나씩 세기",
+                "한 개씩 세기",
+                "순서대로 세기",
+                "차례대로 세기",
+                "하나둘셋",
+                "하나, 둘, 셋",
+                "하나 둘 셋 하고 세기",
+            ],
+            fact_sentence="점을 하나씩 순서대로 세는구나.",
+        ),
+        "tracking": SlotDefinition(
+            id="tracking",
+            description="센 점을 놓치지 않도록 점마다 하나씩 가리키는 방법",
+            expected="point_each_dot",
+            aliases=[
+                "하나씩 가리키기",
+                "한 개씩 가리키기",
+                "점마다 가리키기",
+                "손가락으로 가리키기",
+                "하나씩 누르기",
+                "점마다 누르기",
+                "하나씩 짚기",
+            ],
+            fact_sentence="점을 하나씩 가리키며 세는구나.",
+        ),
+    }
+    task.required_slots = ["answer", "tracking"]
+    task.steps = {
+        ExpressionLevel.L4: [
+            StepDefinition(
+                id="free_count_and_method",
+                prompt="점이 두 개 있는 것 같은데, 너는 몇 개로 셌어?",
+                target_slots=["answer", "tracking"],
+                optional_slots=["count_sequence"],
+                input=text_input(
+                    "answer",
+                    "tracking",
+                    "count_sequence",
+                    placeholder="네가 센 수나 방법을 알려줘",
+                ),
+                fallback_text="점이 두 개 있는 것 같은데, 너는 몇 개로 셌어?",
+            )
+        ],
+        ExpressionLevel.L3: [
+            StepDefinition(
+                id="short_count",
+                prompt="점은 모두 몇 개일까?",
+                target_slots=["answer"],
+                optional_slots=["count_sequence"],
+                input=text_input(
+                    "answer",
+                    "count_sequence",
+                    placeholder="센 수를 짧게 알려줘",
+                ),
+                fallback_text="내가 한꺼번에 물어봤네. 점은 모두 몇 개일까?",
+            ),
+            StepDefinition(
+                id="short_tracking",
+                prompt=short_prompt,
+                target_slots=["tracking"],
+                optional_slots=["count_sequence"],
+                input=text_input(
+                    "tracking",
+                    "count_sequence",
+                    placeholder="손가락으로 하는 방법을 알려줘",
+                ),
+                fallback_text="셀 때 손가락은 어떻게 하면 돼?",
+            ),
+        ],
+        ExpressionLevel.L2: [
+            StepDefinition(
+                id="choose_count",
+                prompt="점은 모두 몇 개일까?",
+                target_slots=["answer"],
+                input=choice_input(["answer"], answer_choices),
+                choice_effects=answer_effects,
+                fallback_text="말로만 들으려니 헷갈려. 점은 모두 몇 개일까?",
+            ),
+            StepDefinition(
+                id="choose_tracking",
+                prompt=short_prompt,
+                target_slots=["tracking"],
+                input=choice_input(
+                    ["tracking"],
+                    [
+                        option(f"tracking_{index}", label)
+                        for index, label in enumerate(short_options)
+                    ],
+                ),
+                choice_effects={
+                    f"tracking_{index}": (
+                        {"tracking": "point_each_dot"} if label == short_correct else {}
+                    )
+                    for index, label in enumerate(short_options)
+                },
+                fallback_text="손가락으로 할 방법을 같이 골라 보자.",
+            ),
+        ],
+        ExpressionLevel.L1: [
+            StepDefinition(
+                id="guided_count",
+                prompt="점은 모두 몇 개일까?",
+                target_slots=["answer"],
+                input=choice_input(["answer"], answer_choices),
+                choice_effects=answer_effects,
+                fallback_text="화면을 보며 센 수부터 골라 보자.",
+            ),
+            StepDefinition(
+                id="complete_tracking",
+                prompt="점을 셀 때는 □.",
+                target_slots=["tracking"],
+                input=InputContract(
+                    kind=InputKind.FILL,
+                    target_slots=["tracking"],
+                    choices=[
+                        option("point_each", "하나씩 가리켜"),
+                        option("no_point", "가리키지 않아"),
+                        option("same_dot", "같은 점만 가리켜"),
+                    ],
+                    config={"sentence": "점을 셀 때는 □."},
+                ),
+                choice_effects={
+                    "point_each": {"tracking": "point_each_dot"},
+                    "no_point": {},
+                    "same_dot": {},
+                },
+                fallback_text="도움 카드 문장의 빈칸을 같이 채워 보자.",
+            ),
+        ],
+        ExpressionLevel.L0: [
+            StepDefinition(
+                id="joint_counting",
+                prompt="도움 카드 문장을 나와 같이 읽어볼까?",
+                target_slots=["answer", "tracking"],
+                input=InputContract(
+                    kind=InputKind.JOINT,
+                    target_slots=["answer", "tracking"],
+                    config={
+                        "text": task.coauthored_note,
+                        "completion_values": {
+                            "answer": expected_answer,
+                            "tracking": "point_each_dot",
+                        },
+                    },
+                ),
+                fallback_text="도움 카드 문장을 나와 같이 읽어볼까?",
+            )
+        ],
+    }
 
 QUEUE_TASK_ID = "cafe_queue"
 HOME_TEACH_TASK_ID = "home_teaching"

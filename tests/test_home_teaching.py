@@ -122,7 +122,12 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
     assert started.turn.mormi.text == spec.misconception_prompt
     assert started.turn.visual.data["problem"]["prompt"] == spec.sample_problem["prompt"]
     assert started.turn.input.kind is InputKind.TEXT
-    assert started.turn.input.target_slots == ["answer", "rule"]
+    expected_target_slots = (
+        ["answer", "tracking", "count_sequence"]
+        if curriculum_session_id == "number-count"
+        else ["answer", "rule"]
+    )
+    assert started.turn.input.target_slots == expected_target_slots
     assert started.turn.input.choices == []
     assert started.turn.help_card is None
     assert state.expression_level is ExpressionLevel.L4
@@ -278,7 +283,6 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-partial-answer.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
-    spec = HOME_TEACHING_CATALOG["number-count"]
     analyses = [
         UtteranceAnalysis(
             safety_category=SafetyCategory.NORMAL,
@@ -291,7 +295,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             safety_category=SafetyCategory.NORMAL,
             response_category=ResponseCategory.CORRECT_FULL,
             difficulty_class=DifficultyClass.UNKNOWN,
-            claims=[SlotClaim(slot_id="rule", value=spec.learned_line, factual=True)],
+            claims=[SlotClaim(slot_id="tracking", value="point_each_dot", factual=True)],
             note_candidate="점을 하나씩 가리키며 마지막 수를 말하면 돼",
             confidence=1,
         ),
@@ -330,9 +334,11 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     assert state.verified_slots["answer"] == "3"
     assert state.expression_level is ExpressionLevel.L3
     assert state.hint_level is HintLevel.H0
-    assert after_answer.turn.mormi.text.endswith(spec.short_prompt)
+    assert after_answer.turn.mormi.text.endswith(
+        "나는 점을 자꾸 하나 놓쳐. 셀 때 손가락은 어떻게 하면 돼?"
+    )
     assert after_answer.turn.input.kind is InputKind.TEXT
-    assert after_answer.turn.input.target_slots == ["rule"]
+    assert after_answer.turn.input.target_slots == ["tracking", "count_sequence"]
     assert after_answer.turn.help_card is None
 
     completed = await service.respond(

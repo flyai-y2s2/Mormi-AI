@@ -66,9 +66,7 @@ def test_queue_reason_choices_explain_the_wait_instead_of_repeating_the_question
 def test_safety_fallbacks_set_a_clear_boundary_without_vague_scene_language() -> None:
     assert deterministic_safety("야 이 개새끼야") is SafetyCategory.ABUSIVE
     assert deterministic_safety("ㅅㅂ 닥쳐") is SafetyCategory.ABUSIVE
-    assert safety_redirect(SafetyCategory.ABUSIVE) == (
-        "그 말은 듣기 싫어. 아까 질문으로 돌아갈까?"
-    )
+    assert safety_redirect(SafetyCategory.ABUSIVE) == "그 말은 듣기 싫어."
 
     for category in SafetyCategory:
         text = safety_redirect(category)
