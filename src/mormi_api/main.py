@@ -108,6 +108,17 @@ async def health(request: Request) -> HealthResponse:
     )
 
 
+@app.get(
+    "/health/authenticated",
+    response_model=HealthResponse,
+    tags=["operations"],
+)
+async def authenticated_health(request: Request, _: Auth) -> HealthResponse:
+    """Verify both service reachability and the BE-to-AI shared key."""
+
+    return await health(request)
+
+
 @app.post(
     "/v1/practice-results",
     response_model=PracticeResult,
