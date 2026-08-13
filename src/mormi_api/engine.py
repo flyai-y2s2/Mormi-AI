@@ -343,7 +343,7 @@ class ConversationEngine:
         # must call the response successful, and every accepted claim must
         # match reviewed curriculum facts.  An error analysis can therefore
         # never fill a slot even if a malformed model/client supplies a value.
-        newly_verified = (
+        accepted_claims = (
             task.validated_claims(
                 (claim.slot_id, claim.value, claim.factual)
                 for claim in analysis.claims
@@ -353,12 +353,21 @@ class ConversationEngine:
             else {}
         )
         if response.type is ResponseType.TEXT and response.text:
-            newly_verified = self._filter_text_explanation_claims(
+            accepted_claims = self._filter_text_explanation_claims(
                 task,
                 response.text,
                 analysis,
-                newly_verified,
+                accepted_claims,
             )
+        # A repeated fact is still understood, but it is not new learning
+        # progress.  Treating it as newly verified used to select the same
+        # unresolved step forever (for example, repeatedly asking how to count
+        # after the child repeatedly said "하나, 둘, 셋 하면서 세어").
+        newly_verified = {
+            slot_id: value
+            for slot_id, value in accepted_claims.items()
+            if next_state.verified_slots.get(slot_id) != value
+        }
         next_state.verified_slots.update(newly_verified)
         if (
             entry_active
@@ -437,11 +446,19 @@ class ConversationEngine:
                 next_state.entry_phase = EntryPhase.RESOLVED
             if next_state.expression_level is not ExpressionLevel.L0:
                 next_state.expression_level = next_state.expression_level.lower()
+            if next_state.expression_level is ExpressionLevel.L0:
+                next_state.hint_level = HintLevel.H3
+                next_state.task_max_hint = HintLevel.H3
+                dialogue_act = "joint_mode"
+                fallback = "같은 말만 다시 물어서 미안해. 도움 카드대로 같이 해볼까?"
+            else:
+                dialogue_act = "acknowledge_unstructured_partial"
+                fallback = "앗, 내가 한 번에 많이 물어봤네."
             return self._decision_for_current_step(
                 next_state,
                 task,
-                dialogue_act="acknowledge_unstructured_partial",
-                fallback="앗, 내가 한 번에 많이 물어봤네.",
+                dialogue_act=dialogue_act,
+                fallback=fallback,
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
@@ -938,7 +955,7 @@ class ConversationEngine:
         )
         if (
             task.skill_id == "number-count"
-            and set(newly_verified).intersection({"answer", "count_sequence"})
+            and "answer" in newly_verified
             and "tracking" not in state.verified_slots
         ):
             if "answer" in newly_verified:

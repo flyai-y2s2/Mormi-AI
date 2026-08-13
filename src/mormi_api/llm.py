@@ -310,7 +310,8 @@ CLASSIFIER_SYSTEM = """
 - unrelated_response는 현재 질문과 의미상 연결이 전혀 없는 말에만 쓴다.
 - 아이가 자기 말로 일부 방법을 보여 주면 불완전해도 correct_partial이다.
 - 교과서 문장과 어휘가 다르다는 이유로 unrelated_response를 선택하지 않는다.
-- 예: 점 세는 질문에 '하나, 둘, 셋 하고 세면 돼'는 correct_partial이며 unrelated가 아니다.
+- 예: 점 세는 방법 질문에 '하나, 둘, 셋 하고 세면 돼'는 올바른 tracking 방법이다.
+  가리키기나 손가락 펴기를 따로 말하지 않아도 tracking claim으로 인정한다.
 - 예: 왼쪽 3개, 오른쪽 5개 그림에 '왼쪽은 세 개고 오른쪽은 다섯 개잖아'는
   answer=오른쪽과 reason=count_comparison을 모두 뒷받침하는 타당한 설명이다.
   '짝짓기'라는 다른 전략을 추가로 요구하지 않는다.

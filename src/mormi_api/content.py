@@ -1609,12 +1609,12 @@ def _configure_number_count_task(
     short_options: list[str],
     short_correct: str,
 ) -> None:
-    """Give procedural counting its own small semantic slots.
+    """Accept multiple sound counting strategies without forcing one script.
 
-    A child can demonstrate useful knowledge with everyday language such as
-    "하나, 둘, 셋 하고 세면 돼" without reciting the full reviewed rule.
-    Keeping that evidence separate prevents a valid partial explanation from
-    being discarded just because it does not fill one monolithic rule slot.
+    ``tracking`` means a child described a usable way to count each visible
+    object once.  Pointing is one option, not the only correct answer.  Everyday
+    explanations such as "하나, 둘, 셋 하면서 세어" therefore satisfy the
+    same method goal and keep their original wording as direct note evidence.
     """
 
     task.slots = {
@@ -1625,10 +1625,15 @@ def _configure_number_count_task(
             aliases=["3개", "세개", "세 개", "셋", "하나둘셋", "하나,둘,셋"],
             fact_sentence="점은 모두 3개야.",
         ),
-        "count_sequence": SlotDefinition(
-            id="count_sequence",
-            description="점을 하나씩 순서대로 세는 방법",
-            expected="one_by_one_order",
+        "tracking": SlotDefinition(
+            id="tracking",
+            description=(
+                "화면의 점마다 수 이름을 하나씩 붙여 한 번씩 세는 타당한 방법. "
+                "하나 둘 셋 하며 세기, 순서대로 세기, 가리키기, 손가락 펴기 등 "
+                "서로 다른 올바른 전략을 모두 인정한다. 특정 전략을 강요하지 않는다."
+            ),
+            expected="count_each_once",
+            accepted_values=["point_each_dot", "one_by_one_order"],
             aliases=[
                 "하나씩 세기",
                 "한 개씩 세기",
@@ -1637,17 +1642,10 @@ def _configure_number_count_task(
                 "하나둘셋",
                 "하나, 둘, 셋",
                 "하나 둘 셋 하고 세기",
-            ],
-            fact_sentence="점을 하나씩 순서대로 세는구나.",
-        ),
-        "tracking": SlotDefinition(
-            id="tracking",
-            description=(
-                "센 점을 놓치지 않도록 아이가 실제로 쓴 구체적인 세기 방법 "
-                "(가리키기, 손가락 펴기, 순서대로 세기 등)"
-            ),
-            expected="point_each_dot",
-            aliases=[
+                "하나 둘 셋 하면서 세기",
+                "하나 둘 셋 하고 세면 돼",
+                "하나 둘 셋 하면서 세면 돼",
+                "수를 하나씩 말하면서 세기",
                 "하나씩 가리키기",
                 "한 개씩 가리키기",
                 "점마다 가리키기",
@@ -1658,7 +1656,7 @@ def _configure_number_count_task(
                 "손가락을 하나씩 펴며 세기",
                 "손가락 하나씩 펴기",
             ],
-            fact_sentence="점을 하나씩 가리키며 세는구나.",
+            fact_sentence="점을 하나씩 세는 방법을 알려줬어.",
         ),
     }
     task.required_slots = ["answer", "tracking"]
@@ -1670,11 +1668,9 @@ def _configure_number_count_task(
                 id="free_count_and_method",
                 prompt=l4_prompt,
                 target_slots=["answer", "tracking"],
-                optional_slots=["count_sequence"],
                 input=text_input(
                     "answer",
                     "tracking",
-                    "count_sequence",
                     placeholder="네가 센 수나 방법을 알려줘",
                 ),
                 fallback_text=l4_prompt,
@@ -1685,10 +1681,8 @@ def _configure_number_count_task(
                 id="short_count",
                 prompt="지금 점이 몇 개야?",
                 target_slots=["answer"],
-                optional_slots=["count_sequence"],
                 input=text_input(
                     "answer",
-                    "count_sequence",
                     placeholder="센 수를 짧게 알려줘",
                 ),
                 fallback_text="내가 한꺼번에 물어봤네. 점이 몇 개인지 먼저 알려줘.",
@@ -1697,10 +1691,8 @@ def _configure_number_count_task(
                 id="short_tracking",
                 prompt=short_prompt,
                 target_slots=["tracking"],
-                optional_slots=["count_sequence"],
                 input=text_input(
                     "tracking",
-                    "count_sequence",
                     placeholder="네가 센 방법을 알려줘",
                 ),
                 fallback_text=short_prompt,
@@ -1728,7 +1720,7 @@ def _configure_number_count_task(
                 ),
                 choice_effects={
                     f"tracking_{index}": (
-                        {"tracking": "point_each_dot"} if label == short_correct else {}
+                        {"tracking": "count_each_once"} if label == short_correct else {}
                     )
                     for index, label in enumerate(short_options)
                 },
@@ -1746,22 +1738,22 @@ def _configure_number_count_task(
             ),
             StepDefinition(
                 id="complete_tracking",
-                prompt="점을 셀 때는 □.",
+                prompt="점을 하나씩 보면서 □.",
                 target_slots=["tracking"],
                 input=InputContract(
                     kind=InputKind.FILL,
                     target_slots=["tracking"],
                     choices=[
-                        option("point_each", "하나씩 가리켜"),
-                        option("no_point", "가리키지 않아"),
-                        option("same_dot", "같은 점만 가리켜"),
+                        option("say_one_number", "하나, 둘, 셋 하고 세어"),
+                        option("count_twice", "같은 점을 두 번 세어"),
+                        option("skip_dots", "점을 건너뛰며 세어"),
                     ],
-                    config={"sentence": "점을 셀 때는 □."},
+                    config={"sentence": "점을 하나씩 보면서 □."},
                 ),
                 choice_effects={
-                    "point_each": {"tracking": "point_each_dot"},
-                    "no_point": {},
-                    "same_dot": {},
+                    "say_one_number": {"tracking": "count_each_once"},
+                    "count_twice": {},
+                    "skip_dots": {},
                 },
                 fallback_text="도움 카드 문장의 빈칸을 같이 채워 보자.",
             ),
@@ -1778,7 +1770,7 @@ def _configure_number_count_task(
                         "text": task.coauthored_note,
                         "completion_values": {
                             "answer": expected_answer,
-                            "tracking": "point_each_dot",
+                            "tracking": "count_each_once",
                         },
                     },
                 ),

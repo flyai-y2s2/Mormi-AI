@@ -471,23 +471,23 @@ async def test_claimless_correct_partial_never_falls_through_to_unrelated() -> N
     assert turn.mormi.text.endswith("지금 점이 몇 개야?")
     assert "그 얘기는 이따" not in turn.mormi.text
     assert turn.input.kind is InputKind.TEXT
-    assert turn.input.target_slots == ["answer", "count_sequence"]
+    assert turn.input.target_slots == ["answer"]
 
 
 @pytest.mark.asyncio
-async def test_number_count_partial_meanings_are_remembered_separately() -> None:
-    """A child's own counting words preserve useful pieces and ask only what is missing."""
+async def test_number_count_accepts_childs_own_counting_method_without_forcing_pointing() -> None:
+    """Saying the number words in order is a valid method, not a lesser fragment."""
 
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
-        response_category=ResponseCategory.CORRECT_PARTIAL,
+        response_category=ResponseCategory.CORRECT_FULL,
         difficulty_class=DifficultyClass.UNKNOWN,
         claims=[
-            SlotClaim(slot_id="answer", value="3개", factual=True),
             SlotClaim(
-                slot_id="count_sequence",
-                value="하나 둘 셋 하고 세기",
+                slot_id="tracking",
+                value="하나 둘 셋 하면서 세기",
                 factual=True,
+                evidence_span="하나, 둘, 셋 하면서 세면 돼",
             ),
         ],
         confidence=1,
@@ -500,6 +500,7 @@ async def test_number_count_partial_meanings_are_remembered_separately() -> None
         "number-count",
         expression_level=ExpressionLevel.L4,
         hint_level=HintLevel.H0,
+        verified_slots={"answer": "3"},
     )
     initial = engine.initial_turn(state)
     state.current_turn_id = initial.turn_id
@@ -510,20 +511,124 @@ async def test_number_count_partial_meanings_are_remembered_separately() -> None
             turn_id=initial.turn_id,
             response_id=uuid4(),
             type=ResponseType.TEXT,
-            text="하나, 둘, 셋 하고 세면 돼",
+            text="하나, 둘, 셋 하면서 세면 돼",
         ),
         initial.mormi.text,
     )
 
-    assert next_state.verified_slots == {
-        "answer": "3",
-        "count_sequence": "one_by_one_order",
-    }
-    assert next_state.expression_level is ExpressionLevel.L3
-    assert turn.mormi.text == (
-        "아, 세 개구나! 나는 가끔 점을 세다가 헷갈려. 어떻게 세는지 알려주면 안 될까?"
+    assert next_state.verified_slots == {"answer": "3", "tracking": "count_each_once"}
+    assert next_state.status.value == "completed"
+    assert turn.note_update is not None
+    assert "하나, 둘, 셋 하면서 세면 돼" in turn.note_update.text
+    assert "가리키며" not in turn.note_update.text
+
+
+@pytest.mark.asyncio
+async def test_repeated_known_fact_cannot_repeat_the_same_open_question_forever() -> None:
+    """No-new-progress partials move down the expression ladder one step per turn."""
+
+    duplicate_answer = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽",
+            )
+        ],
+        confidence=1,
     )
-    assert turn.input.target_slots == ["tracking", "count_sequence"]
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([duplicate_answer, duplicate_answer]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-compare",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": "오른쪽"},
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    after_first, _, first_turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="오른쪽",
+        ),
+        initial.mormi.text,
+    )
+    assert after_first.expression_level is ExpressionLevel.L3
+    assert first_turn.mormi.text != initial.mormi.text
+    assert first_turn.input.kind is InputKind.TEXT
+
+    after_first.current_turn_id = first_turn.turn_id
+    after_second, _, second_turn = await engine.run_turn(
+        after_first,
+        ChildResponse(
+            turn_id=first_turn.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="오른쪽",
+        ),
+        first_turn.mormi.text,
+    )
+    assert after_second.expression_level is ExpressionLevel.L2
+    assert second_turn.mormi.text != first_turn.mormi.text
+    assert second_turn.input.kind is InputKind.CHOICES
+
+
+@pytest.mark.asyncio
+async def test_no_progress_at_lowest_level_enters_joint_help_instead_of_looping() -> None:
+    duplicate_answer = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽",
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([duplicate_answer]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-compare",
+        expression_level=ExpressionLevel.L0,
+        hint_level=HintLevel.H2,
+        verified_slots={"answer": "오른쪽"},
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="오른쪽",
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.expression_level is ExpressionLevel.L0
+    assert next_state.hint_level is HintLevel.H3
+    assert turn.input.kind is InputKind.JOINT
+    assert turn.help_card is not None
+    assert turn.help_card.level is HintLevel.H3
 
 
 @pytest.mark.asyncio

@@ -117,8 +117,8 @@ async def test_unrelated_classification_is_semantically_rechecked_once() -> None
         difficulty_class=DifficultyClass.UNKNOWN,
         claims=[
             SlotClaim(
-                slot_id="count_sequence",
-                value="one_by_one_order",
+                slot_id="tracking",
+                value="count_each_once",
                 factual=True,
                 evidence_span="하나 둘 셋",
             )
@@ -163,6 +163,6 @@ async def test_unrelated_classification_is_semantically_rechecked_once() -> None
     )
 
     assert result.response_category is ResponseCategory.CORRECT_PARTIAL
-    assert result.claims[0].slot_id == "count_sequence"
+    assert result.claims[0].slot_id == "tracking"
     assert len(messages.prompts) == 2
     assert "semantic_relation_audit" in messages.prompts[1]

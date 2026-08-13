@@ -73,7 +73,7 @@ CURRENT_FRONTEND_HOME_SESSION_IDS = {
 
 def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert set(HOME_TEACHING_CATALOG) == CURRENT_FRONTEND_HOME_SESSION_IDS
-    assert HOME_TEACHING_CATALOG["number-count"].content_version == 3
+    assert HOME_TEACHING_CATALOG["number-count"].content_version == 4
     assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
     assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
     assert all(
@@ -103,6 +103,19 @@ def test_number_count_copy_sounds_like_a_younger_sibling_asking_for_help() -> No
         )
         for phrase in ("그 부분은 기억했어", "네가 말한 데까지", "점을 하나 놓칠 때가 있어")
     )
+
+
+def test_number_count_support_does_not_force_pointing_as_the_only_method() -> None:
+    spec = HOME_TEACHING_CATALOG["number-count"]
+    task = home_teaching_task(spec, skill_id=spec.id)
+
+    assert spec.short_correct == "점을 하나씩 보며 하나, 둘, 셋 하고 세기"
+    assert "가리키" not in " ".join(
+        [spec.learned_line, spec.hint, *spec.help_lines, *spec.short_options]
+    )
+    guided = task.steps[ExpressionLevel.L1][1]
+    assert guided.prompt == "점을 하나씩 보면서 □."
+    assert guided.choice_effects["say_one_number"] == {"tracking": "count_each_once"}
 
 
 @pytest.mark.asyncio
@@ -158,7 +171,7 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
     assert started.turn.visual.data["problem"]["prompt"] == spec.sample_problem["prompt"]
     assert started.turn.input.kind is InputKind.TEXT
     if curriculum_session_id == "number-count":
-        expected_target_slots = ["answer", "tracking", "count_sequence"]
+        expected_target_slots = ["answer", "tracking"]
     elif curriculum_session_id == "number-compare":
         expected_target_slots = ["answer", "reason"]
     else:
@@ -614,7 +627,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-partial-answer.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
-    child_method = "손가락을 하나씩 펴면서 세면 돼"
+    child_method = "하나, 둘, 셋 하면서 세면 돼"
     analyses = [
         UtteranceAnalysis(
             safety_category=SafetyCategory.NORMAL,
@@ -635,10 +648,10 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             response_category=ResponseCategory.CORRECT_FULL,
             difficulty_class=DifficultyClass.UNKNOWN,
             claims=[
-                SlotClaim(
-                    slot_id="tracking",
-                    value="point_each_dot",
-                    factual=True,
+                    SlotClaim(
+                        slot_id="tracking",
+                        value="count_each_once",
+                        factual=True,
                     evidence_span=child_method,
                 )
             ],
@@ -689,7 +702,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
         "아, 세 개구나! 나는 가끔 점을 세다가 헷갈려. 어떻게 세는지 알려주면 안 될까?"
     )
     assert after_answer.turn.input.kind is InputKind.TEXT
-    assert after_answer.turn.input.target_slots == ["tracking", "count_sequence"]
+    assert after_answer.turn.input.target_slots == ["tracking"]
     assert after_answer.turn.help_card is None
 
     completed = await service.respond(
