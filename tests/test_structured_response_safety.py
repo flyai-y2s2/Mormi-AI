@@ -76,10 +76,11 @@ async def test_wrong_fill_never_completes_number_compare_and_moves_to_joint_h3()
         hint_level=HintLevel.H2,
         verified_slots={"answer": "오른쪽"},
     )
+    state.supported_note_slots = ["answer"]
     initial = engine.initial_turn(state)
     state.current_turn_id = initial.turn_id
 
-    assert state.subgoal_id == "complete_rule"
+    assert state.subgoal_id == "complete_comparison"
     assert initial.input.kind is InputKind.FILL
 
     next_state, analysis, turn = await engine.run_turn(
@@ -88,14 +89,14 @@ async def test_wrong_fill_never_completes_number_compare_and_moves_to_joint_h3()
             turn_id=initial.turn_id,
             response_id=uuid4(),
             type=ResponseType.FILL,
-            choice_ids=["fill_2"],  # "오른쪽만 세어"
+            choice_ids=["left_more"],
         ),
         initial.mormi.text,
     )
 
     assert analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
     assert next_state.status.value == "active"
-    assert "rule" not in next_state.verified_slots
+    assert "reason" not in next_state.verified_slots
     assert turn.note_update is None
     assert next_state.expression_level is ExpressionLevel.L0
     assert next_state.hint_level is HintLevel.H3
@@ -115,6 +116,7 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
         hint_level=HintLevel.H2,
         verified_slots={"answer": "오른쪽"},
     )
+    state.supported_note_slots = ["answer"]
     initial = engine.initial_turn(state)
     state.current_turn_id = initial.turn_id
 
@@ -124,16 +126,14 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
             turn_id=initial.turn_id,
             response_id=uuid4(),
             type=ResponseType.FILL,
-            choice_ids=["fill_0"],  # "하나씩 짝지어"
+            choice_ids=["right_more"],
         ),
         initial.mormi.text,
     )
 
     assert analysis.response_category is ResponseCategory.CORRECT_FULL
     assert next_state.status.value == "completed"
-    assert next_state.verified_slots["rule"] == (
-        HOME_TEACHING_CATALOG["number-compare"].learned_line
-    )
+    assert next_state.verified_slots["reason"] == "count_comparison"
     assert turn.completion is not None
     assert turn.completion.outcome.value == "supported"
     assert turn.note_update is not None
@@ -144,12 +144,11 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
 async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> None:
     """The orchestrator requires both a success verdict and canonical facts."""
 
-    expected_rule = HOME_TEACHING_CATALOG["number-compare"].learned_line
     contradictory_analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
         response_category=ResponseCategory.CONCEPTUAL_ERROR,
         difficulty_class=DifficultyClass.CONCEPT,
-        claims=[SlotClaim(slot_id="rule", value=expected_rule, factual=True)],
+        claims=[SlotClaim(slot_id="reason", value="count_comparison", factual=True)],
         confidence=1,
     )
     engine = ConversationEngine(  # type: ignore[arg-type]
@@ -176,10 +175,220 @@ async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> Non
     )
 
     assert analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
-    assert "rule" not in next_state.verified_slots
+    assert "reason" not in next_state.verified_slots
     assert next_state.status.value == "active"
     assert turn.note_update is None
     assert turn.completion is None
+
+
+@pytest.mark.asyncio
+async def test_bare_comparison_conclusion_is_kept_but_does_not_create_a_note() -> None:
+    """'오른쪽이 커' answers which side, but it is not a general explanation."""
+
+    child_text = "오른쪽이 커"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span=child_text,
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-compare",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.status.value == "active"
+    assert next_state.verified_slots == {"answer": "오른쪽"}
+    assert "reason" not in next_state.child_note_evidence
+    assert turn.note_update is None
+    assert turn.input.target_slots == ["reason"]
+    assert "왜 오른쪽에 점이 더 많다고 생각했어?" in turn.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_even_an_overclaimed_short_conclusion_cannot_enter_the_star_note() -> None:
+    """The code provenance gate stays safe even if the classifier overclaims reason."""
+
+    child_text = "오른쪽이 더 많아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span=child_text,
+            ),
+            SlotClaim(
+                slot_id="reason",
+                value="count_comparison",
+                factual=True,
+                evidence_span=child_text,
+            ),
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-compare",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.status.value == "active"
+    assert next_state.verified_slots == {"answer": "오른쪽"}
+    assert next_state.child_note_evidence == {}
+    assert turn.note_update is None
+    assert turn.input.target_slots == ["reason"]
+
+
+@pytest.mark.asyncio
+async def test_bare_amount_is_an_answer_not_a_star_note_explanation() -> None:
+    """A result such as '600원이야' must never become the generalization note."""
+
+    child_text = "600원이야"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="600원",
+                factual=True,
+                evidence_span=child_text,
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "money-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.status.value == "active"
+    assert next_state.verified_slots == {"answer": "600원"}
+    assert next_state.child_note_evidence == {}
+    assert turn.note_update is None
+
+
+@pytest.mark.asyncio
+async def test_star_note_uses_only_the_exact_factual_clause_from_a_mixed_turn() -> None:
+    """One wrong clause cannot contaminate a separately grounded method clause."""
+
+    child_text = "손가락을 하나씩 펴면서 세면 돼. 점은 4개야"
+    method_span = "손가락을 하나씩 펴면서 세면 돼"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.BOTH,
+        claims=[
+            SlotClaim(
+                slot_id="tracking",
+                value="point_each_dot",
+                factual=True,
+                evidence_span=method_span,
+            ),
+            SlotClaim(
+                slot_id="answer",
+                value="4",
+                factual=False,
+                evidence_span="점은 4개야",
+            ),
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L3,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": "3"},
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.status.value == "completed"
+    assert turn.note_update is not None
+    assert method_span in turn.note_update.text
+    assert "4개" not in turn.note_update.text
+    assert HOME_TEACHING_CATALOG["number-count"].learned_line not in turn.note_update.text
 
 
 @pytest.mark.asyncio
@@ -312,7 +521,7 @@ async def test_number_count_partial_meanings_are_remembered_separately() -> None
     }
     assert next_state.expression_level is ExpressionLevel.L3
     assert turn.mormi.text.endswith(
-        "나는 점을 자꾸 하나 놓쳐. 셀 때 손가락은 어떻게 하면 돼?"
+        "나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?"
     )
     assert turn.input.target_slots == ["tracking", "count_sequence"]
 

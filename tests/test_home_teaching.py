@@ -5,7 +5,7 @@ from conftest import FakeGateway
 from sqlalchemy import select
 
 from mormi_api.content import HOME_TEACHING_CATALOG
-from mormi_api.db import Database, TurnRecord
+from mormi_api.db import ConversationRecord, Database, TurnRecord
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
@@ -21,6 +21,8 @@ from mormi_api.schemas import (
     SessionCreate,
     SkillProfile,
     SlotClaim,
+    SpeakerContext,
+    SpeakerOutput,
     UtteranceAnalysis,
 )
 from mormi_api.security import TextCipher
@@ -122,11 +124,12 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
     assert started.turn.mormi.text == spec.misconception_prompt
     assert started.turn.visual.data["problem"]["prompt"] == spec.sample_problem["prompt"]
     assert started.turn.input.kind is InputKind.TEXT
-    expected_target_slots = (
-        ["answer", "tracking", "count_sequence"]
-        if curriculum_session_id == "number-count"
-        else ["answer", "rule"]
-    )
+    if curriculum_session_id == "number-count":
+        expected_target_slots = ["answer", "tracking", "count_sequence"]
+    elif curriculum_session_id == "number-compare":
+        expected_target_slots = ["answer", "reason"]
+    else:
+        expected_target_slots = ["answer", "rule"]
     assert started.turn.input.target_slots == expected_target_slots
     assert started.turn.input.choices == []
     assert started.turn.help_card is None
@@ -143,6 +146,19 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
         l2_answer, l2_method = task.steps[ExpressionLevel.L2]
         l1_answer, l1_rule = task.steps[ExpressionLevel.L1]
         expected_answers = [str(answer) for answer in spec.sample_problem["answers"]]
+
+        if spec.id == "number-compare":
+            assert "어느 쪽" in l2_answer.prompt
+            assert [choice.label for choice in l2_answer.input.choices] == expected_answers
+            assert "까닭" in l2_method.prompt
+            assert [choice.label for choice in l2_method.input.choices] == [
+                "왼쪽은 3개, 오른쪽은 5개라서",
+                "왼쪽은 5개, 오른쪽은 3개라서",
+                "두 쪽 모두 5개라서",
+            ]
+            assert "5개인 쪽" in l1_answer.prompt
+            assert l1_rule.input.kind is InputKind.FILL
+            continue
 
         assert l2_answer.prompt == spec.sample_problem["prompt"]
         assert [choice.label for choice in l2_answer.input.choices] == expected_answers
@@ -213,7 +229,14 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
         safety_category=SafetyCategory.NORMAL,
         response_category=ResponseCategory.CORRECT_FULL,
         difficulty_class=DifficultyClass.UNKNOWN,
-        claims=[SlotClaim(slot_id="rule", value=expected_rule, factual=True)],
+        claims=[
+            SlotClaim(
+                slot_id="rule",
+                value=expected_rule,
+                factual=True,
+                evidence_span=child_text,
+            )
+        ],
         note_candidate=child_text,
         confidence=1,
     )
@@ -263,7 +286,10 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
 
     assert completed.turn.status.value == "completed"
     assert completed.turn.note_update is not None
-    assert completed.turn.note_update.text == child_text
+    assert completed.turn.note_update.text == (
+        f"{HOME_TEACHING_CATALOG['money-count'].note_context}에 대해 "
+        f"“{child_text}”라고 배웠어."
+    )
     assert completed.turn.note_update.attribution.value == "child"
     transcript = await repository.raw_turns(started.conversation_id)
     assert transcript[0]["question"] == started.turn.mormi.text
@@ -283,19 +309,36 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-partial-answer.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
+    child_method = "손가락을 하나씩 펴면서 세면 돼"
     analyses = [
         UtteranceAnalysis(
             safety_category=SafetyCategory.NORMAL,
             response_category=ResponseCategory.CORRECT_PARTIAL,
             difficulty_class=DifficultyClass.UNKNOWN,
-            claims=[SlotClaim(slot_id="answer", value="3", factual=True)],
+            claims=[
+                SlotClaim(
+                    slot_id="answer",
+                    value="3",
+                    factual=True,
+                    evidence_span="3개",
+                )
+            ],
             confidence=1,
         ),
         UtteranceAnalysis(
             safety_category=SafetyCategory.NORMAL,
             response_category=ResponseCategory.CORRECT_FULL,
             difficulty_class=DifficultyClass.UNKNOWN,
-            claims=[SlotClaim(slot_id="tracking", value="point_each_dot", factual=True)],
+            claims=[
+                SlotClaim(
+                    slot_id="tracking",
+                    value="point_each_dot",
+                    factual=True,
+                    evidence_span=child_method,
+                )
+            ],
+            # Even a conflicting model-written candidate must not replace the
+            # child's safe, fact-checked wording in the note.
             note_candidate="점을 하나씩 가리키며 마지막 수를 말하면 돼",
             confidence=1,
         ),
@@ -335,7 +378,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     assert state.expression_level is ExpressionLevel.L3
     assert state.hint_level is HintLevel.H0
     assert after_answer.turn.mormi.text.endswith(
-        "나는 점을 자꾸 하나 놓쳐. 셀 때 손가락은 어떻게 하면 돼?"
+        "나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?"
     )
     assert after_answer.turn.input.kind is InputKind.TEXT
     assert after_answer.turn.input.target_slots == ["tracking", "count_sequence"]
@@ -347,13 +390,181 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             turn_id=after_answer.turn.turn_id,
             response_id="b5fa9e9d-23c2-4258-8505-2c6598ab9e38",
             type="text",
-            text="점을 하나씩 가리키며 마지막 수를 말하면 돼",
+            text=child_method,
         ),
     )
     assert completed.turn.status.value == "completed"
     assert completed.turn.note_update is not None
-    assert completed.turn.note_update.attribution.value == "coauthored"
+    assert completed.turn.note_update.text == (
+        f"{HOME_TEACHING_CATALOG['number-count'].note_context}에 대해 "
+        f"“{child_method}”라고 배웠어."
+    )
+    assert child_method in completed.turn.note_update.text
+    assert completed.turn.note_update.attribution.value == "child"
+    assert completed.turn.note_update.evidence.value == "direct_explanation"
+    assert completed.turn.note_update.text != HOME_TEACHING_CATALOG["number-count"].learned_line
+    async with database.sessions() as db:
+        record = await db.get(ConversationRecord, started.conversation_id)
+        assert record is not None
+        assert record.state_json["_child_note_evidence_encrypted"] is True
+        assert child_method not in str(record.state_json["child_note_evidence"])
+    restored = await repository.get_state(started.conversation_id)
+    assert restored.child_note_evidence["tracking"] == child_method
     await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_number_compare_accepts_counting_reason_without_forcing_pairing(
+    tmp_path: object,
+) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/compare-own-words.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    child_text = "왼쪽은 세 개고 오른쪽은 다섯 개잖아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span=child_text,
+            ),
+            SlotClaim(
+                slot_id="reason",
+                value="count_comparison",
+                factual=True,
+                evidence_span=child_text,
+            ),
+        ],
+        note_candidate="양쪽 점을 하나씩 짝지으면 오른쪽이 더 많아",
+        confidence=1,
+    )
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway([analysis])),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=13,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_compare_own_words",
+            practice_result_id="practice_compare_own_words",
+            practice_summary={
+                "curriculum_session_id": "number-compare",
+                "skill_id": "number-compare",
+                "question_count": 5,
+                "first_try_correct_count": 5,
+            },
+        )
+    )
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="edce6159-a2e3-46b4-a913-0296f0574b10",
+            type="text",
+            text=child_text,
+        ),
+    )
+
+    assert completed.turn.status.value == "completed"
+    assert completed.turn.note_update is not None
+    assert completed.turn.note_update.text == (
+        f"{HOME_TEACHING_CATALOG['number-compare'].note_context}에 대해 "
+        f"“{child_text}”라고 배웠어. 그래서 오른쪽에 점이 더 많다는 걸 알았어."
+    )
+    assert child_text in completed.turn.note_update.text
+    assert completed.turn.note_update.attribution.value == "child"
+    assert "짝" not in completed.turn.note_update.text
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completion_speaker_cannot_invent_an_unprovided_strategy(
+    tmp_path: object,
+) -> None:
+    child_text = "왼쪽은 세 개고 오른쪽은 다섯 개잖아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span=child_text,
+            ),
+            SlotClaim(
+                slot_id="reason",
+                value="count_comparison",
+                factual=True,
+                evidence_span=child_text,
+            ),
+        ],
+        confidence=1,
+    )
+
+    class InventingGateway(FakeGateway):
+        speak_called = False
+
+        async def speak(self, context: SpeakerContext) -> SpeakerOutput:
+            self.speak_called = True
+            return SpeakerOutput(text="양쪽 점을 하나씩 짝지으면 알 수 있어!")
+
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/completion-speaker.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    gateway = InventingGateway([analysis])
+    service = ConversationService(
+        repository,
+        ConversationEngine(gateway),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=14,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_no_invented_completion",
+            practice_result_id="practice_no_invented_completion",
+            practice_summary={
+                "curriculum_session_id": "number-compare",
+                "skill_id": "number-compare",
+                "question_count": 5,
+                "first_try_correct_count": 5,
+            },
+        )
+    )
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="5bc84233-30c5-469e-a426-15f7d3101fb7",
+            type="text",
+            text=child_text,
+        ),
+    )
+
+    assert gateway.speak_called is False
+    assert "짝" not in completed.turn.mormi.text
+    assert completed.turn.mormi.text == "네가 알려준 방법으로 내가 끝까지 해냈어!"
+    await database.dispose()
+
+
+def test_number_compare_declares_multiple_reviewed_valid_explanations() -> None:
+    from mormi_api.content import home_teaching_task
+
+    spec = HOME_TEACHING_CATALOG["number-compare"]
+    task = home_teaching_task(spec, skill_id=spec.id)
+
+    assert len(spec.valid_explanations) >= 2
+    assert all(task.slots["reason"].accepts(value) for value in spec.valid_explanations)
 
 
 @pytest.mark.asyncio

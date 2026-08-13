@@ -455,7 +455,11 @@ class SessionState(BaseModel):
     unrelated_count: int = 0
     task_start_level: ExpressionLevel | None = None
     task_max_hint: HintLevel = HintLevel.H0
-    direct_note_candidate: str | None = None
+    # Safe, fact-checked child wording is tracked per note slot.  Structured
+    # choices/fills are tracked separately so provenance, wording and
+    # attribution cannot be conflated at completion.
+    child_note_evidence: dict[str, str] = Field(default_factory=dict)
+    supported_note_slots: list[str] = Field(default_factory=list)
     all_tasks_direct: bool = True
     raw_storage_enabled: bool = True
     retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT

@@ -497,8 +497,8 @@ type TurnContract = {
   "notes": [
     {
       "note_id": "note_123",
-      "skill_id": "basic_addition",
-      "text": "3과 5를 더하면 8이 된다.",
+      "skill_id": "number-compare",
+      "text": "왼쪽 점 3개와 오른쪽 점 5개를 비교하는 방법에 대해 “왼쪽은 세 개고 오른쪽은 다섯 개잖아”라고 배웠어. 그래서 오른쪽에 점이 더 많다는 걸 알았어.",
       "attribution": "child",
       "evidence": "direct_explanation",
       "attribution_label": "아이가 알려줌"
@@ -507,8 +507,11 @@ type TurnContract = {
 }
 ```
 
-- `child`: 아이가 독립적으로 완결된 사실 문장을 설명
+- `child`: 아이가 직접 제공한 사실 근거를 검수된 문제 맥락으로만 완결함. 노트
+  본문 안의 인용 구절은 아이 원문에서 검증된 부분이며, 새 풀이 전략을 보충하지 않음
 - `coauthored`: 선택·빈칸·조작·도움 카드로 함께 완성
+- 결과·방향만 말한 `600원이야`, `오른쪽이 커`는 일반화 근거가 아니므로 그 자체로
+  별노트를 만들지 않음
 - 프론트는 노트 본문과 귀속을 새로 만들거나 수정하지 않습니다.
 
 ## 11. 보호된 대화 기록

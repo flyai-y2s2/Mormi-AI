@@ -44,6 +44,7 @@ class DuplicateResponseError(RuntimeError):
 
 class Repository:
     PERMANENT_STORAGE_MIGRATION = "2026-08-permanent-raw-storage"
+    _STATE_EVIDENCE_ENCRYPTED = "_child_note_evidence_encrypted"
 
     def __init__(
         self,
@@ -106,7 +107,7 @@ class Repository:
                     learning_session_id=state.learning_session_id,
                     scene=state.scene.value,
                     scenario_id=state.scenario_id,
-                    state_json=state.model_dump(mode="json"),
+                    state_json=self._dump_state(state),
                     state_version=state.state_version,
                     status=state.status.value,
                     raw_retention_until=state.raw_retention_until,
@@ -122,7 +123,7 @@ class Repository:
             record = await db.get(ConversationRecord, conversation_id)
             if not record:
                 raise ConversationNotFoundError(conversation_id)
-            return SessionState.model_validate(record.state_json)
+            return self._load_state(record.state_json)
 
     async def get_profile(self, learner_id: int) -> LearnerProfile:
         async with self.database.sessions() as db:
@@ -233,7 +234,7 @@ class Repository:
             current_turn.response_category = analysis.response_category.value
 
             next_state.updated_at = utc_now()
-            conversation_record.state_json = next_state.model_dump(mode="json")
+            conversation_record.state_json = self._dump_state(next_state)
             conversation_record.state_version = next_state.state_version
             conversation_record.status = next_state.status.value
             conversation_record.updated_at = next_state.updated_at
@@ -345,6 +346,32 @@ class Repository:
                     .values(raw_retention_until=None)
                 )
             await db.commit()
+
+    def _dump_state(self, state: SessionState) -> dict[str, object]:
+        """Serialize state without leaving child note evidence in plaintext."""
+
+        payload: dict[str, object] = state.model_dump(mode="json")
+        evidence = state.child_note_evidence
+        if evidence:
+            payload["child_note_evidence"] = {
+                slot_id: self.cipher.encrypt(text)
+                for slot_id, text in evidence.items()
+            }
+            payload[self._STATE_EVIDENCE_ENCRYPTED] = True
+        return payload
+
+    def _load_state(self, payload: dict[str, object]) -> SessionState:
+        """Decrypt transient note evidence before giving state to the engine."""
+
+        data = dict(payload)
+        encrypted = data.pop(self._STATE_EVIDENCE_ENCRYPTED, False)
+        evidence = data.get("child_note_evidence")
+        if encrypted and isinstance(evidence, dict):
+            data["child_note_evidence"] = {
+                str(slot_id): self.cipher.decrypt(str(value))
+                for slot_id, value in evidence.items()
+            }
+        return SessionState.model_validate(data)
 
     async def migrate_existing_storage_to_permanent(self) -> None:
         """One-time upgrade for conversations created before pilot consent became mandatory."""

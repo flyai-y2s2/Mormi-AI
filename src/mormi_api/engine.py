@@ -189,7 +189,17 @@ class ConversationEngine:
     async def _speak_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
         decision = PedagogicalDecision.model_validate(graph_state["decision"])
         context = decision.speaker_context
-        if decision.dialogue_act in {"unsafe_redirect", "show_help_card", "joint_mode"}:
+        if decision.dialogue_act in {
+            "unsafe_redirect",
+            "show_help_card",
+            "joint_mode",
+            # These two turns are also rendered beside a star-note update.
+            # Their reviewed fallback deliberately contains no mathematical
+            # claim, so a speaker model can never add a strategy the child did
+            # not teach while celebrating or moving to the next task.
+            "session_complete",
+            "task_transition",
+        }:
             return {"speaker_text": context.fallback_text}
         try:
             output = await self.gateway.speak(context)
@@ -310,24 +320,27 @@ class ConversationEngine:
             if analysis.response_category in successful_categories
             else {}
         )
+        if response.type is ResponseType.TEXT and response.text:
+            newly_verified = self._filter_text_explanation_claims(
+                task,
+                response.text,
+                analysis,
+                newly_verified,
+            )
         next_state.verified_slots.update(newly_verified)
         if newly_verified:
+            self._record_note_provenance(
+                next_state,
+                task,
+                response,
+                analysis,
+                newly_verified,
+            )
             if "child_menu" in newly_verified:
                 next_state.scenario_data["child_menu_id"] = newly_verified["child_menu"]
                 next_state.scenario_data.pop("last_over_budget_total", None)
                 next_state.scenario_data.pop("last_child_menu_id", None)
             next_state.unrelated_count = 0
-            if (
-                state.expression_level is ExpressionLevel.L4
-                and state.hint_level is HintLevel.H0
-                and analysis.response_category is ResponseCategory.CORRECT_FULL
-                and analysis.note_candidate.strip()
-            ):
-                next_state.direct_note_candidate = self._safe_direct_note(
-                    task,
-                    analysis.note_candidate,
-                    next_state.verified_slots,
-                )
             if task.complete(next_state.verified_slots):
                 return self._complete_task(
                     next_state,
@@ -498,26 +511,13 @@ class ConversationEngine:
         child_text: str | None,
         previous_question: str,
     ) -> PedagogicalDecision:
-        direct = bool(
-            state.direct_note_candidate
-            and state.task_start_level is ExpressionLevel.L4
-            and state.task_max_hint is HintLevel.H0
-        )
-        note = None
+        note, direct = self._note_from_provenance(state, task)
         if task.note_policy != "none":
             state.all_tasks_direct = state.all_tasks_direct and direct
-            note = NoteUpdate(
-                skill_id=task.skill_id,
-                text=state.direct_note_candidate or task.coauthored_note,
-                attribution=NoteAttribution.CHILD if direct else NoteAttribution.COAUTHORED,
-                evidence=(
-                    NoteEvidence.DIRECT_EXPLANATION
-                    if direct
-                    else NoteEvidence.SUPPORTED_COMPLETION
-                ),
-                attribution_label="아이가 알려줌" if direct else "아이와 같이 공부함",
-            )
-        contribution = task.transition_text or task.slots[task.required_slots[-1]].fact_sentence
+        # The speaker may celebrate only what the note provenance permits.
+        # Feeding a catalog rule here used to make Mormi suddenly announce a
+        # strategy the child never mentioned (for example, pairing dots).
+        contribution = note.text if note else ""
 
         if state.task_index + 1 < len(state.task_ids):
             state.task_index += 1
@@ -532,7 +532,8 @@ class ConversationEngine:
             state.verified_slots = {}
             state.expression_failures = 0
             state.concept_failures = 0
-            state.direct_note_candidate = None
+            state.child_note_evidence = {}
+            state.supported_note_slots = []
             next_task = get_task(state.current_task_id, state.scenario_data)
             next_step = next_task.step_for(state.expression_level, state.verified_slots)
             fallback = self._success_then_question(contribution, next_step.prompt)
@@ -551,7 +552,7 @@ class ConversationEngine:
                     dialogue_act="task_transition",
                     previous_question=previous_question,
                     required_question=next_step.prompt,
-                    verified_facts=[contribution],
+                    verified_facts=[contribution] if contribution else [],
                     analysis=analysis,
                     child_text=child_text,
                     fallback=fallback,
@@ -579,7 +580,7 @@ class ConversationEngine:
                 dialogue_act="session_complete",
                 previous_question=previous_question,
                 required_question=None,
-                verified_facts=[contribution],
+                verified_facts=[contribution] if contribution else [],
                 analysis=analysis,
                 child_text=child_text,
                 fallback=fallback,
@@ -885,15 +886,12 @@ class ConversationEngine:
         return combined if len(combined) <= 50 else ConversationEngine._fit_50(question)
 
     @staticmethod
-    def _safe_direct_note(
+    def _safe_child_note_text(
         task: TaskDefinition,
-        candidate: str,
-        newly_verified: Mapping[str, object],
+        child_text: str,
     ) -> str | None:
-        text = re.sub(r"\s+", " ", candidate).strip()
+        text = re.sub(r"\s+", " ", child_text).strip()
         if not text or "?" in text or len(text) > 120:
-            return None
-        if set(task.required_slots) - set(newly_verified):
             return None
         allowed_numbers = {
             number.replace(",", "")
@@ -912,7 +910,160 @@ class ConversationEngine:
             return None
         if re.search(r"(틀렸|맞았|정답|오답)", text):
             return None
+        compact = re.sub(r"[\s,.!?]", "", text)
+        if re.fullmatch(
+            r"(?:잘)?모르겠(?:어|다)?|몰라|"
+            r"(?:왼쪽|오른쪽)(?:이|가)?(?:더)?"
+            r"(?:커|커요|많아|많아요|많잖아|작아|적어|이야|야)?|"
+            r"(?:\d[\d,]*|(?:영|일|이|삼|사|오|육|칠|팔|구|십|백|천|만|"
+            r"한|두|세|네|다섯|여섯|일곱|여덟|아홉)+)"
+            r"(?:원|개|명)?(?:이야|야|잖아|입니다)?",
+            compact,
+        ):
+            return None
         return text
+
+    @classmethod
+    def _claim_evidence_text(
+        cls,
+        task: TaskDefinition,
+        child_text: str,
+        evidence_span: str,
+    ) -> str | None:
+        """Return only wording that is visibly present in the child turn.
+
+        The classifier may locate the relevant clause, but it may not rewrite
+        that clause for the note.  Exact-substring checking keeps an unrelated
+        or incorrect clause out and prevents a model-authored strategy from
+        being attributed to the child.
+        """
+
+        span = re.sub(r"\s+", " ", evidence_span).strip()
+        source = re.sub(r"\s+", " ", child_text).strip()
+        if not span or span not in source:
+            return None
+        return cls._safe_child_note_text(task, span)
+
+    @classmethod
+    def _filter_text_explanation_claims(
+        cls,
+        task: TaskDefinition,
+        child_text: str,
+        analysis: UtteranceAnalysis,
+        verified: Mapping[str, str | int | float | bool],
+    ) -> dict[str, str | int | float | bool]:
+        """Fail closed when a method/reason claim has no explanatory source.
+
+        This is deliberately narrower than general answer verification.  A
+        result such as ``600원이야`` can still be remembered as an answer,
+        while ``오른쪽이 더 많아`` cannot masquerade as the reason for a
+        comparison and prematurely close the teaching task.
+        """
+
+        filtered = dict(verified)
+        for slot_id in task.text_explanation_slots:
+            if slot_id not in filtered:
+                continue
+            supported = any(
+                claim.factual
+                and claim.slot_id == slot_id
+                and cls._claim_evidence_text(task, child_text, claim.evidence_span)
+                for claim in analysis.claims
+            )
+            if not supported:
+                filtered.pop(slot_id, None)
+        return filtered
+
+    @classmethod
+    def _record_note_provenance(
+        cls,
+        state: SessionState,
+        task: TaskDefinition,
+        response: ChildResponse,
+        analysis: UtteranceAnalysis,
+        newly_verified: Mapping[str, object],
+    ) -> None:
+        note_slots = set(task.effective_note_slots)
+        verified_note_slots = note_slots.intersection(newly_verified)
+        if not verified_note_slots or task.note_policy == "none":
+            return
+
+        if response.type is ResponseType.TEXT and response.text:
+            factual_claims = {
+                claim.slot_id: claim
+                for claim in analysis.claims
+                if claim.factual and claim.slot_id in verified_note_slots
+            }
+            for slot_id, claim in factual_claims.items():
+                # No inferred fallback: missing or rewritten evidence fails
+                # closed.  Task completion may still proceed, but it cannot
+                # produce a direct-attribution note without an exact source.
+                evidence = cls._claim_evidence_text(
+                    task,
+                    response.text,
+                    claim.evidence_span,
+                )
+                if evidence:
+                    state.child_note_evidence[slot_id] = evidence
+            return
+
+        supported = set(state.supported_note_slots)
+        supported.update(verified_note_slots)
+        state.supported_note_slots = sorted(supported)
+
+    @staticmethod
+    def _note_from_provenance(
+        state: SessionState,
+        task: TaskDefinition,
+    ) -> tuple[NoteUpdate | None, bool]:
+        if task.note_policy == "none":
+            return None, True
+
+        note_slots = task.effective_note_slots
+        direct_slots = set(state.child_note_evidence)
+        supported_slots = set(state.supported_note_slots)
+        all_direct = set(note_slots).issubset(direct_slots)
+
+        if all_direct:
+            # Keep the child's exact evidence, but add only a reviewed,
+            # strategy-neutral context.  This turns fragments such as
+            # "손가락 하나씩 펴면서" into a self-contained note without
+            # replacing them with the curriculum's preferred method.
+            pieces = list(
+                dict.fromkeys(state.child_note_evidence[slot_id] for slot_id in note_slots)
+            )
+            evidence = " ".join(piece.rstrip(". ") for piece in pieces)
+            text = f"{task.note_context}에 대해 “{evidence}”라고 배웠어."
+            if task.note_direct_conclusion:
+                text = f"{text} {task.note_direct_conclusion}"
+            return (
+                NoteUpdate(
+                    skill_id=task.skill_id,
+                    text=text,
+                    attribution=NoteAttribution.CHILD,
+                    evidence=NoteEvidence.DIRECT_EXPLANATION,
+                    attribution_label="아이가 알려줌",
+                ),
+                True,
+            )
+
+        if set(note_slots).issubset(direct_slots | supported_slots):
+            return (
+                NoteUpdate(
+                    skill_id=task.skill_id,
+                    text=task.coauthored_note,
+                    attribution=NoteAttribution.COAUTHORED,
+                    evidence=NoteEvidence.SUPPORTED_COMPLETION,
+                    attribution_label="아이와 같이 공부함",
+                ),
+                False,
+            )
+
+        # Completion alone is not evidence for a note.  If neither safe child
+        # wording nor a reviewed structured interaction covers the note slots,
+        # emitting the curriculum line would attribute knowledge the child
+        # never expressed.
+        return None, False
 
 
 def max_hint(left: HintLevel, right: HintLevel) -> HintLevel:

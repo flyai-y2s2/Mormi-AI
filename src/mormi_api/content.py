@@ -86,6 +86,23 @@ class TaskDefinition(BaseModel):
     base_visual: VisualContract
     misconception_tags: list[str]
     coauthored_note: str
+    # Reviewed, strategy-neutral context for a direct star-note entry.  Code
+    # wraps the child's factual wording with this context so a short phrase is
+    # understandable on its own without importing the curriculum's model
+    # strategy.
+    note_context: str = ""
+    # Optional reviewed conclusion that may be appended only when every note
+    # slot was directly grounded in the child's text.  It may restate those
+    # verified slots, but must not introduce a new strategy.
+    note_direct_conclusion: str = ""
+    # Slots whose evidence belongs in the star note.  This can be narrower
+    # than the completion contract: a concrete answer may finish a task while
+    # the child's generalizable method is the only note-worthy contribution.
+    note_slots: list[str] = Field(default_factory=list)
+    # Free-text claims for these slots need an exact, note-worthy explanatory
+    # span.  A bare result may fill an answer slot, but cannot satisfy a method
+    # or reason slot even if the classifier overclaims it.
+    text_explanation_slots: list[str] = Field(default_factory=list)
     behavior: str = "teaching"
     note_policy: str = "stage"
     transition_text: str | None = None
@@ -106,6 +123,10 @@ class TaskDefinition(BaseModel):
 
     def complete(self, verified_slots: Mapping[str, object]) -> bool:
         return not self.missing_slots(verified_slots)
+
+    @property
+    def effective_note_slots(self) -> list[str]:
+        return self.note_slots or self.required_slots
 
     def validated_claims(
         self,
@@ -135,6 +156,7 @@ class HomeTeachingSpec(BaseModel):
     title: str
     misconception_prompt: str = Field(max_length=50)
     learned_line: str = Field(max_length=120)
+    note_context: str = Field(min_length=1, max_length=80)
     fill_before: str
     fill_after: str
     fill_correct: str
@@ -144,6 +166,9 @@ class HomeTeachingSpec(BaseModel):
     short_options: list[str] = Field(min_length=2, max_length=6)
     hint: str
     help_lines: list[str] = Field(min_length=1, max_length=4)
+    # Reviewed alternatives let the classifier recognize mathematically valid
+    # child explanations without forcing one textbook strategy or wording.
+    valid_explanations: list[str] = Field(default_factory=list)
     misconception: str
     sample_problem: dict[str, Any]
 
@@ -181,12 +206,14 @@ class HomeTeachingSpec(BaseModel):
             self.misconception_prompt,
             self.short_prompt,
             self.learned_line,
+            self.note_context,
             self.fill_before,
             self.fill_after,
             self.hint,
             *self.help_lines,
             *self.short_options,
             *self.fill_options,
+            *self.valid_explanations,
             prompt,
             *(str(answer) for answer in answers),
         ]
@@ -489,6 +516,7 @@ QUEUE_TASK = TaskDefinition(
         "각 줄의 사람을 세고, 앞에 기다리는 사람이 적은 줄에 서면 "
         "내 차례가 더 빨리 와."
     ),
+    note_context="왼쪽 줄과 오른쪽 줄의 사람 수를 비교하는 방법",
 )
 
 
@@ -508,6 +536,7 @@ def calculation_task(
     method = "carry" if operation == "addition" else "regroup"
     method_label = "올림" if operation == "addition" else "받아내림"
     operation_phrase = "더해" if operation == "addition" else "빼서"
+    operation_label = "더하기" if operation == "addition" else "빼기"
     place_action = "더해" if operation == "addition" else "빼"
     return TaskDefinition(
         id=task_id,
@@ -690,6 +719,7 @@ def calculation_task(
         ),
         misconception_tags=[f"{method}_omission", "place_value_error", "operation_confusion"],
         coauthored_note=f"자리값을 맞추고 {method_label}해서 계산하면 {result:,}원이야.",
+        note_context=f"{left:,}과 {right:,}을 {operation_label}로 계산하는 방법",
     )
 
 
@@ -841,6 +871,7 @@ def queue_task(
         type="cafe_queues",
         data={"left_people": left, "right_people": right, "show_counts": False},
     )
+    task.note_context = f"왼쪽 {left}명과 오른쪽 {right}명의 줄을 비교하는 방법"
     task.note_policy = note_policy
     task.transition_text = "사람이 적은 줄을 찾았구나."
     return task
@@ -982,6 +1013,11 @@ def menu_selection_task(
             ["budget_exceeded", "price_comparison_error"] if budget is not None else []
         ),
         coauthored_note="메뉴 가격을 더한 금액이 예산보다 크면 다른 메뉴를 골라야 해.",
+        note_context=(
+            f"{budget:,}원 안에서 두 메뉴를 고르는 방법"
+            if budget is not None
+            else "메뉴판에서 메뉴를 고르는 방법"
+        ),
         behavior=behavior,
         note_policy=note_policy,
         transition_text="네 메뉴도 골랐구나.",
@@ -1183,6 +1219,7 @@ def simple_calculation_task(
         ),
         misconception_tags=["operation_confusion", "calculation_error"],
         coauthored_note=coauthored_note,
+        note_context=f"{left:,}원과 {right:,}원을 {operation_label}로 계산하는 방법",
         behavior=behavior,
         note_policy=note_policy,
         transition_text=f"계산하면 {result:,}원이구나.",
@@ -1270,9 +1307,17 @@ def home_teaching_task(
             ),
             "rule": SlotDefinition(
                 id="rule",
-                description=f"{spec.title}에서 사용하는 핵심 방법 전체",
+                description=f"{spec.title}를 해결하는 사실이 맞는 설명 또는 검수된 방법",
                 expected=expected_rule,
-                aliases=[expected_rule.rstrip(".!?")],
+                aliases=list(
+                    dict.fromkeys(
+                        [
+                            expected_rule.rstrip(".!?"),
+                            spec.short_correct,
+                            *spec.valid_explanations,
+                        ]
+                    )
+                ),
                 fact_sentence=expected_rule,
             )
         },
@@ -1393,6 +1438,9 @@ def home_teaching_task(
         ),
         misconception_tags=[spec.misconception],
         coauthored_note=expected_rule,
+        note_context=spec.note_context,
+        note_slots=["rule"],
+        text_explanation_slots=["rule"],
     )
     if spec.id == "number-count":
         _configure_number_count_task(
@@ -1403,6 +1451,14 @@ def home_teaching_task(
             short_prompt=spec.short_prompt,
             short_options=spec.short_options,
             short_correct=spec.short_correct,
+        )
+    elif spec.id == "number-compare":
+        _configure_number_compare_task(
+            task,
+            expected_answer=expected_answer,
+            answer_choices=answer_choices,
+            answer_effects=answer_effects,
+            spec=spec,
         )
     return task
 
@@ -1450,7 +1506,10 @@ def _configure_number_count_task(
         ),
         "tracking": SlotDefinition(
             id="tracking",
-            description="센 점을 놓치지 않도록 점마다 하나씩 가리키는 방법",
+            description=(
+                "센 점을 놓치지 않도록 아이가 실제로 쓴 구체적인 세기 방법 "
+                "(가리키기, 손가락 펴기, 순서대로 세기 등)"
+            ),
             expected="point_each_dot",
             aliases=[
                 "하나씩 가리키기",
@@ -1460,11 +1519,15 @@ def _configure_number_count_task(
                 "하나씩 누르기",
                 "점마다 누르기",
                 "하나씩 짚기",
+                "손가락을 하나씩 펴며 세기",
+                "손가락 하나씩 펴기",
             ],
             fact_sentence="점을 하나씩 가리키며 세는구나.",
         ),
     }
     task.required_slots = ["answer", "tracking"]
+    task.note_slots = ["tracking"]
+    task.text_explanation_slots = ["tracking"]
     task.steps = {
         ExpressionLevel.L4: [
             StepDefinition(
@@ -1502,9 +1565,9 @@ def _configure_number_count_task(
                 input=text_input(
                     "tracking",
                     "count_sequence",
-                    placeholder="손가락으로 하는 방법을 알려줘",
+                    placeholder="네가 센 방법을 알려줘",
                 ),
-                fallback_text="셀 때 손가락은 어떻게 하면 돼?",
+                fallback_text="나는 점을 하나 놓칠 때가 있어. 너는 어떻게 세었어?",
             ),
         ],
         ExpressionLevel.L2: [
@@ -1533,7 +1596,7 @@ def _configure_number_count_task(
                     )
                     for index, label in enumerate(short_options)
                 },
-                fallback_text="손가락으로 할 방법을 같이 골라 보자.",
+                fallback_text="점을 놓치지 않을 방법을 같이 골라 보자.",
             ),
         ],
         ExpressionLevel.L1: [
@@ -1580,6 +1643,171 @@ def _configure_number_count_task(
                         "completion_values": {
                             "answer": expected_answer,
                             "tracking": "point_each_dot",
+                        },
+                    },
+                ),
+                fallback_text="도움 카드 문장을 나와 같이 읽어볼까?",
+            )
+        ],
+    }
+
+
+def _configure_number_compare_task(
+    task: TaskDefinition,
+    *,
+    expected_answer: str | int | float | bool,
+    answer_choices: list[ChoiceOption],
+    answer_effects: dict[str, dict[str, str | int | float | bool]],
+    spec: HomeTeachingSpec,
+) -> None:
+    """Separate the comparison conclusion from the child's reason.
+
+    A short conclusion such as ``오른쪽`` is useful, but it is not yet a
+    note-worthy explanation.  Conversely, correctly stating the two counts is
+    a legitimate way to explain the comparison; the child must not be forced
+    to recite a single strategy such as one-to-one pairing.
+    """
+
+    guided_answer_choices = [
+        choice for choice in answer_choices if choice.label in {"왼쪽", "오른쪽"}
+    ]
+    guided_answer_effects = {
+        choice.id: answer_effects[choice.id] for choice in guided_answer_choices
+    }
+
+    task.slots = {
+        "answer": SlotDefinition(
+            id="answer",
+            description="점이 더 많은 쪽",
+            expected=expected_answer,
+            aliases=["오른쪽", "오른쪽이 더 많아", "오른쪽이 커", "5개인 쪽"],
+            fact_sentence="오른쪽에 점이 더 많아.",
+        ),
+        "reason": SlotDefinition(
+            id="reason",
+            description=(
+                "왼쪽 3개와 오른쪽 5개를 세거나 3과 5를 비교해 "
+                "오른쪽이 더 많음을 설명한 근거"
+            ),
+            expected="count_comparison",
+            aliases=[
+                *spec.valid_explanations,
+                "왼쪽은 3개고 오른쪽은 5개",
+                "왼쪽 3개 오른쪽 5개",
+                "왼쪽은 세 개고 오른쪽은 다섯 개",
+                "3보다 5가 커",
+                "5가 3보다 커",
+            ],
+            fact_sentence="왼쪽은 3개, 오른쪽은 5개라서 오른쪽이 더 많아.",
+        ),
+    }
+    task.required_slots = ["answer", "reason"]
+    task.note_slots = ["answer", "reason"]
+    task.text_explanation_slots = ["reason"]
+    task.note_direct_conclusion = "그래서 오른쪽에 점이 더 많다는 걸 알았어."
+    task.steps = {
+        ExpressionLevel.L4: [
+            StepDefinition(
+                id="free_comparison_and_reason",
+                prompt=spec.misconception_prompt,
+                target_slots=["answer", "reason"],
+                input=text_input(
+                    "answer",
+                    "reason",
+                    placeholder="어느 쪽인지와 까닭을 알려줘",
+                ),
+                fallback_text=spec.misconception_prompt,
+            )
+        ],
+        ExpressionLevel.L3: [
+            StepDefinition(
+                id="short_comparison",
+                prompt="왼쪽과 오른쪽 중 어느 쪽에 점이 더 많아?",
+                target_slots=["answer"],
+                input=text_input("answer", placeholder="어느 쪽인지 짧게 알려줘"),
+                fallback_text="내가 한꺼번에 물어봤네. 어느 쪽이 더 많아?",
+            ),
+            StepDefinition(
+                id="short_reason",
+                prompt="왜 오른쪽에 점이 더 많다고 생각했어?",
+                target_slots=["reason"],
+                input=text_input("reason", placeholder="네가 본 수를 알려줘"),
+                fallback_text="왜 오른쪽이 더 많은지만 알려줘.",
+            ),
+        ],
+        ExpressionLevel.L2: [
+            StepDefinition(
+                id="choose_comparison",
+                prompt="왼쪽과 오른쪽 중 어느 쪽에 점이 더 많아?",
+                target_slots=["answer"],
+                input=choice_input(["answer"], answer_choices),
+                choice_effects=answer_effects,
+                fallback_text="말로 어렵다면 어느 쪽인지 같이 골라 보자.",
+            ),
+            StepDefinition(
+                id="choose_reason",
+                prompt="오른쪽에 점이 더 많은 까닭은 무엇일까?",
+                target_slots=["reason"],
+                input=choice_input(
+                    ["reason"],
+                    [
+                        option("counts_right", "왼쪽은 3개, 오른쪽은 5개라서"),
+                        option("counts_left", "왼쪽은 5개, 오른쪽은 3개라서"),
+                        option("counts_same", "두 쪽 모두 5개라서"),
+                    ],
+                ),
+                choice_effects={
+                    "counts_right": {"reason": "count_comparison"},
+                    "counts_left": {},
+                    "counts_same": {},
+                },
+                fallback_text="두 쪽에서 센 수를 보고 까닭을 같이 골라 보자.",
+            ),
+        ],
+        ExpressionLevel.L1: [
+            StepDefinition(
+                id="guided_comparison",
+                prompt="점이 5개인 쪽은 어느 쪽이야?",
+                target_slots=["answer"],
+                input=choice_input(["answer"], guided_answer_choices),
+                choice_effects=guided_answer_effects,
+                fallback_text="점이 5개인 쪽부터 같이 찾아보자.",
+            ),
+            StepDefinition(
+                id="complete_comparison",
+                prompt="왼쪽은 3개, 오른쪽은 5개라서 □.",
+                target_slots=["reason"],
+                input=InputContract(
+                    kind=InputKind.FILL,
+                    target_slots=["reason"],
+                    choices=[
+                        option("right_more", "오른쪽이 더 많아"),
+                        option("left_more", "왼쪽이 더 많아"),
+                        option("same", "두 쪽이 똑같아"),
+                    ],
+                    config={"sentence": "왼쪽은 3개, 오른쪽은 5개라서 □."},
+                ),
+                choice_effects={
+                    "right_more": {"reason": "count_comparison"},
+                    "left_more": {},
+                    "same": {},
+                },
+                fallback_text="센 수를 문장에 넣어 같이 마무리해 보자.",
+            ),
+        ],
+        ExpressionLevel.L0: [
+            StepDefinition(
+                id="joint_comparison",
+                prompt="도움 카드 문장을 나와 같이 읽어볼까?",
+                target_slots=["answer", "reason"],
+                input=InputContract(
+                    kind=InputKind.JOINT,
+                    target_slots=["answer", "reason"],
+                    config={
+                        "text": task.coauthored_note,
+                        "completion_values": {
+                            "answer": expected_answer,
+                            "reason": "count_comparison",
                         },
                     },
                 ),
@@ -1856,6 +2084,15 @@ def validate_content() -> None:
     for task in tasks_to_validate:
         if set(task.required_slots) - set(task.slots):
             raise ValueError(f"{task.id}: required slot is undefined")
+        if task.note_policy != "none":
+            if not task.effective_note_slots:
+                raise ValueError(f"{task.id}: note-producing task needs note slots")
+            if set(task.effective_note_slots) - set(task.required_slots):
+                raise ValueError(f"{task.id}: note slots must be required completion slots")
+            if not task.note_context.strip():
+                raise ValueError(f"{task.id}: note-producing task needs reviewed note context")
+        if set(task.text_explanation_slots) - set(task.required_slots):
+            raise ValueError(f"{task.id}: explanation slots must be required completion slots")
         for level in ExpressionLevel:
             if level not in task.steps or not task.steps[level]:
                 raise ValueError(f"{task.id}: missing steps for {level}")
