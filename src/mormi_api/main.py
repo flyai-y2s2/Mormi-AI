@@ -181,6 +181,25 @@ def _service_error_code(error: ValueError) -> tuple[str, str | None, list[dict[s
     return "conversation_configuration_invalid", None, []
 
 
+def _model_error_code(error: ModelUnavailableError | ModelOutputError) -> str:
+    allowed = {
+        "model_connection_failed",
+        "model_bad_request",
+        "model_auth_failed",
+        "model_forbidden",
+        "model_not_found",
+        "model_rate_limited",
+        "model_provider_unavailable",
+        "structured_schema_not_strict",
+        "structured_schema_too_complex",
+        "structured_schema_invalid",
+    }
+    code = str(error)
+    if code in allowed:
+        return code
+    return "model_output_invalid" if isinstance(error, ModelOutputError) else "model_unavailable"
+
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_error(
     _: Request,
@@ -288,9 +307,11 @@ async def respond(
         )
         raise HTTPException(status_code=409, detail=detail.model_dump(mode="json")) from error
     except (ModelUnavailableError, ModelOutputError) as error:
+        code = _model_error_code(error)
         raise HTTPException(
             status_code=503,
-            detail="발화 이해 모델을 사용할 수 없습니다. 세션 상태는 바뀌지 않았습니다.",
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
         ) from error
 
 

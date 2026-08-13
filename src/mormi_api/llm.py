@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from anthropic import AsyncAnthropic, transform_schema
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, transform_schema
 from pydantic import BaseModel, ValidationError
 
 from .content import TaskDefinition
@@ -35,7 +35,55 @@ def structured_output_schema(model: type[BaseModel]) -> dict[str, Any]:
     keywords to the subset accepted by the Messages API.
     """
 
-    return transform_schema(model)
+    schema = transform_schema(model)
+    _require_all_object_properties(schema)
+    return schema
+
+
+def _require_all_object_properties(node: object) -> None:
+    """Keep Claude's grammar compact by making defaultable fields explicit.
+
+    The application Pydantic models keep defaults for deterministic code paths,
+    but the classifier and speaker must return a complete decision object. Making
+    every schema property required removes optional grammar branches while nullable
+    fields can still return ``null``.
+    """
+
+    if isinstance(node, dict):
+        properties = node.get("properties")
+        if node.get("type") == "object" and isinstance(properties, dict):
+            node["required"] = list(properties)
+        for value in node.values():
+            _require_all_object_properties(value)
+    elif isinstance(node, list):
+        for value in node:
+            _require_all_object_properties(value)
+
+
+def _safe_provider_error_code(error: APIConnectionError | APIStatusError) -> str:
+    """Classify provider failures without exposing prompts or child utterances."""
+
+    if isinstance(error, APIConnectionError):
+        return "model_connection_failed"
+    status = error.status_code
+    body_text = str(error.body).lower()
+    if status == 400:
+        if "additionalproperties" in body_text:
+            return "structured_schema_not_strict"
+        if "schema is too complex" in body_text:
+            return "structured_schema_too_complex"
+        if "output_config" in body_text or "json_schema" in body_text or "schema" in body_text:
+            return "structured_schema_invalid"
+        return "model_bad_request"
+    if status == 401:
+        return "model_auth_failed"
+    if status == 403:
+        return "model_forbidden"
+    if status == 404:
+        return "model_not_found"
+    if status == 429:
+        return "model_rate_limited"
+    return "model_provider_unavailable"
 
 
 class ClaudeGateway:
@@ -63,19 +111,22 @@ class ClaudeGateway:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         prompt = self._classifier_prompt(state, task, previous_question, response)
         schema = structured_output_schema(UtteranceAnalysis)
-        message = await self.client.messages.create(
-            model=self.settings.classifier_model,
-            max_tokens=1300,
-            temperature=0,
-            system=CLASSIFIER_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-            output_config={
-                "format": {
-                    "type": "json_schema",
-                    "schema": schema,
-                }
-            },
-        )
+        try:
+            message = await self.client.messages.create(
+                model=self.settings.classifier_model,
+                max_tokens=1300,
+                temperature=0,
+                system=CLASSIFIER_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema,
+                    }
+                },
+            )
+        except (APIConnectionError, APIStatusError) as error:
+            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
         if message.stop_reason in {"refusal", "max_tokens"}:
             raise ModelOutputError(f"Classifier stopped with {message.stop_reason}")
         raw = _text_content(message.content)
@@ -88,24 +139,27 @@ class ClaudeGateway:
         if not self.client:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         schema = structured_output_schema(SpeakerOutput)
-        message = await self.client.messages.create(
-            model=self.settings.speaker_model,
-            max_tokens=220,
-            temperature=0.35,
-            system=SPEAKER_SYSTEM,
-            messages=[
-                {
-                    "role": "user",
-                    "content": json.dumps(context.model_dump(mode="json"), ensure_ascii=False),
-                }
-            ],
-            output_config={
-                "format": {
-                    "type": "json_schema",
-                    "schema": schema,
-                }
-            },
-        )
+        try:
+            message = await self.client.messages.create(
+                model=self.settings.speaker_model,
+                max_tokens=220,
+                temperature=0.35,
+                system=SPEAKER_SYSTEM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": json.dumps(context.model_dump(mode="json"), ensure_ascii=False),
+                    }
+                ],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema,
+                    }
+                },
+            )
+        except (APIConnectionError, APIStatusError) as error:
+            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
         if message.stop_reason in {"refusal", "max_tokens"}:
             raise ModelOutputError(f"Speaker stopped with {message.stop_reason}")
         raw = _text_content(message.content)

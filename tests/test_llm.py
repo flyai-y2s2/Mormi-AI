@@ -25,6 +25,7 @@ def test_classifier_schema_is_strict_for_every_nested_object() -> None:
 
     assert len(objects) >= 2  # root UtteranceAnalysis and nested SlotClaim
     assert all(item.get("additionalProperties") is False for item in objects)
+    assert all(item.get("required") == list(item.get("properties", {})) for item in objects)
 
 
 def test_speaker_schema_is_strict() -> None:
@@ -33,3 +34,4 @@ def test_speaker_schema_is_strict() -> None:
 
     assert objects
     assert all(item.get("additionalProperties") is False for item in objects)
+    assert all(item.get("required") == list(item.get("properties", {})) for item in objects)
