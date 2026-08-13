@@ -59,11 +59,18 @@ FRONTEND_MENU = [
 ]
 
 
-def cafe_context(mormi_menu_id: str, budget: int | None = None) -> dict[str, object]:
+def cafe_context(
+    mormi_menu_id: str,
+    budget: int | None = None,
+    child_menu_id: str | None = None,
+    paid_amount: int | None = None,
+) -> dict[str, object]:
     return {
         "menu_items": FRONTEND_MENU,
         "mormi_menu_id": mormi_menu_id,
         "budget": budget,
+        "child_menu_id": child_menu_id,
+        "paid_amount": paid_amount,
     }
 
 
@@ -186,29 +193,92 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
 
 
 @pytest.mark.asyncio
-async def test_change_uses_frontend_price_and_always_subtracts_from_10000(
+async def test_change_subtracts_both_menus_from_the_cash_actually_paid(
     tmp_path: object,
 ) -> None:
+    """Change must match the general backend's `paidAmount - orderTotal`.
+
+    Mormi picks the cake (3,000) and the child picked the sandwich (4,000), so
+    a 10,000 payment leaves 3,000. Subtracting only Mormi's menu would show the
+    child 7,000 for a problem whose answer is 3,000.
+    """
     service, repository, database = await make_service(tmp_path, skills=("calculate_change",))
     started = await service.create_conversation(
         SessionCreate(
             learner_id=1,
             scene="cafe",
             scenario_id="cafe_change",
-            cafe_context=cafe_context("strawberry-cake"),
+            cafe_context=cafe_context(
+                "strawberry-cake",
+                child_menu_id="sandwich",
+                paid_amount=10000,
+            ),
         )
     )
 
     assert started.turn.visual.data["left"] == 10000
-    assert started.turn.visual.data["right"] == 3000
+    assert started.turn.visual.data["right"] == 7000
     assert "method" not in started.turn.input.target_slots
     operation = await choose(service, started.conversation_id, started.turn, "subtract")
-    completed = await choose(service, started.conversation_id, operation.turn, "7000")
+    completed = await choose(service, started.conversation_id, operation.turn, "3000")
 
     assert completed.turn.status.value == "completed"
     assert "받아내림" not in completed.turn.note_update.text  # type: ignore[union-attr]
     assert len(await repository.list_notes(1)) == 1
     await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_change_honours_a_payment_other_than_10000(tmp_path: object) -> None:
+    """The paid cash is whatever the backend graded, not a fixed 10,000."""
+    service, _repository, database = await make_service(tmp_path, skills=("calculate_change",))
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_change",
+            cafe_context=cafe_context(
+                "strawberry-cake",
+                child_menu_id="milk",
+                paid_amount=6000,
+            ),
+        )
+    )
+
+    assert started.turn.visual.data["left"] == 6000
+    assert started.turn.visual.data["right"] == 5000
+    await database.dispose()
+
+
+def test_change_requires_the_earlier_stage_results() -> None:
+    """Independent conversations cannot recover the pick or the payment."""
+    with pytest.raises(ValidationError):
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_change",
+            cafe_context=cafe_context("strawberry-cake", paid_amount=10000),
+        )
+
+    with pytest.raises(ValidationError):
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_change",
+            cafe_context=cafe_context("strawberry-cake", child_menu_id="sandwich"),
+        )
+
+    with pytest.raises(ValidationError):
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_change",
+            cafe_context=cafe_context(
+                "strawberry-cake",
+                child_menu_id="sandwich",
+                paid_amount=5000,
+            ),
+        )
 
 
 @pytest.mark.asyncio

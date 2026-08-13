@@ -1043,7 +1043,9 @@ def create_scenario_data(
     rng: Any | None = None,
 ) -> dict[str, Any]:
     chooser = rng or random.SystemRandom()
-    data: dict[str, Any] = {"payment": 10000}
+    # Cash paid is not assumed here. It is graded by the general backend at the
+    # payment stage and arrives through cafe_context.paid_amount.
+    data: dict[str, Any] = {}
     if scenario_id in {"cafe_queue", "cafe_queue_demo"}:
         left = chooser.choice(range(1, 6))
         right = chooser.choice([value for value in range(1, 6) if value != left])
@@ -1051,7 +1053,9 @@ def create_scenario_data(
     if scenario_id in MENU_SCENARIO_IDS:
         if cafe_context is None:
             raise ValueError("cafe_context is required for menu scenarios")
-        data.update(cafe_context.model_dump(mode="json"))
+        # Unset facts are omitted rather than stored as null: the engine treats
+        # the presence of `child_menu_id` as "the child has settled on a menu".
+        data.update(cafe_context.model_dump(mode="json", exclude_none=True))
     return data
 
 
@@ -1133,24 +1137,28 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
             },
         )
     if task_id == CHANGE_TASK_ID:
-        menu_price = mormi_menu.price
+        # Change is paid cash minus BOTH menus, matching the general backend's
+        # `paidAmount - orderTotal`. Subtracting only Mormi's menu would grade a
+        # different problem than the one the child was shown.
+        order_total = mormi_menu.price + child_menu.price
+        paid_amount = int(data["paid_amount"])
         return simple_calculation_task(
             task_id=task_id,
             stage_id="change",
             title="거스름돈 받기",
-            left=10000,
-            right=menu_price,
+            left=paid_amount,
+            right=order_total,
             operation="subtraction",
             left_label="낸 돈",
-            right_label=mormi_menu.name,
+            right_label="메뉴 값",
             behavior="change",
             note_policy="stage",
-            coauthored_note="거스름돈은 10,000원에서 메뉴 가격을 빼서 구해.",
+            coauthored_note="거스름돈은 낸 돈에서 메뉴 값을 빼서 구해.",
             context={
-                "payment": 10000,
-                "menu_total": menu_price,
+                "payment": paid_amount,
+                "menu_total": order_total,
                 "mormi_menu": mormi_menu.model_dump(),
-                "child_menu": None,
+                "child_menu": child_menu.model_dump(),
             },
         )
     raise KeyError(f"Unknown task: {task_id}")
@@ -1171,6 +1179,9 @@ def validate_content() -> None:
         ],
         mormi_menu_id="sample-a",
         budget=10000,
+        # The change stage requires both, so content validation supplies them.
+        child_menu_id="sample-b",
+        paid_amount=10000,
     )
     for scenario in SCENARIOS.values():
         scenario_data = create_scenario_data(
