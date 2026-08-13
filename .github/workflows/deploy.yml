@@ -120,10 +120,12 @@ jobs:
           docker pull "${IMAGE_URI}"
 
           docker rm -f mormi-ai 2>/dev/null || true
+          docker network create mormi-services 2>/dev/null || true
 
           docker run -d \
             --name mormi-ai \
             --restart unless-stopped \
+            --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
             -p 8000:8000 \
             --log-opt max-size=10m \

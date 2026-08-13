@@ -28,6 +28,13 @@ class ConversationService:
         scenario = get_scenario(request.scenario_id)
         if scenario.scene is not request.scene:
             raise ValueError("scenario_id does not belong to the requested scene")
+        if request.learning_session_id:
+            existing_id = await self.repository.conversation_id_for_learning_session(
+                request.learner_id,
+                request.learning_session_id,
+            )
+            if existing_id:
+                return await self.snapshot(existing_id)
         practice_summary = request.practice_summary
         if practice_summary:
             if request.practice_result_id:

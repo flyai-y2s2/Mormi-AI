@@ -220,6 +220,7 @@ async def test_inline_home_practice_starts_full_turn_and_retries_keep_first_snap
     retry_state = await repository.get_state(retried.conversation_id)
     stored = await repository.get_practice_summary("practice_inline_home_7")
 
+    assert retried.conversation_id == started.conversation_id
     assert retry_state.scenario_data["curriculum_session_id"] == "money-count"
     assert retried.turn.visual.data["curriculum_session_id"] == "money-count"
     assert stored is not None

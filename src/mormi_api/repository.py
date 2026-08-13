@@ -74,6 +74,25 @@ class Repository:
             record = await db.get(PracticeResultRecord, practice_result_id)
             return PracticeResult.model_validate(record.summary_json) if record else None
 
+    async def conversation_id_for_learning_session(
+        self,
+        learner_id: int,
+        learning_session_id: str,
+    ) -> str | None:
+        """Return the already-created home dialogue after a network retry."""
+
+        async with self.database.sessions() as db:
+            statement = (
+                select(ConversationRecord.conversation_id)
+                .where(
+                    ConversationRecord.learner_id == learner_id,
+                    ConversationRecord.learning_session_id == learning_session_id,
+                )
+                .order_by(ConversationRecord.created_at.desc())
+                .limit(1)
+            )
+            return (await db.execute(statement)).scalar_one_or_none()
+
     async def create_conversation(self, state: SessionState, turn: TurnContract) -> None:
         async with self.database.sessions() as db:
             db.add(
