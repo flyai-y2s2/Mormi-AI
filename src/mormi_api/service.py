@@ -50,10 +50,18 @@ class ConversationService:
         practice_rate = practice_summary.success_rate if practice_summary else None
 
         profile = await self.repository.get_profile(request.learner_id)
+        curriculum_session_id = (
+            practice_summary.curriculum_session_id if practice_summary else None
+        )
+        if request.scenario_id == "home_teach" and not practice_summary:
+            raise ValueError("practice_summary or practice_result_id is required for home_teach")
         scenario_data = create_scenario_data(
             request.scenario_id,
             request.cafe_context,
             queue_context=request.queue_context,
+            curriculum_session_id=curriculum_session_id,
+            skill_id=practice_summary.skill_id if practice_summary else None,
+            practice_result_id=request.practice_result_id,
         )
         task_start_levels = {
             task_id: (

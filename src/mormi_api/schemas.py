@@ -153,6 +153,7 @@ class PracticeAttempt(BaseModel):
 
 
 class PracticeSummary(BaseModel):
+    curriculum_session_id: str | None = Field(default=None, min_length=1, max_length=60)
     skill_id: str = Field(min_length=1, max_length=100)
     attempts: list[PracticeAttempt] = Field(default_factory=list, max_length=50)
     question_count: int = Field(default=0, ge=0, le=50)

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import random
 from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -115,6 +117,40 @@ class ScenarioDefinition(BaseModel):
     scene: SceneType
     title: str
     task_ids: list[str]
+
+
+class HomeTeachingSpec(BaseModel):
+    """Reviewed teaching content for one frontend curriculum session."""
+
+    id: str
+    subject: str
+    unit: str
+    title: str
+    misconception_prompt: str = Field(max_length=50)
+    learned_line: str = Field(max_length=120)
+    fill_before: str
+    fill_after: str
+    fill_correct: str
+    fill_options: list[str] = Field(min_length=2, max_length=6)
+    short_prompt: str = Field(max_length=50)
+    short_correct: str
+    short_options: list[str] = Field(min_length=2, max_length=6)
+    hint: str
+    help_lines: list[str] = Field(min_length=1, max_length=4)
+    misconception: str
+    sample_problem: dict[str, Any]
+
+
+def _load_home_teaching_catalog() -> dict[str, HomeTeachingSpec]:
+    path = Path(__file__).with_name("home_teaching_catalog.json")
+    entries = [HomeTeachingSpec.model_validate(item) for item in json.loads(path.read_text())]
+    catalog = {entry.id: entry for entry in entries}
+    if len(catalog) != len(entries):
+        raise ValueError("home teaching catalog contains duplicate ids")
+    return catalog
+
+
+HOME_TEACHING_CATALOG = _load_home_teaching_catalog()
 
 
 def option(identifier: str, label: str, image_url: str | None = None) -> ChoiceOption:
@@ -979,6 +1015,154 @@ def simple_calculation_task(
         transition_text=f"계산하면 {result:,}원이구나.",
     )
 
+
+def home_teaching_task(
+    spec: HomeTeachingSpec,
+    *,
+    skill_id: str,
+) -> TaskDefinition:
+    """Build a deterministic teaching task from reviewed curriculum content.
+
+    The LLM may understand a child's paraphrase and phrase Mormi's reaction,
+    but it never invents the target rule, choices, help cards, or note text.
+    """
+
+    expected_rule = spec.learned_line
+
+    short_choices = [
+        option(f"short_{index}", label) for index, label in enumerate(spec.short_options)
+    ]
+    short_effects: dict[str, dict[str, str | int | float | bool]] = {
+        f"short_{index}": {
+            "rule": expected_rule if label == spec.short_correct else f"unsupported:{label}"
+        }
+        for index, label in enumerate(spec.short_options)
+    }
+    fill_choices = [option(f"fill_{index}", label) for index, label in enumerate(spec.fill_options)]
+    fill_effects: dict[str, dict[str, str | int | float | bool]] = {
+        f"fill_{index}": {
+            "rule": expected_rule if label == spec.fill_correct else f"unsupported:{label}"
+        }
+        for index, label in enumerate(spec.fill_options)
+    }
+    sentence_frame = " ".join(
+        part for part in (spec.fill_before.strip(), "□", spec.fill_after.strip()) if part
+    )
+    sample = dict(spec.sample_problem)
+    sample.pop("correct", None)
+
+    return TaskDefinition(
+        id=HOME_TEACH_TASK_ID,
+        scene=SceneType.HOME_TEACH,
+        stage_id="home_teach",
+        skill_id=skill_id,
+        title=spec.title,
+        goal=f"반복한 {spec.title}의 핵심 방법을 모르미에게 가르친다.",
+        visible_facts={
+            "curriculum_session_id": spec.id,
+            "target_rule": expected_rule,
+            "sample_problem": sample,
+        },
+        slots={
+            "rule": SlotDefinition(
+                id="rule",
+                description=f"{spec.title}에서 사용하는 핵심 방법 전체",
+                expected=expected_rule,
+                aliases=[expected_rule.rstrip(".!?")],
+                fact_sentence=expected_rule,
+            )
+        },
+        required_slots=["rule"],
+        steps={
+            ExpressionLevel.L4: [
+                StepDefinition(
+                    id="free_explanation",
+                    prompt=spec.misconception_prompt,
+                    target_slots=["rule"],
+                    input=text_input("rule", placeholder="모르미에게 네 말로 알려줘"),
+                    fallback_text=spec.misconception_prompt,
+                )
+            ],
+            ExpressionLevel.L3: [
+                StepDefinition(
+                    id="short_explanation",
+                    prompt="내가 어디서 헷갈렸는지 짧게 알려줄래?",
+                    target_slots=["rule"],
+                    input=text_input("rule", placeholder="방법만 짧게 알려줘"),
+                    fallback_text="내가 길게 물어봤네. 방법만 짧게 알려줘.",
+                )
+            ],
+            ExpressionLevel.L2: [
+                StepDefinition(
+                    id="choose_method",
+                    prompt=spec.short_prompt,
+                    target_slots=["rule"],
+                    input=choice_input(["rule"], short_choices),
+                    choice_effects=short_effects,
+                    fallback_text="말로 어렵다면 필요한 방법을 같이 골라 보자.",
+                )
+            ],
+            ExpressionLevel.L1: [
+                StepDefinition(
+                    id="complete_rule",
+                    prompt=sentence_frame,
+                    target_slots=["rule"],
+                    input=InputContract(
+                        kind=InputKind.FILL,
+                        target_slots=["rule"],
+                        choices=fill_choices,
+                        config={"sentence": sentence_frame},
+                    ),
+                    choice_effects=fill_effects,
+                    fallback_text="도움 카드 문장의 빈칸을 같이 채워 보자.",
+                )
+            ],
+            ExpressionLevel.L0: [
+                StepDefinition(
+                    id="joint_reading",
+                    prompt="도움 카드 문장을 나와 같이 읽어볼까?",
+                    target_slots=["rule"],
+                    input=InputContract(
+                        kind=InputKind.JOINT,
+                        target_slots=["rule"],
+                        config={
+                            "text": expected_rule,
+                            "completion_values": {"rule": expected_rule},
+                        },
+                    ),
+                    fallback_text="도움 카드 문장을 나와 같이 읽어볼까?",
+                )
+            ],
+        },
+        hints={
+            HintLevel.H1: HintDefinition(level=HintLevel.H1, body=spec.hint),
+            HintLevel.H2: HintDefinition(
+                level=HintLevel.H2,
+                body=spec.help_lines[-1],
+                visual_type="home_practice_problem",
+                visual_data=sample,
+            ),
+            HintLevel.H3: HintDefinition(
+                level=HintLevel.H3,
+                body=expected_rule,
+                visual_type="joint_reading_card",
+                visual_data={"text": expected_rule},
+            ),
+        },
+        base_visual=VisualContract(
+            type="home_teaching",
+            data={
+                "curriculum_session_id": spec.id,
+                "subject": spec.subject,
+                "unit": spec.unit,
+                "title": spec.title,
+                "problem": sample,
+            },
+        ),
+        misconception_tags=[spec.misconception],
+        coauthored_note=expected_rule,
+    )
+
 HOME_ADD_TASK = calculation_task(
     task_id="home_teach_3_plus_5",
     title="집에서 모르미 가르치기",
@@ -992,6 +1176,7 @@ HOME_ADD_TASK = calculation_task(
 )
 
 QUEUE_TASK_ID = "cafe_queue"
+HOME_TEACH_TASK_ID = "home_teaching"
 BUDGET_MENU_TASK_ID = "cafe_budget_menu_pick"
 TOTAL_MENU_PICK_TASK_ID = "cafe_total_menu_pick"
 TOTAL_CALC_TASK_ID = "cafe_total_calculation"
@@ -1000,6 +1185,12 @@ CAFE_CHANGE_PAYMENT_AMOUNT = 10_000
 MENU_SCENARIO_IDS = {"cafe_budget_menu", "cafe_menu_total", "cafe_change"}
 
 SCENARIOS: dict[str, ScenarioDefinition] = {
+    "home_teach": ScenarioDefinition(
+        id="home_teach",
+        scene=SceneType.HOME_TEACH,
+        title="반복한 내용을 모르미에게 가르치기",
+        task_ids=[HOME_TEACH_TASK_ID],
+    ),
     "cafe_queue": ScenarioDefinition(
         id="cafe_queue",
         scene=SceneType.CAFE,
@@ -1045,6 +1236,9 @@ def create_scenario_data(
     rng: Any | None = None,
     *,
     queue_context: QueueSessionContext | None = None,
+    curriculum_session_id: str | None = None,
+    skill_id: str | None = None,
+    practice_result_id: str | None = None,
 ) -> dict[str, Any]:
     chooser = rng or random.SystemRandom()
     data: dict[str, Any] = {}
@@ -1063,6 +1257,22 @@ def create_scenario_data(
         if cafe_context is None:
             raise ValueError("cafe_context is required for menu scenarios")
         data.update(cafe_context.model_dump(mode="json", exclude_none=True))
+    if scenario_id == "home_teach":
+        if not curriculum_session_id:
+            raise ValueError("curriculum_session_id is required for home_teach")
+        try:
+            spec = HOME_TEACHING_CATALOG[curriculum_session_id]
+        except KeyError as error:
+            raise ValueError(
+                f"unsupported home curriculum_session_id: {curriculum_session_id}"
+            ) from error
+        data.update(
+            curriculum_session_id=spec.id,
+            skill_id=skill_id or spec.id,
+            home_teaching_spec=spec.model_dump(mode="json"),
+        )
+        if practice_result_id:
+            data["practice_result_id"] = practice_result_id
     return data
 
 
@@ -1096,6 +1306,14 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
     right_count = int(data.get("right_count", 5))
     if task_id == QUEUE_TASK_ID:
         return queue_task(task_id=task_id, stage_id="queue", left=left_count, right=right_count)
+    if task_id == HOME_TEACH_TASK_ID:
+        raw_spec = data.get("home_teaching_spec")
+        if not isinstance(raw_spec, Mapping):
+            raise ValueError("scenario_data.home_teaching_spec is required")
+        skill_id = data.get("skill_id")
+        if not isinstance(skill_id, str) or not skill_id:
+            raise ValueError("scenario_data.skill_id is required")
+        return home_teaching_task(HomeTeachingSpec.model_validate(raw_spec), skill_id=skill_id)
     if task_id == HOME_ADD_TASK.id:
         return HOME_ADD_TASK
     menu_items = _menu_items_from_data(data)
@@ -1191,6 +1409,15 @@ def validate_content() -> None:
         budget=10000,
     )
     for scenario in SCENARIOS.values():
+        if scenario.id == "home_teach":
+            for spec in HOME_TEACHING_CATALOG.values():
+                scenario_data = create_scenario_data(
+                    scenario.id,
+                    curriculum_session_id=spec.id,
+                    skill_id=spec.id,
+                )
+                get_task(HOME_TEACH_TASK_ID, scenario_data)
+            continue
         scenario_data = create_scenario_data(
             scenario.id,
             validation_context if scenario.id in MENU_SCENARIO_IDS else None,
@@ -1205,8 +1432,20 @@ def validate_content() -> None:
         **create_scenario_data("cafe_menu_total", validation_context),
         "child_menu_id": "sample-b",
     }
+    sample_home_data = create_scenario_data(
+        "home_teach",
+        curriculum_session_id=next(iter(HOME_TEACHING_CATALOG)),
+        skill_id="catalog_validation",
+    )
     for task in [
-        get_task(task_id, sample_data if task_id != QUEUE_TASK_ID else {})
+        get_task(
+            task_id,
+            sample_home_data
+            if task_id == HOME_TEACH_TASK_ID
+            else sample_data
+            if task_id != QUEUE_TASK_ID
+            else {},
+        )
         for task_id in task_ids
     ]:
         if set(task.required_slots) - set(task.slots):

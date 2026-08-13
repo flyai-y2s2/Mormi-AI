@@ -1136,6 +1136,19 @@
       },
       "PracticeResult": {
         "properties": {
+          "curriculum_session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Session Id"
+          },
           "skill_id": {
             "type": "string",
             "maxLength": 100,
@@ -1210,6 +1223,19 @@
       },
       "PracticeSummary": {
         "properties": {
+          "curriculum_session_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Curriculum Session Id"
+          },
           "skill_id": {
             "type": "string",
             "maxLength": 100,
@@ -1270,6 +1296,29 @@
           "skill_id"
         ],
         "title": "PracticeSummary"
+      },
+      "QueueSessionContext": {
+        "properties": {
+          "left_count": {
+            "type": "integer",
+            "maximum": 9.0,
+            "minimum": 1.0,
+            "title": "Left Count"
+          },
+          "right_count": {
+            "type": "integer",
+            "maximum": 9.0,
+            "minimum": 1.0,
+            "title": "Right Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "left_count",
+          "right_count"
+        ],
+        "title": "QueueSessionContext",
+        "description": "Frontend-owned queue facts frozen for one AI conversation.\n\nThe screen draws the two lines before the conversation starts, so Mormi has\nto talk about the counts the child is actually looking at. Letting this side\ndraw its own would put different numbers in the speech bubble and the scene."
       },
       "ResponseType": {
         "type": "string",
@@ -1355,6 +1404,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/CafeSessionContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queue_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueSessionContext"
               },
               {
                 "type": "null"

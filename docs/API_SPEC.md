@@ -77,7 +77,8 @@ X-Mormi-Service-Key: <service-key>
 {
   "practice_result_id": "practice_123",
   "learner_id": 1,
-  "skill_id": "basic_addition",
+  "curriculum_session_id": "money-count",
+  "skill_id": "money_count",
   "question_count": 5,
   "first_try_correct_count": 3,
   "wrong_attempt_count": 2,
@@ -98,6 +99,14 @@ X-Mormi-Service-Key: <service-key>
 `attempts`와 집계 필드는 함께 또는 집계 필드만 전달할 수 있습니다. 아이 이름,
 문제 원문, 음성 파일은 전달하지 않습니다.
 
+Spring은 학습 세션 전체 완료를 기다리지 않고 반복 목표를 채운 시점에
+`practice_result_id`를 확정해 이 API를 호출해야 합니다. 그 ID로 AI 대화를 시작하고,
+AI 대화가 끝난 뒤 `conversation_id`와 함께 학습 세션 완료를 확정합니다.
+
+집 가르치기에는 `curriculum_session_id`가 필수입니다. AI는 이 ID로 검수된
+가르치기 카탈로그를 선택합니다. 현재 FE 커리큘럼의 36개 세션을 지원하며 알 수 없는
+ID는 즉흥 생성하지 않고 `422`로 거부합니다.
+
 ## 5. 대화 시작
 
 ### `POST /v1/conversations`
@@ -106,7 +115,8 @@ X-Mormi-Service-Key: <service-key>
 
 | `scene` | `scenario_id` | 설명 |
 |---|---|---|
-| `home_teach` | `home_addition_teach` | 반복한 덧셈을 모르미에게 가르치기 |
+| `home_teach` | `home_teach` | 반복한 커리큘럼에 맞는 가르치기 시나리오 생성 |
+| `home_teach` | `home_addition_teach` | 기존 3+5 호환 시나리오 |
 | `cafe` | `cafe_queue` | 1단계: 1~5명의 두 줄을 세고 짧은 줄 선택 |
 | `cafe` | `cafe_budget_menu` | 2단계: 자동 합계를 보며 예산 안에서 메뉴 선택 |
 | `cafe` | `cafe_menu_total` | 3단계: 두 메뉴를 고르고 전체 가격 계산 |
@@ -183,7 +193,7 @@ X-Mormi-Service-Key: <service-key>
 {
   "learner_id": 1,
   "scene": "home_teach",
-  "scenario_id": "home_addition_teach",
+  "scenario_id": "home_teach",
   "learning_session_id": "session_123",
   "practice_result_id": "practice_123",
   "conversation_storage_consent": false,
@@ -197,11 +207,12 @@ X-Mormi-Service-Key: <service-key>
 {
   "learner_id": 1,
   "scene": "home_teach",
-  "scenario_id": "home_addition_teach",
+  "scenario_id": "home_teach",
   "learning_session_id": "session_123",
   "practice_result_id": "practice_123",
   "practice_summary": {
-    "skill_id": "basic_addition",
+    "curriculum_session_id": "money-count",
+    "skill_id": "money_count",
     "question_count": 5,
     "first_try_correct_count": 3,
     "wrong_attempt_count": 2,
@@ -215,6 +226,10 @@ X-Mormi-Service-Key: <service-key>
 
 `practice_summary` 안에는 `learner_id`와 `practice_result_id`를 반복하지 않습니다.
 바깥 필드를 단일 출처로 사용합니다.
+
+AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionState.scenario_data`에
+복사되어 고정됩니다. 따라서 이후 카탈로그가 갱신되거나 요청을 재시도해도 진행 중인
+대화의 질문과 정답 기준은 바뀌지 않습니다.
 
 원문 저장 정책 조합:
 
@@ -234,23 +249,23 @@ X-Mormi-Service-Key: <service-key>
   "turn": {
     "turn_id": "turn_001",
     "scene": "home_teach",
-    "scenario_id": "home_addition_teach",
-    "task_id": "home_teach_3_plus_5",
+    "scenario_id": "home_teach",
+    "task_id": "home_teaching",
     "stage_id": "home_teach",
     "task_index": 0,
     "mormi": {
-      "text": "모두 얼마일까? 어떻게 계산했는지도 알려줘.",
+      "text": "1,000원 한 장과 500원 하나면 1,050원이지?",
       "mood": "curious",
       "max_lines": 2
     },
     "input": {
       "kind": "text",
       "choices": [],
-      "target_slots": ["sum", "reason"]
+      "target_slots": ["rule"]
     },
     "visual": {
-      "type": "vertical_equation",
-      "data": {}
+      "type": "home_teaching",
+      "data": {"curriculum_session_id": "money-count"}
     },
     "help_card": null,
     "note_update": null,

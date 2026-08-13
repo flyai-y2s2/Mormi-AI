@@ -118,6 +118,33 @@ FE의 4단계 화면과 동일하게 `10,000 − 모르미 메뉴 가격`을 계
 `input.kind=equation`일 때 `input.config.places` 순서대로 숫자 입력 칸을 렌더링합니다.
 화면 문구에서는 `11백` 같은 표현을 만들지 않고 자리 이름과 숫자를 분리합니다.
 
+## `home_teaching`
+
+집 반복학습 뒤 AI가 생성한 가르치기 시나리오의 기본 화면입니다.
+
+```json
+{
+  "type": "home_teaching",
+  "data": {
+    "curriculum_session_id": "money-count",
+    "subject": "money",
+    "unit": "돈 계산",
+    "title": "돈을 세어요",
+    "problem": {
+      "prompt": "모두 얼마일까?",
+      "answers": ["600원", "500원", "700원"],
+      "visual": {"type": "money", "amounts": [500, 100]}
+    }
+  }
+}
+```
+
+`problem.correct`는 프론트에 전달하지 않습니다. 화면은 `problem.visual`을 기존 반복
+문제 렌더러에 전달하고, 입력 UI는 항상 턴의 `input` 계약을 따릅니다.
+
+- `home_practice_problem`: H2에서 같은 표상을 다시 보여주는 도움 카드
+- `joint_reading_card`: H3에서 검수된 핵심 문장을 함께 읽는 카드
+
 ## `number_cards`
 
 도움 카드 H2에서 사용하는 수 비교 표상입니다.
