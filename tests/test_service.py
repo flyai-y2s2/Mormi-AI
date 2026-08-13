@@ -96,7 +96,7 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
 
     transcript = await repository.raw_turns(conversation_id)
     assert transcript[0]["question"] == started.turn.mormi.text
-    assert transcript[0]["response"] is None
+    assert transcript[0]["response"] == str(left_count)
     assert transcript[0]["structured"] is not None
 
     async with database.sessions() as db:
@@ -106,6 +106,40 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
         assert initial_record.turn_contract["mormi"]["text"] == ""
         assert initial_record.mormi_question_encrypted != started.turn.mormi.text
 
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_existing_no_raw_conversation_is_upgraded_once_to_permanent(
+    tmp_path: object,
+) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/storage-upgrade.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_queue_demo",
+            conversation_storage_consent=False,
+            retention_policy="no_raw",
+        )
+    )
+    before = await repository.get_state(started.conversation_id)
+    assert before.raw_storage_enabled is False
+
+    await repository.migrate_existing_storage_to_permanent()
+    await repository.migrate_existing_storage_to_permanent()
+
+    after = await repository.get_state(started.conversation_id)
+    assert after.raw_storage_enabled is True
+    assert after.retention_policy.value == "permanent"
+    assert after.raw_retention_until is None
     await database.dispose()
 
 

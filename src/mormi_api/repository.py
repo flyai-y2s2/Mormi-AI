@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from .db import (
     ConversationRecord,
     Database,
+    DataMigrationRecord,
     LearnerProfileRecord,
     NoteRecord,
     PracticeResultRecord,
@@ -20,6 +21,7 @@ from .schemas import (
     NoteEvidence,
     NoteUpdate,
     PracticeResult,
+    RetentionPolicy,
     SessionState,
     TurnContract,
     UtteranceAnalysis,
@@ -41,6 +43,8 @@ class DuplicateResponseError(RuntimeError):
 
 
 class Repository:
+    PERMANENT_STORAGE_MIGRATION = "2026-08-permanent-raw-storage"
+
     def __init__(
         self,
         database: Database,
@@ -214,8 +218,10 @@ class Repository:
 
             raw_response = response.text or self._structured_response_text(response)
             current_turn.response_id = response_id
-            current_turn.response_expires_at = utc_now() + timedelta(
-                days=self.idempotency_retention_days
+            current_turn.response_expires_at = (
+                None
+                if previous_state.retention_policy is RetentionPolicy.PERMANENT
+                else utc_now() + timedelta(days=self.idempotency_retention_days)
             )
             current_turn.result_turn_id = next_turn.turn_id
             current_turn.response_type = response.type.value
@@ -338,6 +344,34 @@ class Repository:
                     .where(ConversationRecord.conversation_id.in_(ids))
                     .values(raw_retention_until=None)
                 )
+            await db.commit()
+
+    async def migrate_existing_storage_to_permanent(self) -> None:
+        """One-time upgrade for conversations created before pilot consent became mandatory."""
+
+        async with self.database.sessions() as db:
+            applied = await db.get(DataMigrationRecord, self.PERMANENT_STORAGE_MIGRATION)
+            if applied:
+                return
+
+            records = list((await db.execute(select(ConversationRecord))).scalars())
+            conversation_ids: list[str] = []
+            for record in records:
+                state_json = dict(record.state_json)
+                state_json["raw_storage_enabled"] = True
+                state_json["retention_policy"] = RetentionPolicy.PERMANENT.value
+                state_json["raw_retention_until"] = None
+                record.state_json = state_json
+                record.raw_retention_until = None
+                conversation_ids.append(record.conversation_id)
+
+            if conversation_ids:
+                await db.execute(
+                    update(TurnRecord)
+                    .where(TurnRecord.conversation_id.in_(conversation_ids))
+                    .values(response_expires_at=None)
+                )
+            db.add(DataMigrationRecord(migration_id=self.PERMANENT_STORAGE_MIGRATION))
             await db.commit()
 
     def _turn_record(self, state: SessionState, turn: TurnContract) -> TurnRecord:

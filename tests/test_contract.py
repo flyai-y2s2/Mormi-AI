@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
@@ -39,7 +41,7 @@ def test_openapi_exposes_frontend_agreed_paths() -> None:
     assert conflict["content"]["application/json"]["schema"]["$ref"].endswith("/ConflictResponse")
 
 
-def test_storage_consent_requires_finite_retention() -> None:
+def test_storage_consent_defaults_to_permanent_retention() -> None:
     with pytest.raises(ValidationError):
         SessionCreate(
             learner_id=1,
@@ -53,10 +55,10 @@ def test_storage_consent_requires_finite_retention() -> None:
         learner_id=1,
         scene="home_teach",
         scenario_id="home_addition_teach",
-        conversation_storage_consent=True,
-        retention_policy="30_days",
     )
-    assert request.retention_policy.value == "30_days"
+    assert request.conversation_storage_consent is True
+    assert request.retention_policy.value == "permanent"
+    assert request.retention_policy.expires_at(datetime.now(UTC)) is None
 
 
 def test_compact_practice_summary_derives_success_rate() -> None:
@@ -191,7 +193,7 @@ def test_known_service_error_gets_a_stable_safe_code() -> None:
     ("message", "expected"),
     [
         (
-            "Value error, consented raw storage requires a finite retention_policy",
+            "Value error, consented raw storage requires a retention_policy",
             "storage_consent_retention_mismatch",
         ),
         (

@@ -27,6 +27,56 @@
         }
       }
     },
+    "/health/authenticated": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Authenticated Health",
+        "description": "Verify both service reachability and the BE-to-AI shared key.",
+        "operationId": "authenticated_health_health_authenticated_get",
+        "parameters": [
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/practice-results": {
       "post": {
         "tags": [
@@ -1355,7 +1405,8 @@
         "enum": [
           "no_raw",
           "30_days",
-          "90_days"
+          "90_days",
+          "permanent"
         ],
         "title": "RetentionPolicy"
       },
@@ -1440,11 +1491,11 @@
           "conversation_storage_consent": {
             "type": "boolean",
             "title": "Conversation Storage Consent",
-            "default": false
+            "default": true
           },
           "retention_policy": {
             "$ref": "#/components/schemas/RetentionPolicy",
-            "default": "no_raw"
+            "default": "permanent"
           }
         },
         "type": "object",

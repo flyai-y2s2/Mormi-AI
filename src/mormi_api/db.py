@@ -29,6 +29,13 @@ class Base(DeclarativeBase):
     pass
 
 
+class DataMigrationRecord(Base):
+    __tablename__ = "data_migrations"
+
+    migration_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class ConversationRecord(Base):
     __tablename__ = "conversations"
 

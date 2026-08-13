@@ -173,8 +173,8 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
     "mormi_menu_id": "strawberry-juice",
     "budget": 10000
   },
-  "conversation_storage_consent": false,
-  "retention_policy": "no_raw"
+  "conversation_storage_consent": true,
+  "retention_policy": "permanent"
 }
 ```
 
@@ -197,8 +197,8 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
   "scenario_id": "home_teach",
   "learning_session_id": "session_123",
   "practice_result_id": "practice_123",
-  "conversation_storage_consent": false,
-  "retention_policy": "no_raw"
+  "conversation_storage_consent": true,
+  "retention_policy": "permanent"
 }
 ```
 
@@ -221,7 +221,7 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
     "misconception_tags": ["count_all_error"]
   },
   "conversation_storage_consent": true,
-  "retention_policy": "30_days"
+  "retention_policy": "permanent"
 }
 ```
 
@@ -249,6 +249,9 @@ AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionSt
 | `false` | `no_raw` | 아이 원문을 저장하지 않음 |
 | `true` | `30_days` | 암호화된 아이 원문을 30일 보관 |
 | `true` | `90_days` | 암호화된 아이 원문을 90일 보관 |
+| `true` | `permanent` | 암호화된 질문·아이 원문·선택 응답을 만료 없이 보관 |
+
+파일럿 운영 기본값은 사전 동의를 전제로 `true` / `permanent`다.
 
 그 외 조합은 `422`입니다.
 

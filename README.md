@@ -166,7 +166,8 @@ pip install -r requirements.txt
 
 ## 원문 데이터 보호
 
-사용자 요구에 따라 모르미의 질문과 아이 원문 발화·선택을 저장합니다.
+사전 동의를 완료한 파일럿 참여자의 모르미 질문과 아이 원문 발화·선택을 기본적으로
+암호화해 영구 저장합니다.
 
 - 운영 환경에서는 `MORMI_RAW_DATA_ENCRYPTION_KEY` 없이는 서버가 시작되지 않습니다.
 - 운영 환경에서는 PostgreSQL과 `MORMI_SERVICE_API_KEY`가 필수입니다.

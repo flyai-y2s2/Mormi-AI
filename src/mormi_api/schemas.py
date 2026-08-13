@@ -25,6 +25,7 @@ class RetentionPolicy(StrEnum):
     NO_RAW = "no_raw"
     DAYS_30 = "30_days"
     DAYS_90 = "90_days"
+    PERMANENT = "permanent"
 
     @property
     def days(self) -> int | None:
@@ -32,6 +33,7 @@ class RetentionPolicy(StrEnum):
             RetentionPolicy.NO_RAW: None,
             RetentionPolicy.DAYS_30: 30,
             RetentionPolicy.DAYS_90: 90,
+            RetentionPolicy.PERMANENT: None,
         }[self]
 
     def expires_at(self, started_at: datetime) -> datetime | None:
@@ -255,13 +257,15 @@ class SessionCreate(BaseModel):
     practice_summary: PracticeSummary | None = None
     cafe_context: CafeSessionContext | None = None
     queue_context: QueueSessionContext | None = None
-    conversation_storage_consent: bool = False
-    retention_policy: RetentionPolicy = RetentionPolicy.NO_RAW
+    # 파일럿 참여자는 사전에 원문 저장 동의를 완료한다. 별도 필드를 보내지
+    # 않는 호출도 질문·아이 원문·선택 응답을 암호화해 영구 보존한다.
+    conversation_storage_consent: bool = True
+    retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT
 
     @model_validator(mode="after")
     def validate_storage_policy(self) -> SessionCreate:
         if self.conversation_storage_consent and self.retention_policy is RetentionPolicy.NO_RAW:
-            raise ValueError("consented raw storage requires a finite retention_policy")
+            raise ValueError("consented raw storage requires a retention_policy")
         if (
             not self.conversation_storage_consent
             and self.retention_policy is not RetentionPolicy.NO_RAW
@@ -453,8 +457,8 @@ class SessionState(BaseModel):
     task_max_hint: HintLevel = HintLevel.H0
     direct_note_candidate: str | None = None
     all_tasks_direct: bool = True
-    raw_storage_enabled: bool = False
-    retention_policy: RetentionPolicy = RetentionPolicy.NO_RAW
+    raw_storage_enabled: bool = True
+    retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT
     raw_retention_until: datetime | None = None
     completion_outcome: CompletionOutcome | None = None
     teach_reward_eligible: bool = False

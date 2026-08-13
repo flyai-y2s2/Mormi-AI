@@ -162,6 +162,7 @@ Spring에 정식 메뉴 카탈로그가 생기면 전달 가격을 그 카탈로
 
 운영에서는 PostgreSQL, 원문 암호화 키, 서비스 API 키를 강제한다.
 
-아이 원문은 `conversation_storage_consent=true`일 때만 암호화 저장한다. 질문은
-최신 화면 복구에 필요하므로 항상 암호화 저장하되, 턴 계약 JSON에는 평문을 중복
-저장하지 않는다. `response_id`의 멱등 결과는 기본 30일간 보존한다.
+파일럿 참여자는 사전 동의를 완료한 것으로 전제해 기본값을
+`conversation_storage_consent=true`, `retention_policy=permanent`로 둔다. 질문과 아이
+원문·선택 응답은 암호화해 만료 없이 저장하고, 턴 계약 JSON에는 평문을 중복 저장하지
+않는다. 영구 정책에서는 `response_id`의 멱등 결과도 만료시키지 않는다.

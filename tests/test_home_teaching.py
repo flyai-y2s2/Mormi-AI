@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import pytest
 from conftest import FakeGateway
+from sqlalchemy import select
 
 from mormi_api.content import HOME_TEACHING_CATALOG
-from mormi_api.db import Database
+from mormi_api.db import Database, TurnRecord
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
@@ -149,12 +150,13 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
             scene="home_teach",
             scenario_id="home_teach",
             practice_result_id=practice.practice_result_id,
-            conversation_storage_consent=True,
-            retention_policy="30_days",
         )
     )
 
     state = await repository.get_state(started.conversation_id)
+    assert state.raw_storage_enabled is True
+    assert state.retention_policy.value == "permanent"
+    assert state.raw_retention_until is None
     assert state.scenario_data["curriculum_session_id"] == "money-count"
     assert state.scenario_data["practice_result_id"] == practice.practice_result_id
     assert state.current_task_id == "home_teaching"
@@ -178,6 +180,11 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
     transcript = await repository.raw_turns(started.conversation_id)
     assert transcript[0]["question"] == started.turn.mormi.text
     assert transcript[0]["response"] == child_text
+    async with database.sessions() as db:
+        answered = (
+            await db.execute(select(TurnRecord).where(TurnRecord.turn_id == started.turn.turn_id))
+        ).scalar_one()
+        assert answered.response_expires_at is None
     await database.dispose()
 
 
