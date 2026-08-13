@@ -16,3 +16,6 @@ build/
 
 # 일회성 프론트 협의·회신 문서는 공식 API_SPEC에 통합한다.
 docs/FRONTEND_*.md
+
+# 로컬 .env 백업(비밀번호 포함)이 커밋되지 않게 한다.
+.env.bak*
