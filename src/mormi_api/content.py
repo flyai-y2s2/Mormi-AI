@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,11 @@ from .schemas import (
     QueueSessionContext,
     SceneType,
     VisualContract,
+)
+
+_VAGUE_OR_UNREVIEWED_COPY = re.compile(
+    r"(어떤 방법이 맞을까|지금 상황|지금 장면|퍼진 넓이|느낌으로|"
+    r"눈대중|한눈에 대충|색만 보기|크기만 보기|모양만 보기)"
 )
 
 
@@ -149,6 +155,8 @@ class HomeTeachingSpec(BaseModel):
         visual = self.sample_problem.get("visual")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("sample_problem.prompt is required")
+        if not prompt.rstrip().endswith("?"):
+            raise ValueError("sample_problem.prompt must be a complete child-facing question")
         if not isinstance(answers, list) or len(answers) < 2:
             raise ValueError("sample_problem.answers needs at least two choices")
         if correct not in answers:
@@ -159,6 +167,35 @@ class HomeTeachingSpec(BaseModel):
             raise ValueError("short_prompt must name the current mathematical action")
         if self.misconception_prompt.strip() == self.short_prompt.strip():
             raise ValueError("L4 and L2 prompts must not collapse into the same request")
+        if not self.short_prompt.rstrip().endswith("?"):
+            raise ValueError("short_prompt must be a complete child-facing question")
+        if self.short_correct not in self.short_options:
+            raise ValueError("short_correct must be one of short_options")
+        if self.fill_correct not in self.fill_options:
+            raise ValueError("fill_correct must be one of fill_options")
+        if len(set(self.short_options)) != len(self.short_options):
+            raise ValueError("short_options must be unique")
+        if len(set(self.fill_options)) != len(self.fill_options):
+            raise ValueError("fill_options must be unique")
+        child_facing_copy = [
+            self.misconception_prompt,
+            self.short_prompt,
+            self.learned_line,
+            self.fill_before,
+            self.fill_after,
+            self.hint,
+            *self.help_lines,
+            *self.short_options,
+            *self.fill_options,
+            prompt,
+            *(str(answer) for answer in answers),
+        ]
+        if any(_VAGUE_OR_UNREVIEWED_COPY.search(text) for text in child_facing_copy):
+            raise ValueError("child-facing copy contains a vague or unreviewed phrase")
+        if any(len(text) > 45 for text in (*self.short_options, *self.fill_options)):
+            raise ValueError("choice labels must fit one readable option")
+        if len(self.hint) > 50 or any(len(line) > 50 for line in self.help_lines):
+            raise ValueError("help-card copy must fit one readable line")
         return self
 
 
@@ -222,17 +259,22 @@ QUEUE_TASK = TaskDefinition(
         ),
         "final_choice": SlotDefinition(
             id="final_choice",
-            description="사람이 적어서 덜 기다리는 줄",
+            description="내 앞에 기다리는 사람이 적어 차례가 빨리 오는 줄",
             expected="left",
             aliases=["왼쪽", "왼쪽줄", "왼쪽 줄"],
-            fact_sentence="왼쪽 줄에 서면 덜 기다려.",
+            fact_sentence="왼쪽 줄에서는 내 차례가 더 빨리 와.",
         ),
         "reason": SlotDefinition(
             id="reason",
-            description="사람 수가 적은 줄이 덜 기다린다는 이유",
+            description="앞에 기다리는 사람이 적으면 내 차례가 빨리 오는 이유",
             expected="fewer_people",
-            aliases=["사람이적어서", "사람이 적어서", "3명이5명보다적어서"],
-            fact_sentence="사람이 적은 줄이 덜 기다려.",
+            aliases=[
+                "앞에사람이적어서",
+                "앞에 사람이 적어서",
+                "내앞에3명이기다려서",
+                "내 앞에 3명이 기다려서",
+            ],
+            fact_sentence="앞에 기다리는 사람이 적으면 내 차례가 더 빨리 와.",
         ),
     },
     required_slots=["left_count", "right_count", "final_choice", "reason"],
@@ -247,10 +289,10 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="free_comparison",
-                prompt="어느 줄에 서면 덜 기다릴까? 어떻게 알았어?",
+                prompt="어느 줄에서 내 차례가 더 빨리 올까? 왜 그렇게 생각했어?",
                 target_slots=["final_choice", "reason"],
                 input=text_input("final_choice", "reason"),
-                fallback_text="어느 줄에 서면 덜 기다릴까? 어떻게 알았어?",
+                fallback_text="어느 줄에서 내 차례가 더 빨리 올까? 왜 그렇게 생각했어?",
             ),
         ],
         ExpressionLevel.L3: [
@@ -263,17 +305,17 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="short_choice",
-                prompt="어느 줄로 가면 좋을까?",
+                prompt="어느 줄에서 내 차례가 더 빨리 올까?",
                 target_slots=["final_choice"],
                 input=text_input("final_choice", placeholder="왼쪽 또는 오른쪽"),
-                fallback_text="어느 줄로 가면 좋을지만 알려줘.",
+                fallback_text="내 차례가 빨리 올 줄만 알려줘.",
             ),
             StepDefinition(
                 id="short_reason",
-                prompt="왜 그 줄이 덜 기다리는 거야?",
+                prompt="왜 그 줄에서는 내 차례가 더 빨리 와?",
                 target_slots=["reason"],
                 input=text_input("reason", placeholder="이유만 짧게 알려줘"),
-                fallback_text="왜 그 줄이 덜 기다리는지만 알려줘.",
+                fallback_text="왜 내 차례가 더 빨리 오는지만 알려줘.",
             ),
         ],
         ExpressionLevel.L2: [
@@ -307,7 +349,7 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="choose_side",
-                prompt="사람이 더 적은 줄은 어느 쪽이야?",
+                prompt="내 차례가 더 빨리 올 줄은 어느 쪽이야?",
                 target_slots=["final_choice"],
                 input=choice_input(
                     ["final_choice"], [option("left", "왼쪽 줄"), option("right", "오른쪽 줄")]
@@ -316,21 +358,24 @@ QUEUE_TASK = TaskDefinition(
                     "left": {"final_choice": "left"},
                     "right": {"final_choice": "right"},
                 },
-                fallback_text="사람이 적은 줄을 같이 골라 보자.",
+                fallback_text="내 차례가 빨리 올 줄을 같이 골라 보자.",
             ),
             StepDefinition(
                 id="choose_reason",
-                prompt="왜 그 줄이 덜 기다릴까?",
+                prompt="왜 왼쪽 줄에서는 내 차례가 더 빨리 올까?",
                 target_slots=["reason"],
                 input=choice_input(
                     ["reason"],
-                    [option("fewer", "사람이 더 적어서"), option("more", "사람이 더 많아서")],
+                    [
+                        option("fewer", "내 앞에 3명이 기다려서"),
+                        option("more", "내 앞에 5명이 기다려서"),
+                    ],
                 ),
                 choice_effects={
                     "fewer": {"reason": "fewer_people"},
                     "more": {"reason": "more_people"},
                 },
-                fallback_text="이유도 두 말 중에서 같이 골라 보자.",
+                fallback_text="내 차례가 빨리 오는 이유를 같이 골라 보자.",
             ),
         ],
         ExpressionLevel.L1: [
@@ -373,11 +418,14 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="guided_reason",
-                prompt="사람이 적은 줄은 왜 덜 기다릴까?",
+                prompt="왜 왼쪽 줄에서는 내 차례가 더 빨리 올까?",
                 target_slots=["reason"],
                 input=choice_input(
                     ["reason"],
-                    [option("fewer", "앞에 사람이 적어서"), option("more", "앞에 사람이 많아서")],
+                    [
+                        option("fewer", "내 앞에 3명이 기다려서"),
+                        option("more", "내 앞에 5명이 기다려서"),
+                    ],
                 ),
                 choice_effects={
                     "fewer": {"reason": "fewer_people"},
@@ -437,7 +485,10 @@ QUEUE_TASK = TaskDefinition(
         "larger_is_smaller",
         "relation_mapping_error",
     ],
-    coauthored_note="사람을 한 명씩 세고, 사람이 적은 줄을 고르면 덜 기다려.",
+    coauthored_note=(
+        "각 줄의 사람을 세고, 앞에 기다리는 사람이 적은 줄에 서면 "
+        "내 차례가 더 빨리 와."
+    ),
 )
 
 
@@ -666,6 +717,7 @@ def queue_task(
 ) -> TaskDefinition:
     task = QUEUE_TASK.model_copy(deep=True)
     smaller = min(left, right)
+    larger = max(left, right)
     side = "left" if left < right else "right"
     side_label = "왼쪽" if side == "left" else "오른쪽"
     task.id = task_id
@@ -699,10 +751,22 @@ def queue_task(
     )
     task.slots["final_choice"] = SlotDefinition(
         id="final_choice",
-        description="사람이 적어서 덜 기다리는 줄",
+        description="내 앞에 기다리는 사람이 적어 차례가 빨리 오는 줄",
         expected=side,
         aliases=[side_label, f"{side_label}줄", f"{side_label} 줄"],
-        fact_sentence=f"{side_label} 줄에 서면 덜 기다려.",
+        fact_sentence=f"{side_label} 줄에서는 내 차례가 더 빨리 와.",
+    )
+    task.slots["reason"] = SlotDefinition(
+        id="reason",
+        description="앞에 기다리는 사람이 적으면 내 차례가 빨리 오는 이유",
+        expected="fewer_people",
+        aliases=[
+            "앞에사람이적어서",
+            "앞에 사람이 적어서",
+            f"내앞에{smaller}명이기다려서",
+            f"내 앞에 {smaller}명이 기다려서",
+        ],
+        fact_sentence="앞에 기다리는 사람이 적으면 내 차례가 더 빨리 와.",
     )
     task.steps[ExpressionLevel.L2][0].input = choice_input(
         ["left_count"], _nearby_count_options(left)
@@ -732,6 +796,29 @@ def queue_task(
         str(right): {"smaller_number": right},
     }
     task.steps[ExpressionLevel.L1][2].prompt = f"{smaller}명이 있는 줄은 어느 쪽이야?"
+    task.steps[ExpressionLevel.L3][2].prompt = (
+        f"왜 {side_label} 줄에서는 내 차례가 더 빨리 와?"
+    )
+    task.steps[ExpressionLevel.L3][2].fallback_text = (
+        "왜 내 차례가 더 빨리 오는지만 알려줘."
+    )
+    for level, step_index in (
+        (ExpressionLevel.L2, 3),
+        (ExpressionLevel.L1, 3),
+    ):
+        reason_step = task.steps[level][step_index]
+        reason_step.prompt = f"왜 {side_label} 줄에서는 내 차례가 더 빨리 올까?"
+        reason_step.input = choice_input(
+            ["reason"],
+            [
+                option("fewer", f"내 앞에 {smaller}명이 기다려서"),
+                option("more", f"내 앞에 {larger}명이 기다려서"),
+            ],
+        )
+        reason_step.choice_effects = {
+            "fewer": {"reason": "fewer_people"},
+            "more": {"reason": "more_people"},
+        }
     task.steps[ExpressionLevel.L0][0].input.config["completion_values"] = {
         "left_count": left,
         "right_count": right,
@@ -1143,9 +1230,16 @@ def home_teaching_task(
         f"fill_{index}": {"rule": expected_rule} if label == spec.fill_correct else {}
         for index, label in enumerate(spec.fill_options)
     }
-    sentence_frame = " ".join(
-        part for part in (spec.fill_before.strip(), "□", spec.fill_after.strip()) if part
-    )
+    fill_before = spec.fill_before.strip()
+    fill_after = spec.fill_after.strip()
+    # Korean postpositions attach to the word that fills the blank.  Joining
+    # every fragment with spaces produced visibly broken copy such as
+    # ``남은 □ 을 더해``.  Keep the blank and its postposition together.
+    if re.match(r"^(?:으로|로|을|를|이|가|은|는|의|와|과)(?:\s|$)", fill_after):
+        blank_and_after = f"□{fill_after}"
+    else:
+        blank_and_after = " ".join(part for part in ("□", fill_after) if part)
+    sentence_frame = " ".join(part for part in (fill_before, blank_and_after) if part)
     sample = raw_sample
     sample.pop("correct", None)
 

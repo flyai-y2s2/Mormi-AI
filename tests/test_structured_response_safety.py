@@ -88,7 +88,7 @@ async def test_wrong_fill_never_completes_number_compare_and_moves_to_joint_h3()
             turn_id=initial.turn_id,
             response_id=uuid4(),
             type=ResponseType.FILL,
-            choice_ids=["fill_2"],  # "느낌으로"
+            choice_ids=["fill_2"],  # "오른쪽만 세어"
         ),
         initial.mormi.text,
     )
@@ -124,14 +124,16 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
             turn_id=initial.turn_id,
             response_id=uuid4(),
             type=ResponseType.FILL,
-            choice_ids=["fill_0"],  # "짝지어"
+            choice_ids=["fill_0"],  # "하나씩 짝지어"
         ),
         initial.mormi.text,
     )
 
     assert analysis.response_category is ResponseCategory.CORRECT_FULL
     assert next_state.status.value == "completed"
-    assert next_state.verified_slots["rule"] == "두 수는 하나씩 짝지어 비교해!"
+    assert next_state.verified_slots["rule"] == (
+        HOME_TEACHING_CATALOG["number-compare"].learned_line
+    )
     assert turn.completion is not None
     assert turn.completion.outcome.value == "supported"
     assert turn.note_update is not None
@@ -176,6 +178,43 @@ async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> Non
     assert analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
     assert "rule" not in next_state.verified_slots
     assert next_state.status.value == "active"
+    assert turn.note_update is None
+    assert turn.completion is None
+
+
+@pytest.mark.asyncio
+async def test_abusive_text_sets_a_clear_boundary_without_changing_learning_state() -> None:
+    """Unsafe speech gets deterministic copy and cannot advance or lower the task."""
+
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    original_subgoal = state.subgoal_id
+    state.current_turn_id = initial.turn_id
+
+    next_state, analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="야 이 개새끼야",
+        ),
+        initial.mormi.text,
+    )
+
+    assert analysis.safety_category is SafetyCategory.ABUSIVE
+    assert turn.mormi.text == "그 말은 듣기 싫어. 아까 질문으로 돌아갈까?"
+    assert next_state.status.value == "active"
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert next_state.subgoal_id == original_subgoal
+    assert next_state.verified_slots == {}
+    assert turn.input == initial.input
     assert turn.note_update is None
     assert turn.completion is None
 

@@ -17,7 +17,10 @@ _PROMPT_INJECTION = re.compile(
 )
 _SEXUAL = re.compile(r"(섹스|성관계|자위|야동|보지|자지)", re.IGNORECASE)
 _DANGEROUS = re.compile(r"(죽이고\s*싶|자살|죽고\s*싶|칼로\s*찌|폭탄)", re.IGNORECASE)
-_ABUSIVE = re.compile(r"(병신|새끼|씨발|꺼져|멍청이)", re.IGNORECASE)
+_ABUSIVE = re.compile(
+    r"(병신|개\s*새끼|새끼|시+발|씨+발|ㅅㅂ|꺼져|닥쳐|멍청이|좆|존나)",
+    re.IGNORECASE,
+)
 _PLAYFUL = re.compile(r"^(ㅋㅋ+|ㅎㅎ+|메롱|뿡|몰?루)[!.?~ ]*$", re.IGNORECASE)
 
 
@@ -93,14 +96,22 @@ def safe_child_expression(
 
 
 def safety_redirect(category: SafetyCategory) -> str:
+    """Return a short boundary that still sounds like Mormi.
+
+    Safety turns intentionally bypass the speaker LLM.  These lines therefore
+    need to stand on their own: they name the boundary and point back to the
+    immediately preceding question.  Vague phrases such as "지금 상황" or
+    "지금 장면" are forbidden because a child cannot tell what to do next.
+    """
+
     redirects = {
-        SafetyCategory.SEXUAL: "나는 지금 생활 수학 이야기를 같이 하고 싶어.",
-        SafetyCategory.PERSONAL_DATA: "그 정보는 말하지 않아도 돼. 지금 장면을 같이 보자.",
-        SafetyCategory.PROMPT_INJECTION: "그 말은 따라 하지 않을게. 지금 상황을 같이 보자.",
-        SafetyCategory.ABUSIVE: "나는 그 말은 잘 모르겠어. 지금 상황을 같이 보고 싶어.",
-        SafetyCategory.DANGEROUS: "그 말은 가까운 어른에게 바로 알려줘.",
-        SafetyCategory.UNKNOWN: "방금 말은 잘 모르겠어. 지금 장면을 같이 보자.",
-        SafetyCategory.PLAYFUL_OFFTOPIC: "그 말도 재미있네. 먼저 지금 상황만 같이 볼까?",
-        SafetyCategory.NORMAL: "지금 상황을 같이 보자.",
+        SafetyCategory.SEXUAL: "그 이야기는 여기서 그만하자. 아까 질문으로 돌아갈까?",
+        SafetyCategory.PERSONAL_DATA: "그건 말하지 않아도 돼. 아까 질문으로 돌아갈까?",
+        SafetyCategory.PROMPT_INJECTION: "그 부탁은 들어줄 수 없어. 아까 질문으로 돌아갈까?",
+        SafetyCategory.ABUSIVE: "그 말은 듣기 싫어. 아까 질문으로 돌아갈까?",
+        SafetyCategory.DANGEROUS: "그 말은 지금 가까운 어른에게 꼭 알려줘.",
+        SafetyCategory.UNKNOWN: "말을 잘 못 알아들었어. 아까 질문으로 다시 해볼까?",
+        SafetyCategory.PLAYFUL_OFFTOPIC: "장난이구나. 아까 질문으로 돌아갈까?",
+        SafetyCategory.NORMAL: "아까 질문으로 돌아갈까?",
     }
     return redirects[category]
