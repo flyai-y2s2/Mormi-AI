@@ -130,7 +130,7 @@ class ConversationEngine:
         if response.type is ResponseType.NO_RESPONSE:
             analysis = UtteranceAnalysis(
                 safety_category=SafetyCategory.NORMAL,
-                response_category=ResponseCategory.NO_RESPONSE,
+                response_category=ResponseCategory.HELP_REQUEST,
                 difficulty_class=DifficultyClass.EXPRESSION,
                 bottleneck="expression",
                 confidence=1,
@@ -395,17 +395,26 @@ class ConversationEngine:
             )
 
         if category is ResponseCategory.HELP_REQUEST:
+            next_state.expression_failures += 1
             next_state.expression_level = next_state.expression_level.lower()
             if next_state.hint_level is HintLevel.H0:
                 next_state.hint_level = HintLevel.H1
-                next_state.task_max_hint = max_hint(
-                    next_state.task_max_hint,
-                    HintLevel.H1,
-                )
-            return self._decision_for_current_step(
+            elif next_state.hint_level is HintLevel.H1:
+                next_state.hint_level = HintLevel.H2
+            elif next_state.expression_level is ExpressionLevel.L0:
+                next_state.hint_level = HintLevel.H3
+            next_state.task_max_hint = max_hint(
+                next_state.task_max_hint,
+                next_state.hint_level,
+            )
+            joint_mode = next_state.expression_level is ExpressionLevel.L0
+            if joint_mode:
+                next_state.hint_level = HintLevel.H3
+                next_state.task_max_hint = HintLevel.H3
+            decision = self._decision_for_current_step(
                 next_state,
                 task,
-                dialogue_act="accept_help_request",
+                dialogue_act="joint_mode" if joint_mode else "accept_help_request",
                 fallback=self._preface_question(
                     "도움 카드가 열렸네.",
                     task.step_for(
@@ -417,6 +426,11 @@ class ConversationEngine:
                 analysis=analysis,
                 previous_question=previous_question,
             )
+            # A help request changes the amount of support, never the problem
+            # the child is looking at.  Hint visuals remain available inside
+            # the help-card contract while the main task visual stays stable.
+            decision.visual = task.base_visual.model_copy(deep=True)
+            return decision
 
         if category in {
             ResponseCategory.CONCEPTUAL_ERROR,

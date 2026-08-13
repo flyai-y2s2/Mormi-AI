@@ -417,8 +417,8 @@ def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None
 
 
 @pytest.mark.asyncio
-async def test_no_response_lowers_expression_without_immediately_raising_concept_hint() -> None:
-    """Silence means expression/no-response first, not a mathematical error."""
+async def test_no_response_is_a_help_request_and_opens_the_first_help_card() -> None:
+    """The UI help action is expression support, never a mathematical error."""
 
     engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
     state = home_state(
@@ -439,14 +439,63 @@ async def test_no_response_lowers_expression_without_immediately_raising_concept
         initial.mormi.text,
     )
 
-    assert analysis.response_category is ResponseCategory.NO_RESPONSE
+    assert analysis.response_category is ResponseCategory.HELP_REQUEST
     assert analysis.difficulty_class is DifficultyClass.EXPRESSION
     assert next_state.expression_level is ExpressionLevel.L3
-    assert next_state.hint_level is HintLevel.H0
-    assert next_state.task_max_hint is HintLevel.H0
-    assert turn.help_card is None
+    assert next_state.hint_level is HintLevel.H1
+    assert next_state.task_max_hint is HintLevel.H1
+    assert turn.help_card is not None
+    assert turn.help_card.auto_open is True
     assert turn.input.kind is InputKind.TEXT
     assert turn.status.value == "active"
+
+
+@pytest.mark.asyncio
+async def test_repeated_no_response_walks_every_ladder_step_without_changing_problem() -> None:
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    turn = engine.initial_turn(state)
+    state.current_turn_id = turn.turn_id
+    original_visual = turn.visual
+
+    expected = [
+        (ExpressionLevel.L3, HintLevel.H1, InputKind.TEXT),
+        (ExpressionLevel.L2, HintLevel.H2, InputKind.CHOICES),
+        (ExpressionLevel.L1, HintLevel.H2, InputKind.CHOICES),
+        (ExpressionLevel.L0, HintLevel.H3, InputKind.JOINT),
+        (ExpressionLevel.L0, HintLevel.H3, InputKind.JOINT),
+    ]
+
+    for level, hint, input_kind in expected:
+        previous_task_id = turn.task_id
+        state, analysis, turn = await engine.run_turn(
+            state,
+            ChildResponse(
+                turn_id=turn.turn_id,
+                response_id=uuid4(),
+                type=ResponseType.NO_RESPONSE,
+            ),
+            turn.mormi.text,
+        )
+
+        assert analysis.response_category is ResponseCategory.HELP_REQUEST
+        assert analysis.difficulty_class is DifficultyClass.EXPRESSION
+        assert state.expression_level is level
+        assert state.hint_level is hint
+        assert turn.input.kind is input_kind
+        assert turn.task_id == previous_task_id
+        assert turn.visual == original_visual
+        assert turn.help_card is not None
+        assert turn.help_card.auto_open is True
+        assert turn.pedagogy is not None
+        assert turn.pedagogy.expression_level is level
+        assert turn.pedagogy.hint_level is hint
+
+    assert state.status.value == "active"
 
 
 def test_unknown_or_multiple_choice_ids_are_input_errors_in_analysis() -> None:
