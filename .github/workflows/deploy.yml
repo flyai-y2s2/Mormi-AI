@@ -1,9 +1,14 @@
-name: AI Build and Push
+name: CI/CD (develop → ECR → EC2)
 
 on:
   push:
     branches:
       - develop
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-ai-develop
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -14,12 +19,43 @@ env:
   ECR_REPOSITORY: mormi-ai
 
 jobs:
-  build-and-push:
+  test:
+    name: Lint & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install
+        run: pip install '.[dev]'
+
+      - name: Ruff
+        run: ruff check src tests
+
+      - name: Pytest
+        run: pytest -q
+
+  build-and-push:
+    name: Build image, push to ECR
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    outputs:
+      image_uri: ${{ steps.tags.outputs.sha_image }}
+      registry: ${{ steps.login-ecr.outputs.registry }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
@@ -31,14 +67,98 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Compute image tags
+        id: tags
+        run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          echo "sha_image=${REGISTRY}/${{ env.ECR_REPOSITORY }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest_image=${REGISTRY}/${{ env.ECR_REPOSITORY }}:latest" >> "$GITHUB_OUTPUT"
+
       - name: Build and push image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+            -t "${{ steps.tags.outputs.sha_image }}" \
+            -t "${{ steps.tags.outputs.latest_image }}" \
+            .
 
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push "${{ steps.tags.outputs.sha_image }}"
+          docker push "${{ steps.tags.outputs.latest_image }}"
+
+  deploy:
+    name: Deploy container on EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Configure SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy container on EC2
+        env:
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+          REGISTRY: ${{ needs.build-and-push.outputs.registry }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+              "IMAGE_URI='${IMAGE_URI}' REGISTRY='${REGISTRY}' AWS_REGION='${AWS_REGION}' bash -s" <<'REMOTE'
+
+          set -euo pipefail
+
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${REGISTRY}"
+
+          docker pull "${IMAGE_URI}"
+
+          docker rm -f mormi-ai 2>/dev/null || true
+
+          docker run -d \
+            --name mormi-ai \
+            --restart unless-stopped \
+            --env-file /etc/mormi-ai/mormi.env \
+            -p 8000:8000 \
+            --log-opt max-size=10m \
+            --log-opt max-file=5 \
+            "${IMAGE_URI}"
+
+          # 설정이 하나라도 빠지면 uvicorn 이 import 단계에서 죽는다.
+          # (settings.validate_runtime_safety 가 모듈 로드 시점에 실행된다)
+          # 조용히 넘어가면 시연 때 발견하므로 여기서 실패로 만든다.
+          ready=""
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8000/health 2>/dev/null; then
+              ready="yes"
+              break
+            fi
+
+            if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ai$'; then
+              echo "container exited during startup"
+              docker logs --tail=200 mormi-ai || true
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          if [ -z "${ready}" ]; then
+            echo "health check never passed within 60s"
+            docker logs --tail=200 mormi-ai || true
+            exit 1
+          fi
+
+          echo "health:"
+          curl -fsS http://localhost:8000/health
+
+          docker image prune -f >/dev/null
+          docker ps --filter name=mormi-ai
+
+          REMOTE
