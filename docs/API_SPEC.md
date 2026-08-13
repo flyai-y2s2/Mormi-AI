@@ -40,6 +40,7 @@ X-Mormi-Service-Key: <service-key>
 | Method | Path | 역할 |
 |---|---|---|
 | GET | `/health` | 서버·LLM·DB 상태 확인 |
+| GET | `/health/authenticated` | 도달성과 BE↔AI 공유 키를 함께 확인 |
 | POST | `/v1/practice-results` | 반복학습 결과 스냅샷 저장 |
 | POST | `/v1/conversations` | AI 대화 시작 |
 | POST | `/v1/conversations/{conversation_id}/responses` | 아이 응답 제출 및 다음 턴 생성 |
@@ -64,6 +65,12 @@ X-Mormi-Service-Key: <service-key>
 
 `llm_configured=false`이면 선택·조작 기반 결정형 턴은 처리할 수 있지만 자유 발화
 분류에는 Claude API 키 설정이 필요합니다.
+
+### `GET /health/authenticated`
+
+응답 본문은 `GET /health`와 같고, `X-Mormi-Service-Key`를 함께 검사합니다.
+서버가 살아 있는지와 BE↔AI 공유 키가 맞는지를 한 번에 확인할 때 씁니다.
+키가 틀리면 `401`이므로, 배포 후 연동 점검은 `/health`가 아니라 이쪽을 호출하세요.
 
 ## 4. 반복학습 결과 저장
 
@@ -117,7 +124,7 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 | `scene` | `scenario_id` | 설명 |
 |---|---|---|
 | `home_teach` | `home_teach` | 반복한 커리큘럼에 맞는 가르치기 시나리오 생성 |
-| `cafe` | `cafe_queue` | 1단계: 1~5명의 두 줄을 세고 짧은 줄 선택 |
+| `cafe` | `cafe_queue` | 1단계: 두 줄을 세고 짧은 줄 선택 |
 | `cafe` | `cafe_budget_menu` | 2단계: 자동 합계를 보며 예산 안에서 메뉴 선택 |
 | `cafe` | `cafe_menu_total` | 3단계: 두 메뉴를 고르고 전체 가격 계산 |
 | `cafe` | `cafe_change` | 4단계: 10,000원에서 모르미 메뉴 하나의 가격 빼기 |
@@ -137,7 +144,8 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 
 ### 카페 세션 변형값
 
-- 줄 인원은 AI가 왼쪽·오른쪽 각각 1~5명, 서로 다른 수로 정합니다.
+- 줄 인원은 화면이 `queue_context`로 좌우 각각 **1~9명**(서로 다른 수)을 보냅니다.
+  `cafe_queue_demo`처럼 화면 없이 여는 대화에서만 AI가 1~5명으로 직접 뽑습니다.
 - 메뉴판, 모르미가 고른 메뉴와 예산은 프론트가 `cafe_context`로 전달합니다.
 - AI 서버에는 실제 서비스 메뉴 이름이나 가격을 하드코딩하지 않습니다.
 - 거스름돈 단계는 현재 FE와 동일하게 모르미가 메뉴 하나를 고르고 10,000원을
