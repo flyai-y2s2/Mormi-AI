@@ -972,6 +972,8 @@ class ConversationEngine:
 
         if task.skill_id == "number-count" and "answer" in newly_verified:
             return "아, 세 개구나!"
+        if task.skill_id == "number-compare" and "answer" in newly_verified:
+            return "아, 오른쪽이 더 많구나!"
         return "아, 그렇구나!"
 
     @staticmethod

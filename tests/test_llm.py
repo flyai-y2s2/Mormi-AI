@@ -59,18 +59,18 @@ def test_speaker_schema_is_strict() -> None:
 def speaker_context() -> SpeakerContext:
     return SpeakerContext(
         dialogue_act="acknowledge_partial",
-        required_question="왜 왼쪽 줄이 덜 기다릴까?",
-        fallback_text="왼쪽이구나. 왜 왼쪽 줄이 덜 기다릴까?",
+        required_question="나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        fallback_text="아, 왼쪽이구나! 나는 왜 이 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
     )
 
 
 def test_speaker_rejects_grading_synonyms() -> None:
     context = speaker_context()
     for text in (
-        "맞아! 왜 왼쪽 줄이 덜 기다릴까?",
-        "정확해! 왜 왼쪽 줄이 덜 기다릴까?",
-        "잘했어! 왜 왼쪽 줄이 덜 기다릴까?",
-        "옳아! 왜 왼쪽 줄이 덜 기다릴까?",
+        "맞아! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        "정확해! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        "잘했어! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        "옳아! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
     ):
         assert validate_speaker_output(SpeakerOutput(text=text), context) is None
 
@@ -78,9 +78,9 @@ def test_speaker_rejects_grading_synonyms() -> None:
 def test_speaker_rejects_system_status_voice() -> None:
     context = speaker_context()
     for text in (
-        "그 부분은 기억했어. 왜 왼쪽 줄이 덜 기다릴까?",
-        "네가 말한 데까지는 들었어. 왜 왼쪽 줄이 덜 기다릴까?",
-        "그 부분은 확인했어. 왜 왼쪽 줄이 덜 기다릴까?",
+        "그 부분은 기억했어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        "네가 말한 데까지는 들었어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        "그 부분은 확인했어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
     ):
         assert validate_speaker_output(SpeakerOutput(text=text), context) is None
 
@@ -89,7 +89,9 @@ def test_speaker_must_keep_the_orchestrator_question() -> None:
     context = speaker_context()
     assert (
         validate_speaker_output(
-            SpeakerOutput(text="왼쪽이구나. 왜 왼쪽 줄이 덜 기다릴까?"),
+            SpeakerOutput(
+                text="아, 왼쪽이구나! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?"
+            ),
             context,
         )
         is not None
@@ -100,6 +102,30 @@ def test_speaker_must_keep_the_orchestrator_question() -> None:
             context,
         )
         is None
+    )
+
+
+def test_speaker_rejects_teacher_style_probe() -> None:
+    context = SpeakerContext(
+        dialogue_act="acknowledge_partial",
+        required_question=None,
+        allowed_numbers=["3", "5"],
+        fallback_text="나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?",
+    )
+    for text in (
+        "왜 오른쪽에 더 많다고 생각했어?",
+        "오른쪽인 걸 어떻게 알았어?",
+        "그렇게 생각한 근거가 뭐야?",
+        "이유를 설명해 봐.",
+    ):
+        assert validate_speaker_output(SpeakerOutput(text=text), context) is None
+
+    assert (
+        validate_speaker_output(
+            SpeakerOutput(text="나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?"),
+            context,
+        )
+        is not None
     )
 
 

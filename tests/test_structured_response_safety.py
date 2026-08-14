@@ -228,7 +228,9 @@ async def test_bare_comparison_conclusion_is_kept_but_does_not_create_a_note() -
     assert "reason" not in next_state.child_note_evidence
     assert turn.note_update is None
     assert turn.input.target_slots == ["reason"]
-    assert "왜 오른쪽에 점이 더 많다고 생각했어?" in turn.mormi.text
+    assert turn.mormi.text == (
+        "아, 오른쪽이 더 많구나! 나 3이랑 5를 어떻게 비교할지 헷갈려... 알려줄 수 있어?"
+    )
 
 
 @pytest.mark.asyncio

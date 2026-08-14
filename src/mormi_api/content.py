@@ -27,6 +27,15 @@ _VAGUE_OR_UNREVIEWED_COPY = re.compile(
     r"눈대중|한눈에 대충|색만 보기|크기만 보기|모양만 보기)"
 )
 
+# 모르미는 아이의 사고를 평가하는 교사가 아니라, 자신이 헷갈리는
+# 지점을 아이에게 묻는 동생이다. 이 표현들은 문법적으로 자연스러워도
+# 질문의 권력관계를 교사-학생으로 되돌리므로 콘텐츠 등록 단계에서 막는다.
+_TEACHER_EVALUATION_COPY = re.compile(
+    r"(왜\s+.+(?:라고\s+)?생각했어|왜\s+그렇게\s+생각|어떻게\s+알았어|"
+    r"어떻게\s+[^?]*(?:했어|셌어|찾았어|읽었어|비교했어)|까닭은\s+무엇|"
+    r"이유를\s*(?:말|설명)|설명해\s*봐|말해\s*봐)"
+)
+
 
 class SlotDefinition(BaseModel):
     id: str
@@ -278,6 +287,16 @@ class HomeTeachingSpec(BaseModel):
         ]
         if any(_VAGUE_OR_UNREVIEWED_COPY.search(text) for text in child_facing_copy):
             raise ValueError("child-facing copy contains a vague or unreviewed phrase")
+        mormi_questions = [
+            l4_prompt,
+            *([self.entry_prompt] if self.entry_prompt else []),
+            self.short_prompt,
+            prompt,
+        ]
+        if any(_TEACHER_EVALUATION_COPY.search(text) for text in mormi_questions):
+            raise ValueError(
+                "Mormi copy must expose its own confusion instead of evaluating the child"
+            )
         if any(len(text) > 45 for text in (*self.short_options, *self.fill_options)):
             raise ValueError("choice labels must fit one readable option")
         if len(self.hint) > 50 or any(len(line) > 50 for line in self.help_lines):
@@ -375,10 +394,10 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="free_comparison",
-                prompt="어느 줄에서 내 차례가 더 빨리 올까? 왜 그렇게 생각했어?",
+                prompt="어느 줄에 서야 빨리 갈지 모르겠어... 줄이랑 이유도 알려줄 수 있어?",
                 target_slots=["final_choice", "reason"],
                 input=text_input("final_choice", "reason"),
-                fallback_text="어느 줄에서 내 차례가 더 빨리 올까? 왜 그렇게 생각했어?",
+                fallback_text="어느 줄에 서야 빨리 갈지 모르겠어... 줄이랑 이유도 알려줄 수 있어?",
             ),
         ],
         ExpressionLevel.L3: [
@@ -398,10 +417,10 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="short_reason",
-                prompt="왜 그 줄에서는 내 차례가 더 빨리 와?",
+                prompt="나는 왜 그 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
                 target_slots=["reason"],
                 input=text_input("reason", placeholder="이유만 짧게 알려줘"),
-                fallback_text="왜 내 차례가 더 빨리 오는지만 알려줘.",
+                fallback_text="나는 왜 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?",
             ),
         ],
         ExpressionLevel.L2: [
@@ -448,7 +467,7 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="choose_reason",
-                prompt="왜 왼쪽 줄에서는 내 차례가 더 빨리 올까?",
+                prompt="나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 같이 골라 볼까?",
                 target_slots=["reason"],
                 input=choice_input(
                     ["reason"],
@@ -504,7 +523,7 @@ QUEUE_TASK = TaskDefinition(
             ),
             StepDefinition(
                 id="guided_reason",
-                prompt="왜 왼쪽 줄에서는 내 차례가 더 빨리 올까?",
+                prompt="나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 같이 골라 볼까?",
                 target_slots=["reason"],
                 input=choice_input(
                     ["reason"],
@@ -632,7 +651,7 @@ def calculation_task(
             ExpressionLevel.L4: [
                 StepDefinition(
                     id="free_explanation",
-                    prompt="모두 얼마일까? 어떻게 계산했는지도 알려줘.",
+                    prompt="나 모두 얼마인지랑 어떻게 계산하는지 헷갈려... 알려줄 수 있어?",
                     target_slots=["operation", "result", "method"],
                     input=text_input("operation", "result", "method"),
                     fallback_text="결과와 계산 방법을 네 말로 알려줘.",
@@ -655,7 +674,10 @@ def calculation_task(
                 ),
                 StepDefinition(
                     id="short_method",
-                    prompt=f"자리 계산에서 {method_label}은 어떻게 했어?",
+                    prompt=(
+                        f"나 자리 계산에서 {method_label}을 어떻게 하는지 "
+                        "헷갈려... 알려줄 수 있어?"
+                    ),
                     target_slots=["method"],
                     input=text_input("method", placeholder="방법만 짧게 알려줘"),
                     fallback_text=f"{method_label} 방법만 짧게 알려줘.",
@@ -922,14 +944,20 @@ def queue_task(
         str(right): {"smaller_number": right},
     }
     task.steps[ExpressionLevel.L1][2].prompt = f"{smaller}명이 있는 줄은 어느 쪽이야?"
-    task.steps[ExpressionLevel.L3][2].prompt = f"왜 {side_label} 줄에서는 내 차례가 더 빨리 와?"
-    task.steps[ExpressionLevel.L3][2].fallback_text = "왜 내 차례가 더 빨리 오는지만 알려줘."
+    task.steps[ExpressionLevel.L3][2].prompt = (
+        f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 알려줄 수 있어?"
+    )
+    task.steps[ExpressionLevel.L3][2].fallback_text = (
+        "나는 왜 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?"
+    )
     for level, step_index in (
         (ExpressionLevel.L2, 3),
         (ExpressionLevel.L1, 3),
     ):
         reason_step = task.steps[level][step_index]
-        reason_step.prompt = f"왜 {side_label} 줄에서는 내 차례가 더 빨리 올까?"
+        reason_step.prompt = (
+            f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
+        )
         reason_step.input = choice_input(
             ["reason"],
             [
@@ -1157,9 +1185,9 @@ def simple_calculation_task(
     l4 = StepDefinition(
         id="free_calculation",
         prompt=(
-            "두 메뉴는 모두 얼마야? 어떻게 계산했어?"
+            "나 두 메뉴가 모두 얼마인지랑 어떻게 계산하는지 헷갈려... 알려줄 수 있어?"
             if operation == "addition"
-            else "거스름돈은 얼마야? 어떻게 계산했어?"
+            else "나 거스름돈이 얼마인지랑 어떻게 계산하는지 헷갈려... 알려줄 수 있어?"
         ),
         target_slots=["operation", "result"],
         input=text_input("operation", "result", placeholder="값과 계산 방법을 알려줘"),
@@ -1856,10 +1884,10 @@ def _configure_number_compare_task(
             ),
             StepDefinition(
                 id="short_reason",
-                prompt="왜 오른쪽에 점이 더 많다고 생각했어?",
+                prompt="나 3이랑 5를 어떻게 비교할지 헷갈려... 알려줄 수 있어?",
                 target_slots=["reason"],
-                input=text_input("reason", placeholder="네가 본 수를 알려줘"),
-                fallback_text="왜 오른쪽이 더 많은지만 알려줘.",
+                input=text_input("reason", placeholder="3이랑 5를 보고 알려줘"),
+                fallback_text="나 3이랑 5를 어떻게 비교할지 헷갈려... 알려줄 수 있어?",
             ),
         ],
         ExpressionLevel.L2: [
@@ -1873,7 +1901,7 @@ def _configure_number_compare_task(
             ),
             StepDefinition(
                 id="choose_reason",
-                prompt="오른쪽에 점이 더 많은 까닭은 무엇일까?",
+                prompt="나 3이랑 5를 보고도 헷갈려... 같이 골라 볼까?",
                 target_slots=["reason"],
                 input=choice_input(
                     ["reason"],
@@ -1888,7 +1916,7 @@ def _configure_number_compare_task(
                     "counts_left": {},
                     "counts_same": {},
                 },
-                fallback_text="두 쪽에서 센 수를 보고 까닭을 같이 골라 보자.",
+                fallback_text="나 두 쪽에서 센 수가 헷갈려... 같이 골라 볼까?",
             ),
         ],
         ExpressionLevel.L1: [
@@ -2231,6 +2259,12 @@ def validate_content() -> None:
                 raise ValueError(f"{task.id}/{step.id}: target slot is undefined")
             if set(step.optional_slots) - set(task.slots):
                 raise ValueError(f"{task.id}/{step.id}: optional slot is undefined")
+            if _TEACHER_EVALUATION_COPY.search(step.prompt) or _TEACHER_EVALUATION_COPY.search(
+                step.fallback_text
+            ):
+                raise ValueError(
+                    f"{task.id}/{step.id}: Mormi must ask from its own confusion, not evaluate"
+                )
             if step.input.kind in {InputKind.CHOICES, InputKind.FILL}:
                 visible_choice_ids = {choice.id for choice in step.input.choices}
                 if set(step.choice_effects) != visible_choice_ids:

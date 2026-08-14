@@ -202,7 +202,8 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
         if spec.id == "number-compare":
             assert "어느 쪽" in l2_answer.prompt
             assert [choice.label for choice in l2_answer.input.choices] == expected_answers
-            assert "까닭" in l2_method.prompt
+            assert "헷갈려" in l2_method.prompt
+            assert "같이 골라 볼까?" in l2_method.prompt
             assert [choice.label for choice in l2_method.input.choices] == [
                 "왼쪽은 3개, 오른쪽은 5개라서",
                 "왼쪽은 5개, 오른쪽은 3개라서",
