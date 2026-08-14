@@ -40,6 +40,18 @@ _TEACHER_EVALUATION_COPY = re.compile(
 class SlotDefinition(BaseModel):
     id: str
     description: str
+    # Content declares the semantic job of a slot.  The classifier therefore
+    # reasons from a shared contract instead of guessing from a slot name or
+    # memorizing one lesson's sample wording.
+    semantic_role: Literal[
+        "observation",
+        "conclusion",
+        "operation",
+        "method",
+        "reason",
+        "explanation",
+        "selection",
+    ]
     expected: str | int | float | bool
     aliases: list[str] = Field(default_factory=list)
     accepted_values: list[str | int | float | bool] = Field(default_factory=list)
@@ -344,6 +356,7 @@ QUEUE_TASK = TaskDefinition(
         "left_count": SlotDefinition(
             id="left_count",
             description="왼쪽 줄 사람 수",
+            semantic_role="observation",
             expected=3,
             aliases=["3명", "세명", "세 명"],
             fact_sentence="왼쪽 줄에는 3명이 있어.",
@@ -351,6 +364,7 @@ QUEUE_TASK = TaskDefinition(
         "right_count": SlotDefinition(
             id="right_count",
             description="오른쪽 줄 사람 수",
+            semantic_role="observation",
             expected=5,
             aliases=["5명", "다섯명", "다섯 명"],
             fact_sentence="오른쪽 줄에는 5명이 있어.",
@@ -358,6 +372,7 @@ QUEUE_TASK = TaskDefinition(
         "smaller_number": SlotDefinition(
             id="smaller_number",
             description="3과 5 중 작은 수",
+            semantic_role="conclusion",
             expected=3,
             aliases=["3", "삼", "셋"],
             fact_sentence="3은 5보다 작아.",
@@ -365,6 +380,7 @@ QUEUE_TASK = TaskDefinition(
         "final_choice": SlotDefinition(
             id="final_choice",
             description="내 앞에 기다리는 사람이 적어 차례가 빨리 오는 줄",
+            semantic_role="selection",
             expected="left",
             aliases=["왼쪽", "왼쪽줄", "왼쪽 줄"],
             fact_sentence="왼쪽 줄에서는 내 차례가 더 빨리 와.",
@@ -372,6 +388,7 @@ QUEUE_TASK = TaskDefinition(
         "reason": SlotDefinition(
             id="reason",
             description="앞에 기다리는 사람이 적으면 내 차례가 빨리 오는 이유",
+            semantic_role="reason",
             expected="fewer_people",
             aliases=[
                 "앞에사람이적어서",
@@ -627,6 +644,7 @@ def calculation_task(
             "operation": SlotDefinition(
                 id="operation",
                 description="필요한 계산 종류",
+                semantic_role="operation",
                 expected=operation,
                 aliases=["더하기" if operation == "addition" else "빼기"],
                 fact_sentence=(f"{left:,}원과 {right:,}원은 {operation_phrase} 계산해."),
@@ -634,6 +652,7 @@ def calculation_task(
             "result": SlotDefinition(
                 id="result",
                 description="계산 결과",
+                semantic_role="conclusion",
                 expected=result,
                 aliases=[str(result), f"{result:,}", f"{result:,}원"],
                 fact_sentence=f"계산 결과는 {result:,}원이야.",
@@ -641,6 +660,7 @@ def calculation_task(
             "method": SlotDefinition(
                 id="method",
                 description=f"{method_label}이 필요한 자리 계산 방법",
+                semantic_role="method",
                 expected=method,
                 aliases=[method_label, f"{method_label}해"],
                 fact_sentence=f"자리값을 맞추고 {method_label}해서 계산해.",
@@ -877,6 +897,7 @@ def queue_task(
     task.slots["left_count"] = SlotDefinition(
         id="left_count",
         description="왼쪽 줄 사람 수",
+        semantic_role="observation",
         expected=left,
         aliases=KOREAN_COUNTS[left],
         fact_sentence=f"왼쪽 줄에는 {left}명이 있어.",
@@ -884,6 +905,7 @@ def queue_task(
     task.slots["right_count"] = SlotDefinition(
         id="right_count",
         description="오른쪽 줄 사람 수",
+        semantic_role="observation",
         expected=right,
         aliases=KOREAN_COUNTS[right],
         fact_sentence=f"오른쪽 줄에는 {right}명이 있어.",
@@ -891,6 +913,7 @@ def queue_task(
     task.slots["smaller_number"] = SlotDefinition(
         id="smaller_number",
         description=f"{left}{particle(left, '과', '와')} {right} 중 작은 수",
+        semantic_role="conclusion",
         expected=smaller,
         aliases=[str(smaller)],
         fact_sentence=f"{smaller}{particle(smaller, '이', '가')} 더 작은 수야.",
@@ -898,6 +921,7 @@ def queue_task(
     task.slots["final_choice"] = SlotDefinition(
         id="final_choice",
         description="내 앞에 기다리는 사람이 적어 차례가 빨리 오는 줄",
+        semantic_role="selection",
         expected=side,
         aliases=[side_label, f"{side_label}줄", f"{side_label} 줄"],
         fact_sentence=f"{side_label} 줄에서는 내 차례가 더 빨리 와.",
@@ -905,6 +929,7 @@ def queue_task(
     task.slots["reason"] = SlotDefinition(
         id="reason",
         description="앞에 기다리는 사람이 적으면 내 차례가 빨리 오는 이유",
+        semantic_role="reason",
         expected="fewer_people",
         aliases=[
             "앞에사람이적어서",
@@ -1081,6 +1106,7 @@ def menu_selection_task(
             "child_menu": SlotDefinition(
                 id="child_menu",
                 description="아이가 고른 메뉴",
+                semantic_role="selection",
                 expected=valid_ids[0],
                 accepted_values=valid_ids,
                 preserve_value=True,
@@ -1284,6 +1310,7 @@ def simple_calculation_task(
             "operation": SlotDefinition(
                 id="operation",
                 description="필요한 계산 종류",
+                semantic_role="operation",
                 expected=operation,
                 aliases=[operation_label],
                 fact_sentence=f"{operation_label}로 계산해.",
@@ -1291,6 +1318,7 @@ def simple_calculation_task(
             "result": SlotDefinition(
                 id="result",
                 description="계산 결과",
+                semantic_role="conclusion",
                 expected=result,
                 aliases=[str(result), f"{result:,}", f"{result:,}원"],
                 fact_sentence=f"계산 결과는 {result:,}원이야.",
@@ -1430,6 +1458,7 @@ def home_teaching_task(
             "answer": SlotDefinition(
                 id="answer",
                 description=f"화면의 {spec.title} 예시 문제 답",
+                semantic_role="conclusion",
                 expected=expected_answer,
                 aliases=[str(expected_answer).replace(",", "")],
                 fact_sentence=f"이 문제의 답은 {expected_answer}이야.",
@@ -1437,6 +1466,7 @@ def home_teaching_task(
             "rule": SlotDefinition(
                 id="rule",
                 description=f"{spec.title}를 해결하는 사실이 맞는 설명 또는 검수된 방법",
+                semantic_role="explanation",
                 expected=expected_rule,
                 aliases=list(
                     dict.fromkeys(
@@ -1649,6 +1679,7 @@ def _configure_number_count_task(
         "answer": SlotDefinition(
             id="answer",
             description="화면에 보이는 점의 전체 개수",
+            semantic_role="conclusion",
             expected=expected_answer,
             aliases=["3개", "세개", "세 개", "셋", "하나둘셋", "하나,둘,셋"],
             fact_sentence="점은 모두 3개야.",
@@ -1656,10 +1687,12 @@ def _configure_number_count_task(
         "tracking": SlotDefinition(
             id="tracking",
             description=(
-                "화면의 점마다 수 이름을 하나씩 붙여 한 번씩 세는 타당한 방법. "
-                "하나 둘 셋 하며 세기, 순서대로 세기, 가리키기, 손가락 펴기 등 "
-                "서로 다른 올바른 전략을 모두 인정한다. 특정 전략을 강요하지 않는다."
+                "화면에서 셀 대상을 구분하고 각 대상을 한 번씩 세는 타당한 행동. "
+                "수 이름 말하기, 순서대로 세기, 가리키기, 손가락 펴기 등 서로 다른 "
+                "올바른 전략을 인정한다. 단순히 개수 결과만 반복한 것은 방법이 아니며, "
+                "특정 문구나 하나의 전략을 강요하지 않는다."
             ),
+            semantic_role="method",
             expected="count_each_once",
             accepted_values=["point_each_dot", "one_by_one_order"],
             aliases=[
@@ -1737,7 +1770,7 @@ def _configure_number_count_task(
             ),
             StepDefinition(
                 id="choose_tracking",
-                prompt=short_prompt,
+                prompt="나 점을 셀 때 뭘 해야 할지 헷갈려... 같이 골라 볼까?",
                 target_slots=["tracking"],
                 input=choice_input(
                     ["tracking"],
@@ -1752,7 +1785,7 @@ def _configure_number_count_task(
                     )
                     for index, label in enumerate(short_options)
                 },
-                fallback_text="점을 놓치지 않을 방법을 같이 골라 보자.",
+                fallback_text="나 점을 셀 때 뭘 해야 할지 헷갈려... 같이 골라 볼까?",
             ),
         ],
         ExpressionLevel.L1: [
@@ -1835,6 +1868,7 @@ def _configure_number_compare_task(
         "answer": SlotDefinition(
             id="answer",
             description="점이 더 많은 쪽",
+            semantic_role="conclusion",
             expected=expected_answer,
             aliases=["오른쪽", "오른쪽이 더 많아", "오른쪽이 커", "5개인 쪽"],
             fact_sentence="오른쪽에 점이 더 많아.",
@@ -1844,6 +1878,7 @@ def _configure_number_compare_task(
             description=(
                 "왼쪽 3개와 오른쪽 5개를 세거나 3과 5를 비교해 오른쪽이 더 많음을 설명한 근거"
             ),
+            semantic_role="reason",
             expected="count_comparison",
             aliases=[
                 *spec.valid_explanations,

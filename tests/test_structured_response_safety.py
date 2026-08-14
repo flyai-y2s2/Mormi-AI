@@ -8,6 +8,7 @@ from conftest import FakeGateway
 from mormi_api.content import (
     HOME_TEACH_TASK_ID,
     HOME_TEACHING_CATALOG,
+    QUEUE_TASK_ID,
     create_scenario_data,
     get_task,
     home_teaching_task,
@@ -18,6 +19,7 @@ from mormi_api.repository import Repository
 from mormi_api.schemas import (
     ChildResponse,
     DifficultyClass,
+    EntryPhase,
     ExpressionLevel,
     HintLevel,
     InputKind,
@@ -474,6 +476,202 @@ async def test_claimless_correct_partial_never_falls_through_to_unrelated() -> N
     assert "그 얘기는 이따" not in turn.mormi.text
     assert turn.input.kind is InputKind.TEXT
     assert turn.input.target_slots == ["answer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("child_text", "evidence_span"),
+    [
+        ("10개중에 색칠된게 3개던데?", "색칠된게 3개"),
+        ("빈 동그라미 말고 초록색은 셋이야", "초록색은 셋"),
+        ("열 칸 중에서 채워진 건 세 칸이네", "채워진 건 세 칸"),
+        ("동그라미를 보니까 색 있는 게 세 개였어", "색 있는 게 세 개"),
+    ],
+)
+async def test_repeated_count_evidence_moves_from_targeted_text_to_choices(
+    child_text: str,
+    evidence_span: str,
+) -> None:
+    """A valid visual observation is preserved and never triggers a duplicate prompt."""
+
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="3",
+                factual=True,
+                evidence_span=evidence_span,
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": "3"},
+    )
+    state.entry_phase = EntryPhase.AWAITING_TARGETED_FOLLOWUP
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert next_state.verified_slots == {"answer": "3"}
+    assert next_state.concept_failures == 0
+    assert next_state.expression_level is ExpressionLevel.L2
+    assert next_state.hint_level is HintLevel.H0
+    assert turn.input.kind is InputKind.CHOICES
+    assert turn.input.target_slots == ["tracking"]
+    assert turn.mormi.text != initial.mormi.text
+    assert "같이 골라 볼까?" in turn.mormi.text
+    assert turn.note_update is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("curriculum_session_id", "child_text", "evidence_span"),
+    [
+        ("money-count", "500원하고 100원이니까 600원이야", "600원이야"),
+        ("money-budget", "돌려받는 돈은 200원이야", "200원이야"),
+        ("pattern-number", "그다음 수는 10이야", "10이야"),
+        ("clock-basic", "지금은 3시 30분이야", "3시 30분이야"),
+    ],
+)
+async def test_repeated_factual_evidence_changes_support_across_home_domains(
+    curriculum_session_id: str,
+    child_text: str,
+    evidence_span: str,
+) -> None:
+    """No-progress handling is task-contract based, not number-count specific."""
+
+    expected_answer = HOME_TEACHING_CATALOG[curriculum_session_id].sample_problem["correct"]
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value=expected_answer,
+                factual=True,
+                evidence_span=evidence_span,
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        curriculum_session_id,
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": expected_answer},
+    )
+    state.entry_phase = EntryPhase.AWAITING_TARGETED_FOLLOWUP
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert next_state.verified_slots == {"answer": expected_answer}
+    assert next_state.concept_failures == 0
+    assert next_state.expression_level is ExpressionLevel.L2
+    assert turn.input.kind is InputKind.CHOICES
+    assert turn.mormi.text != initial.mormi.text
+    assert turn.note_update is None
+
+
+@pytest.mark.asyncio
+async def test_repeated_observations_change_support_in_cafe_queue_too() -> None:
+    """The same no-progress policy applies to a cafe task, not just home lessons."""
+
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="left_count",
+                value=3,
+                factual=True,
+                evidence_span="왼쪽은 세 명",
+            ),
+            SlotClaim(
+                slot_id="right_count",
+                value=5,
+                factual=True,
+                evidence_span="오른쪽은 다섯 명",
+            ),
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = SessionState(
+        learner_id=1,
+        scene=SceneType.CAFE,
+        scenario_id="cafe_queue",
+        task_ids=[QUEUE_TASK_ID],
+        task_start_levels={QUEUE_TASK_ID: ExpressionLevel.L4},
+        scenario_data={"left_count": 3, "right_count": 5},
+        expression_level=ExpressionLevel.L4,
+        task_start_level=ExpressionLevel.L4,
+        verified_slots={"left_count": 3, "right_count": 5},
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+    assert initial.input.target_slots == ["final_choice", "reason"]
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="왼쪽은 세 명이고 오른쪽은 다섯 명이야",
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert next_state.verified_slots == {"left_count": 3, "right_count": 5}
+    assert next_state.concept_failures == 0
+    assert next_state.expression_level is ExpressionLevel.L3
+    assert turn.input.target_slots == ["final_choice"]
+    assert turn.mormi.text != initial.mormi.text
+    assert turn.note_update is None
 
 
 @pytest.mark.asyncio

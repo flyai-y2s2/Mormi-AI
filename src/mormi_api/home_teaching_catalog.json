@@ -40,7 +40,7 @@
         "count": 3
       }
     },
-    "content_version": 4,
+    "content_version": 5,
     "entry_mode": "wrong_guess",
     "entry_prompt": "지금 점이 두 개 있는 거 맞지?",
     "l4_prompt": "점이 몇 개인지랑 어떻게 세는지 알려주면 안 될까?"

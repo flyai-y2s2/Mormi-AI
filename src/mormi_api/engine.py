@@ -343,26 +343,39 @@ class ConversationEngine:
         # must call the response successful, and every accepted claim must
         # match reviewed curriculum facts.  An error analysis can therefore
         # never fill a slot even if a malformed model/client supplies a value.
-        accepted_claims = (
+        grounded_claims = (
             task.validated_claims(
                 (claim.slot_id, claim.value, claim.factual)
                 for claim in analysis.claims
-                if claim.slot_id in interpreted_slots
             )
             if analysis.response_category in successful_categories
             else {}
         )
         if response.type is ResponseType.TEXT and response.text:
-            accepted_claims = self._filter_text_explanation_claims(
+            grounded_claims = self._filter_text_explanation_claims(
                 task,
                 response.text,
                 analysis,
-                accepted_claims,
+                grounded_claims,
             )
+        # Only claims requested by the current turn may advance the state.
+        # A child can still repeat a previously verified observation or result
+        # naturally. Keep that grounded fact available to the speaker for
+        # acknowledgement without counting it as progress.
+        accepted_claims = {
+            slot_id: value
+            for slot_id, value in grounded_claims.items()
+            if slot_id in interpreted_slots
+        }
+        understood_claims = {
+            slot_id: value
+            for slot_id, value in grounded_claims.items()
+            if state.verified_slots.get(slot_id) == value
+        }
+        understood_claims.update(accepted_claims)
         # A repeated fact is still understood, but it is not new learning
-        # progress.  Treating it as newly verified used to select the same
-        # unresolved step forever (for example, repeatedly asking how to count
-        # after the child repeatedly said "하나, 둘, 셋 하면서 세어").
+        # progress. Treating it as newly verified can select the same unresolved
+        # step forever instead of changing the support contract.
         newly_verified = {
             slot_id: value
             for slot_id, value in accepted_claims.items()
@@ -444,8 +457,11 @@ class ConversationEngine:
         if analysis.response_category in successful_categories:
             if entry_active or open_followup_active or targeted_followup_active:
                 next_state.entry_phase = EntryPhase.RESOLVED
-            if next_state.expression_level is not ExpressionLevel.L0:
-                next_state.expression_level = next_state.expression_level.lower()
+            self._lower_until_visible_contract_changes(
+                next_state,
+                task,
+                interpreted_step,
+            )
             if next_state.expression_level is ExpressionLevel.L0:
                 next_state.hint_level = HintLevel.H3
                 next_state.task_max_hint = HintLevel.H3
@@ -453,7 +469,21 @@ class ConversationEngine:
                 fallback = "같은 말만 다시 물어서 미안해. 도움 카드대로 같이 해볼까?"
             else:
                 dialogue_act = "acknowledge_unstructured_partial"
-                fallback = "앗, 내가 한 번에 많이 물어봤네."
+                next_step = task.step_for(
+                    next_state.expression_level,
+                    next_state.verified_slots,
+                )
+                if understood_claims:
+                    acknowledgement = self._younger_sibling_acknowledgement(
+                        task,
+                        understood_claims,
+                    )
+                    fallback = self._preface_question(acknowledgement, next_step.prompt)
+                else:
+                    fallback = self._preface_question(
+                        "앗, 내가 한 번에 많이 물어봤네.",
+                        next_step.prompt,
+                    )
             return self._decision_for_current_step(
                 next_state,
                 task,
@@ -462,6 +492,7 @@ class ConversationEngine:
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
+                newly_verified=understood_claims,
             )
 
         category = analysis.response_category
@@ -936,6 +967,43 @@ class ConversationEngine:
             if hint.visual_type:
                 return VisualContract(type=hint.visual_type, data=hint.visual_data)
         return task.base_visual
+
+    @staticmethod
+    def _step_contract_signature(step: Any) -> tuple[str, str]:
+        """Describe what the child can actually see and do on a step.
+
+        Expression levels are internal metadata.  Two different levels can
+        accidentally resolve to the same prompt and the same text box, which
+        feels like an infinite loop to the child.  The serialized input keeps
+        choices, fill text and target slots in this visible-contract check.
+        """
+
+        prompt = re.sub(r"\s+", "", step.prompt)
+        return prompt, step.input.model_dump_json(exclude_none=True)
+
+    @classmethod
+    def _lower_until_visible_contract_changes(
+        cls,
+        state: SessionState,
+        task: TaskDefinition,
+        previous_step: Any,
+    ) -> None:
+        """Lower support until the next child interaction is visibly new.
+
+        A targeted L4 follow-up already uses an L3-shaped text question while
+        preserving the child's L4 credit.  Merely changing the stored level
+        from L4 to L3 would therefore repeat the exact same interaction.  In
+        that case continue to L2, where choices provide real additional help.
+        """
+
+        previous_signature = cls._step_contract_signature(previous_step)
+        if state.expression_level is not ExpressionLevel.L0:
+            state.expression_level = state.expression_level.lower()
+        while state.expression_level is not ExpressionLevel.L0:
+            candidate = task.step_for(state.expression_level, state.verified_slots)
+            if cls._step_contract_signature(candidate) != previous_signature:
+                return
+            state.expression_level = state.expression_level.lower()
 
     @staticmethod
     def _partial_fallback(

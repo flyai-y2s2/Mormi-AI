@@ -73,7 +73,7 @@ CURRENT_FRONTEND_HOME_SESSION_IDS = {
 
 def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert set(HOME_TEACHING_CATALOG) == CURRENT_FRONTEND_HOME_SESSION_IDS
-    assert HOME_TEACHING_CATALOG["number-count"].content_version == 4
+    assert HOME_TEACHING_CATALOG["number-count"].content_version == 5
     assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
     assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
     assert all(
@@ -116,6 +116,24 @@ def test_number_count_support_does_not_force_pointing_as_the_only_method() -> No
     guided = task.steps[ExpressionLevel.L1][1]
     assert guided.prompt == "점을 하나씩 보면서 □."
     assert guided.choice_effects["say_one_number"] == {"tracking": "count_each_once"}
+    short_method = task.steps[ExpressionLevel.L3][1]
+    choice_method = task.steps[ExpressionLevel.L2][1]
+    assert short_method.prompt != choice_method.prompt
+    assert short_method.input.kind is InputKind.TEXT
+    assert choice_method.input.kind is InputKind.CHOICES
+
+
+def test_every_home_task_declares_semantic_roles_instead_of_relying_on_slot_names() -> None:
+    for spec in HOME_TEACHING_CATALOG.values():
+        task = home_teaching_task(spec, skill_id=spec.id)
+        assert all(slot.semantic_role for slot in task.slots.values())
+        assert task.slots["answer"].semantic_role == "conclusion"
+        if spec.id == "number-count":
+            assert task.slots["tracking"].semantic_role == "method"
+        elif spec.id == "number-compare":
+            assert task.slots["reason"].semantic_role == "reason"
+        else:
+            assert task.slots["rule"].semantic_role == "explanation"
 
 
 @pytest.mark.asyncio
@@ -210,6 +228,18 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
                 "두 쪽 모두 5개라서",
             ]
             assert "5개인 쪽" in l1_answer.prompt
+            assert l1_rule.input.kind is InputKind.FILL
+            continue
+
+        if spec.id == "number-count":
+            assert l2_answer.prompt == spec.sample_problem["prompt"]
+            assert [choice.label for choice in l2_answer.input.choices] == expected_answers
+            # The preceding targeted follow-up already uses short_prompt with
+            # a text box.  L2 must therefore sound different and expose real
+            # choice support instead of visually repeating the same turn.
+            assert l2_method.prompt != spec.short_prompt
+            assert "같이 골라 볼까?" in l2_method.prompt
+            assert l2_method.input.kind is InputKind.CHOICES
             assert l1_rule.input.kind is InputKind.FILL
             continue
 

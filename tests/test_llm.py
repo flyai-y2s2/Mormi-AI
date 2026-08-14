@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from mormi_api.content import HOME_TEACH_TASK_ID, HOME_TEACHING_CATALOG, home_teaching_task
+from mormi_api.content import (
+    HOME_TEACH_TASK_ID,
+    HOME_TEACHING_CATALOG,
+    home_teaching_task,
+    menu_selection_task,
+    queue_task,
+    simple_calculation_task,
+)
 from mormi_api.llm import ClaudeGateway, structured_output_schema, validate_speaker_output
 from mormi_api.schemas import (
+    CafeMenuItem,
     ChildResponse,
     DifficultyClass,
     ExpressionLevel,
@@ -105,6 +114,125 @@ def test_speaker_must_keep_the_orchestrator_question() -> None:
     )
 
 
+def test_speaker_cannot_repeat_the_previous_line_verbatim() -> None:
+    context = SpeakerContext(
+        dialogue_act="acknowledge_unstructured_partial",
+        previous_question="어떻게 세는지 알려주면 안 될까?",
+        required_question="어떻게 세는지 알려주면 안 될까?",
+        fallback_text="내가 또 똑같이 물었네... 같이 골라 볼까?",
+    )
+    assert (
+        validate_speaker_output(
+            SpeakerOutput(text="어떻게 세는지 알려주면 안 될까?"),
+            context,
+        )
+        is None
+    )
+
+
+def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() -> None:
+    menu_items = (
+        CafeMenuItem(id="tea", name="차", price=2_000),
+        CafeMenuItem(id="cake", name="케이크", price=3_000),
+    )
+    task_cases = [
+        (
+            home_teaching_task(
+                HOME_TEACHING_CATALOG["number-count"],
+                skill_id="number-count",
+            ),
+            {"answer": "conclusion", "tracking": "method"},
+        ),
+        (
+            home_teaching_task(
+                HOME_TEACHING_CATALOG["number-compare"],
+                skill_id="number-compare",
+            ),
+            {"answer": "conclusion", "reason": "reason"},
+        ),
+        (
+            home_teaching_task(
+                HOME_TEACHING_CATALOG["clock-basic"],
+                skill_id="clock-basic",
+            ),
+            {"answer": "conclusion", "rule": "explanation"},
+        ),
+        (
+            queue_task(task_id="queue_roles", stage_id="queue", left=2, right=5),
+            {
+                "left_count": "observation",
+                "right_count": "observation",
+                "smaller_number": "conclusion",
+                "final_choice": "selection",
+                "reason": "reason",
+            },
+        ),
+        (
+            simple_calculation_task(
+                task_id="calculation_roles",
+                stage_id="menu_total",
+                title="메뉴값 계산하기",
+                left=2_000,
+                right=3_000,
+                operation="addition",
+                left_label="차",
+                right_label="케이크",
+                behavior="menu_total",
+                note_policy="stage",
+                coauthored_note="두 메뉴 가격을 더해서 전체 가격을 구해.",
+                context={},
+            ),
+            {"operation": "operation", "result": "conclusion"},
+        ),
+        (
+            menu_selection_task(
+                task_id="menu_roles",
+                stage_id="budget_menu",
+                menu_items=menu_items,
+                mormi_menu=menu_items[0],
+                budget=10_000,
+                auto_total=True,
+                behavior="budget_menu_selection",
+                note_policy="stage",
+            ),
+            {"child_menu": "selection"},
+        ),
+    ]
+
+    for task, roles in task_cases:
+        state = SessionState(
+            learner_id=1,
+            scene=task.scene,
+            scenario_id="semantic_role_test",
+            task_ids=[task.id],
+            expression_level=ExpressionLevel.L4,
+        )
+        prompt = ClaudeGateway._classifier_prompt(
+            state,
+            task,
+            previous_question=task.steps[ExpressionLevel.L4][0].prompt,
+            response=ChildResponse(
+                turn_id="turn_roles",
+                response_id=uuid4(),
+                type=ResponseType.TEXT,
+                text="내가 본 걸 내 말로 설명했어",
+            ),
+        )
+        payload = json.loads(prompt)
+
+        assert set(payload["semantic_role_policy"]) == {
+            "observation",
+            "conclusion",
+            "operation",
+            "method",
+            "reason",
+            "explanation",
+            "selection",
+        }
+        slots = payload["all_task_slot_contracts"]
+        assert {slot_id: slots[slot_id]["semantic_role"] for slot_id in roles} == roles
+
+
 def test_speaker_rejects_teacher_style_probe() -> None:
     context = SpeakerContext(
         dialogue_act="acknowledge_partial",
@@ -130,10 +258,16 @@ def test_speaker_rejects_teacher_style_probe() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unrelated_classification_is_semantically_rechecked_once() -> None:
+@pytest.mark.parametrize(
+    "initial_category",
+    [ResponseCategory.UNRELATED_RESPONSE, ResponseCategory.CONCEPTUAL_ERROR],
+)
+async def test_negative_free_text_classification_is_semantically_rechecked_once(
+    initial_category: ResponseCategory,
+) -> None:
     first = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
-        response_category=ResponseCategory.UNRELATED_RESPONSE,
+        response_category=initial_category,
         difficulty_class=DifficultyClass.UNKNOWN,
         confidence=0.7,
     )
@@ -192,3 +326,5 @@ async def test_unrelated_classification_is_semantically_rechecked_once() -> None
     assert result.claims[0].slot_id == "tracking"
     assert len(messages.prompts) == 2
     assert "semantic_relation_audit" in messages.prompts[1]
+    assert "문구 일치가 아니라" in messages.prompts[0]
+    assert "10개 중 색칠된 게 3개던데" not in messages.prompts[0]
