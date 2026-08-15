@@ -5,7 +5,7 @@ import random
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -35,6 +35,123 @@ _TEACHER_EVALUATION_COPY = re.compile(
     r"어떻게\s+[^?]*(?:했어|셌어|찾았어|읽었어|비교했어)|까닭은\s+무엇|"
     r"이유를\s*(?:말|설명)|설명해\s*봐|말해\s*봐)"
 )
+
+# 도움 카드는 모르미의 대사가 아니라, 아이가 문제를 계속 풀 수 있도록
+# 화면이 제공하는 검수된 발판이다.  이 표현들은 문법적으로는 성립해도
+# 무엇을 보고 무엇을 해야 하는지 특정하지 않아 힌트로 기능하지 않는다.
+_AMBIGUOUS_HELP_COPY = re.compile(
+    r"(큰\s*값부터|다음\s*돈|이어\s*더해|차례로\s*더하면\s*쉬워|"
+    r"그것을|이것을|그다음\s*것|위의\s*것|아래의\s*것)"
+)
+
+HelpSupportType = Literal["attention", "guided_action", "joint_model"]
+HelpAnswerPolicy = Literal["hidden", "partial", "revealed"]
+HelpMethodPolicy = Literal["open_methods", "target_method"]
+HelpSupportMode = Literal[
+    "attention",
+    "guided_equation",
+    "guided_highlight",
+    "guided_manipulation",
+    "guided_sequence",
+    "guided_choice",
+    "joint_model",
+]
+HelpSkill = Literal[
+    "counting",
+    "comparison",
+    "place_value",
+    "addition",
+    "subtraction",
+    "budget",
+    "queue",
+    "selection",
+    "grouping",
+    "pattern",
+    "time",
+    "measurement",
+    "geometry",
+    "data",
+]
+
+_HELP_CARD_PROFILE: dict[HintLevel, tuple[HelpSupportType, HelpAnswerPolicy]] = {
+    HintLevel.H1: ("attention", "hidden"),
+    HintLevel.H2: ("guided_action", "partial"),
+    HintLevel.H3: ("joint_model", "revealed"),
+}
+
+_GUIDED_SUPPORT_MODES = {
+    "guided_equation",
+    "guided_highlight",
+    "guided_manipulation",
+    "guided_sequence",
+    "guided_choice",
+}
+
+_HELP_SKILL_SUPPORT_MODES: dict[HelpSkill, set[HelpSupportMode]] = {
+    "counting": {"guided_sequence", "guided_manipulation", "guided_highlight"},
+    "comparison": {"guided_choice", "guided_highlight", "guided_manipulation"},
+    "place_value": {"guided_equation", "guided_manipulation"},
+    "addition": {"guided_equation", "guided_manipulation", "guided_sequence"},
+    "subtraction": {"guided_equation", "guided_manipulation", "guided_sequence"},
+    "budget": {"guided_equation", "guided_choice"},
+    "queue": {"guided_choice", "guided_sequence"},
+    "selection": {"guided_choice", "guided_equation"},
+    "grouping": {"guided_manipulation", "guided_equation", "guided_sequence"},
+    "pattern": {"guided_highlight", "guided_equation", "guided_sequence"},
+    "time": {"guided_highlight", "guided_sequence"},
+    "measurement": {"guided_manipulation", "guided_choice", "guided_highlight"},
+    "geometry": {"guided_choice", "guided_manipulation", "guided_highlight"},
+    "data": {"guided_choice", "guided_manipulation", "guided_highlight"},
+}
+
+_DEFAULT_GUIDED_SUPPORT_MODE: dict[HelpSkill, HelpSupportMode] = {
+    "counting": "guided_sequence",
+    "comparison": "guided_choice",
+    "place_value": "guided_equation",
+    "addition": "guided_equation",
+    "subtraction": "guided_equation",
+    "budget": "guided_equation",
+    "queue": "guided_sequence",
+    "selection": "guided_choice",
+    "grouping": "guided_manipulation",
+    "pattern": "guided_sequence",
+    "time": "guided_sequence",
+    "measurement": "guided_manipulation",
+    "geometry": "guided_manipulation",
+    "data": "guided_highlight",
+}
+
+# These lessons explicitly practise one named representation or procedure.
+# Other lessons remain open-method: the help card may offer one route, but the
+# classifier must still accept any mathematically valid child explanation.
+_TARGET_METHOD_HOME_ITEMS = {
+    "number-count",
+    "number-make-ten",
+    "number-place-value",
+    "add-place",
+    "add-make-ten",
+    "sub-place",
+    "sub-borrow",
+    "multiply-groups",
+    "multiply-addition",
+    "multiply-easy-tables",
+    "multiply-tables",
+    "divide-share",
+    "divide-group",
+    "pattern-repeat",
+    "pattern-number",
+    "pattern-unknown",
+    "clock-basic",
+    "clock-quarter",
+    "time-duration",
+    "time-calendar",
+    "measure-compare",
+    "measure-ruler",
+    "geometry-compose",
+    "geometry-position",
+    "data-classify",
+    "data-chart",
+}
 
 
 class SlotDefinition(BaseModel):
@@ -109,11 +226,64 @@ class StepDefinition(BaseModel):
     fallback_text: str = Field(max_length=50)
 
 
-class HintDefinition(BaseModel):
+class HelpPlanStep(BaseModel):
+    body: str = Field(min_length=1, max_length=50)
+    support_type: HelpSupportType
+    answer_policy: HelpAnswerPolicy
+    support_mode: HelpSupportMode
+    fact_refs: list[str] = Field(min_length=1)
+    action: str | None = Field(default=None, min_length=1, max_length=50)
+
+
+class HintDefinition(HelpPlanStep):
     level: HintLevel
-    body: str
     visual_type: str | None = None
     visual_data: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_help_contract(self) -> HintDefinition:
+        expected_support, expected_answer_policy = _HELP_CARD_PROFILE[self.level]
+        if self.support_type != expected_support:
+            raise ValueError(f"{self.level}: support_type must be {expected_support}")
+        if self.answer_policy != expected_answer_policy:
+            raise ValueError(f"{self.level}: answer_policy must be {expected_answer_policy}")
+        if self.level is HintLevel.H1 and self.support_mode != "attention":
+            raise ValueError("H1: support_mode must direct attention")
+        if self.level is HintLevel.H2 and self.support_mode not in _GUIDED_SUPPORT_MODES:
+            raise ValueError("H2: support_mode must provide one stronger guided support")
+        if self.level is HintLevel.H3 and self.support_mode != "joint_model":
+            raise ValueError("H3: support_mode must be a complete joint model")
+        if self.level in {HintLevel.H2, HintLevel.H3} and not self.action:
+            raise ValueError(f"{self.level}: supported help needs one concrete action")
+        if _AMBIGUOUS_HELP_COPY.search(self.body):
+            raise ValueError("help-card copy contains an ambiguous action or reference")
+        return self
+
+
+def reviewed_help_card(
+    level: HintLevel,
+    body: str,
+    *,
+    support_mode: HelpSupportMode,
+    fact_refs: Sequence[str],
+    action: str | None = None,
+    visual_type: str | None = None,
+    visual_data: Mapping[str, Any] | None = None,
+) -> HintDefinition:
+    """Build one help card from the fixed H1/H2/H3 pedagogical contract."""
+
+    support_type, answer_policy = _HELP_CARD_PROFILE[level]
+    return HintDefinition(
+        level=level,
+        body=body,
+        support_type=support_type,
+        answer_policy=answer_policy,
+        support_mode=support_mode,
+        fact_refs=list(fact_refs),
+        action=action,
+        visual_type=visual_type,
+        visual_data=dict(visual_data or {}),
+    )
 
 
 class TaskDefinition(BaseModel):
@@ -121,6 +291,9 @@ class TaskDefinition(BaseModel):
     scene: SceneType
     stage_id: str
     skill_id: str
+    help_skills: list[HelpSkill] = Field(min_length=1)
+    help_method_policy: HelpMethodPolicy
+    accepted_methods: list[str] = Field(min_length=1)
     title: str
     goal: str
     visible_facts: dict[str, Any]
@@ -158,6 +331,69 @@ class TaskDefinition(BaseModel):
     behavior: str = "teaching"
     note_policy: str = "stage"
     transition_text: str | None = None
+
+    @model_validator(mode="after")
+    def validate_help_plan(self) -> TaskDefinition:
+        required_levels = {HintLevel.H1, HintLevel.H2, HintLevel.H3}
+        if set(self.hints) != required_levels:
+            raise ValueError("every task needs exactly one H1, H2 and H3 help card")
+        reviewed_refs = set(self.visible_facts) | set(self.slots)
+        visible_refs = set(self.visible_facts)
+        allowed_guided_modes: set[HelpSupportMode] = set()
+        for help_skill in self.help_skills:
+            allowed_guided_modes.update(_HELP_SKILL_SUPPORT_MODES[help_skill])
+        normalized_methods = {
+            re.sub(r"\s+", "", method) for method in self.accepted_methods if method.strip()
+        }
+        if len(normalized_methods) != len(self.accepted_methods):
+            raise ValueError(f"{self.id}: accepted help methods must be non-empty and unique")
+        if self.hints[HintLevel.H2].support_mode not in allowed_guided_modes:
+            raise ValueError(
+                f"{self.id}: H2 support mode does not match declared help skills"
+            )
+        bodies: set[str] = set()
+        for level in (HintLevel.H1, HintLevel.H2, HintLevel.H3):
+            hint = self.hints[level]
+            if hint.level is not level:
+                raise ValueError(f"{self.id}: hint key and declared level must match")
+            missing_refs = set(hint.fact_refs) - reviewed_refs
+            if missing_refs:
+                raise ValueError(f"{self.id}/{level}: unknown fact refs {sorted(missing_refs)}")
+            if hint.answer_policy != "revealed":
+                hidden_answer_refs = {
+                    ref
+                    for ref in hint.fact_refs
+                    if ref not in visible_refs
+                    and ref in self.slots
+                    and self.slots[ref].semantic_role == "conclusion"
+                }
+                if hidden_answer_refs:
+                    raise ValueError(
+                        f"{self.id}/{level}: unrevealed help references final answer slots"
+                    )
+            normalized_body = re.sub(r"\s+", "", hint.body)
+            if normalized_body in bodies:
+                raise ValueError(f"{self.id}: different help levels need different visible copy")
+            bodies.add(normalized_body)
+        joint_steps = [
+            step
+            for step in self.steps.get(ExpressionLevel.L0, [])
+            if step.input.kind is InputKind.JOINT
+        ]
+        if not joint_steps:
+            raise ValueError(f"{self.id}: H3 needs an L0 joint-performance step")
+        joint_completion_slots = {
+            slot_id
+            for step in joint_steps
+            for slot_id in (step.input.config.get("completion_values") or {})
+        }
+        missing_completion_slots = set(self.required_slots) - joint_completion_slots
+        if missing_completion_slots:
+            raise ValueError(
+                f"{self.id}: L0 cannot complete required slots "
+                f"{sorted(missing_completion_slots)}"
+            )
+        return self
 
     def step_for(
         self,
@@ -218,6 +454,90 @@ class ScenarioDefinition(BaseModel):
     task_ids: list[str]
 
 
+class HomeHelpPlan(BaseModel):
+    """Three explicit help levels required by every home-teaching item."""
+
+    H1: HelpPlanStep
+    H2: HelpPlanStep
+    H3: HelpPlanStep
+
+    @model_validator(mode="after")
+    def validate_distinct_support(self) -> HomeHelpPlan:
+        steps = {
+            HintLevel.H1: self.H1,
+            HintLevel.H2: self.H2,
+            HintLevel.H3: self.H3,
+        }
+        bodies = tuple(step.body for step in steps.values())
+        normalized = {re.sub(r"\s+", "", body) for body in bodies}
+        if len(normalized) != len(bodies):
+            raise ValueError("H1, H2 and H3 help cards must have distinct jobs and copy")
+        if any(_AMBIGUOUS_HELP_COPY.search(body) for body in bodies):
+            raise ValueError("help-card copy contains an ambiguous action or reference")
+        for level, step in steps.items():
+            expected_support, expected_answer_policy = _HELP_CARD_PROFILE[level]
+            if step.support_type != expected_support:
+                raise ValueError(f"{level}: support_type must be {expected_support}")
+            if step.answer_policy != expected_answer_policy:
+                raise ValueError(f"{level}: answer_policy must be {expected_answer_policy}")
+        if self.H1.support_mode != "attention":
+            raise ValueError("H1 must direct attention")
+        if self.H2.support_mode not in _GUIDED_SUPPORT_MODES or not self.H2.action:
+            raise ValueError("H2 must provide one concrete guided support")
+        if self.H3.support_mode != "joint_model" or not self.H3.action:
+            raise ValueError("H3 must provide one complete joint model")
+        return self
+
+    def step_for(self, level: HintLevel) -> HelpPlanStep:
+        if level is HintLevel.H1:
+            return self.H1
+        if level is HintLevel.H2:
+            return self.H2
+        if level is HintLevel.H3:
+            return self.H3
+        raise ValueError("H0 does not have a help-card body")
+
+
+_LEGACY_HOME_HELP_SKILLS: dict[str, list[HelpSkill]] = {
+    "number-count": ["counting"],
+    "number-compare": ["counting", "comparison"],
+    "money-count": ["addition"],
+    "number-make-ten": ["counting", "addition"],
+    "number-place-value": ["place_value", "addition"],
+    "add-pictures": ["counting", "addition"],
+    "money-price": ["addition"],
+    "add-place": ["place_value", "addition"],
+    "add-make-ten": ["addition"],
+    "sub-pictures": ["counting", "subtraction"],
+    "money-budget": ["subtraction"],
+    "sub-place": ["place_value", "subtraction"],
+    "sub-borrow": ["place_value", "subtraction"],
+    "multiply-groups": ["counting", "grouping"],
+    "multiply-addition": ["addition", "grouping"],
+    "money-mission": ["addition", "subtraction"],
+    "multiply-easy-tables": ["counting", "grouping"],
+    "multiply-tables": ["addition", "grouping"],
+    "divide-share": ["grouping"],
+    "divide-group": ["grouping"],
+    "pattern-repeat": ["pattern"],
+    "pattern-number": ["comparison", "pattern"],
+    "pattern-unknown": ["subtraction", "pattern"],
+    "clock-basic": ["time"],
+    "clock-quarter": ["counting", "time"],
+    "time-duration": ["time"],
+    "time-calendar": ["counting", "time"],
+    "measure-compare": ["comparison", "measurement"],
+    "measure-ruler": ["measurement"],
+    "measure-weight-capacity": ["comparison", "measurement"],
+    "geometry-shapes": ["counting", "geometry"],
+    "geometry-compose": ["geometry"],
+    "geometry-position": ["geometry"],
+    "data-classify": ["data"],
+    "data-chart": ["comparison", "data"],
+    "data-chance": ["comparison", "data"],
+}
+
+
 class HomeTeachingSpec(BaseModel):
     """Reviewed teaching content for one frontend curriculum session."""
 
@@ -225,6 +545,9 @@ class HomeTeachingSpec(BaseModel):
     subject: str
     unit: str
     title: str
+    help_skills: list[HelpSkill] = Field(min_length=1)
+    help_method_policy: HelpMethodPolicy
+    accepted_methods: list[str] = Field(min_length=1)
     # ``misconception_prompt`` is retained only so conversations snapshotted
     # before content v2 can still resume.  New catalog entries use l4_prompt.
     content_version: int = Field(default=1, ge=1)
@@ -243,13 +566,126 @@ class HomeTeachingSpec(BaseModel):
     short_prompt: str = Field(max_length=50)
     short_correct: str
     short_options: list[str] = Field(min_length=2, max_length=6)
-    hint: str
-    help_lines: list[str] = Field(min_length=1, max_length=4)
+    help_plan: HomeHelpPlan
     # Reviewed alternatives let the classifier recognize mathematically valid
     # child explanations without forcing one textbook strategy or wording.
     valid_explanations: list[str] = Field(default_factory=list)
     misconception: str
     sample_problem: dict[str, Any]
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_help_copy(cls, raw: Any) -> Any:
+        """Resume old snapshots while removing the old dead-field contract.
+
+        Catalog v1 stored ``hint`` plus a list whose first item was never
+        rendered.  Existing conversations may still contain that shape, so
+        convert it at the boundary instead of keeping two live sources.
+        """
+
+        if not isinstance(raw, Mapping):
+            return raw
+        data = dict(raw)
+        content_version = int(data.get("content_version", 1))
+        if "help_skills" not in data and content_version <= 6:
+            legacy_id = data.get("id")
+            if isinstance(legacy_id, str) and legacy_id in _LEGACY_HOME_HELP_SKILLS:
+                data["help_skills"] = _LEGACY_HOME_HELP_SKILLS[legacy_id]
+        legacy_id = data.get("id")
+        if "help_method_policy" not in data and content_version <= 6:
+            data["help_method_policy"] = (
+                "target_method" if legacy_id in _TARGET_METHOD_HOME_ITEMS else "open_methods"
+            )
+        if "accepted_methods" not in data and content_version <= 6:
+            candidates = (
+                [data.get("short_correct"), data.get("learned_line")]
+                if data.get("help_method_policy") == "target_method"
+                else [*(data.get("valid_explanations") or []), data.get("learned_line")]
+            )
+            data["accepted_methods"] = list(
+                dict.fromkeys(item for item in candidates if isinstance(item, str) and item.strip())
+            )
+        if "help_plan" in data:
+            return data
+        legacy_cards = data.pop("help_cards", None)
+        legacy_hint = data.pop("hint", None)
+        legacy_lines = data.pop("help_lines", None)
+        learned_line = data.get("learned_line")
+        sample_problem = data.get("sample_problem")
+        if isinstance(legacy_cards, Mapping):
+            legacy_hint = legacy_cards.get("attention")
+            legacy_lines = [
+                legacy_cards.get("guided_action"),
+                legacy_cards.get("joint_model"),
+            ]
+        if not isinstance(legacy_hint, str) or not legacy_hint.strip():
+            return raw
+        if not isinstance(legacy_lines, list) or not legacy_lines:
+            return raw
+        guided = legacy_lines[-1]
+        joint = learned_line
+        if not isinstance(guided, str) or not isinstance(joint, str):
+            return raw
+        # Some legacy entries reused the exact H1 copy at H2.  A snapshot must
+        # remain resumable even then, so use its reviewed first line when that
+        # gives the two levels distinct visible support.
+        if re.sub(r"\s+", "", legacy_hint) == re.sub(r"\s+", "", guided):
+            first_line = legacy_lines[0]
+            if isinstance(first_line, str) and first_line.strip():
+                guided = first_line
+        sample_ref = "sample_problem"
+        answer_ref = "sample_answer"
+        if not isinstance(sample_problem, Mapping):
+            return raw
+        correct = sample_problem.get("correct")
+        normalized_correct = re.sub(r"[\s,]", "", str(correct))
+        if normalized_correct not in re.sub(r"[\s,]", "", joint):
+            joint = f"이 문제의 답은 {correct}이야."
+        legacy_skills = data.get("help_skills")
+        first_skill = (
+            legacy_skills[0] if isinstance(legacy_skills, list) and legacy_skills else None
+        )
+        guided_mode = _DEFAULT_GUIDED_SUPPORT_MODE.get(
+            cast(HelpSkill, first_skill), "guided_highlight"
+        )
+        data["help_plan"] = {
+            "H1": {
+                "body": legacy_hint,
+                "support_type": "attention",
+                "answer_policy": "hidden",
+                "support_mode": "attention",
+                "fact_refs": [sample_ref],
+            },
+            "H2": {
+                "body": guided,
+                "support_type": "guided_action",
+                "answer_policy": "partial",
+                "support_mode": guided_mode,
+                "fact_refs": [sample_ref],
+                "action": guided,
+            },
+            "H3": {
+                "body": joint,
+                "support_type": "joint_model",
+                "answer_policy": "revealed",
+                "support_mode": "joint_model",
+                "fact_refs": [sample_ref, answer_ref],
+                "action": "완성된 문장을 함께 읽기",
+            },
+        }
+        return data
+
+    @property
+    def hint(self) -> str:
+        """Read-only compatibility projection for pre-v4 callers."""
+
+        return self.help_plan.H1.body
+
+    @property
+    def help_lines(self) -> list[str]:
+        """Read-only compatibility projection; no catalog field is discarded."""
+
+        return [self.help_plan.H2.body, self.help_plan.H3.body]
 
     @property
     def effective_l4_prompt(self) -> str:
@@ -274,6 +710,16 @@ class HomeTeachingSpec(BaseModel):
             raise ValueError("sample_problem.correct must be one of answers")
         if not isinstance(visual, Mapping) or not visual.get("type"):
             raise ValueError("sample_problem.visual.type is required")
+        normalized_methods = {
+            re.sub(r"\s+", "", method) for method in self.accepted_methods if method.strip()
+        }
+        if len(normalized_methods) != len(self.accepted_methods):
+            raise ValueError("accepted_methods must be non-empty and unique")
+        allowed_guided_modes: set[HelpSupportMode] = set()
+        for help_skill in self.help_skills:
+            allowed_guided_modes.update(_HELP_SKILL_SUPPORT_MODES[help_skill])
+        if self.help_plan.H2.support_mode not in allowed_guided_modes:
+            raise ValueError("H2 support mode does not match declared help skills")
         if self.short_prompt.strip() == "어떤 방법이 맞을까?":
             raise ValueError("short_prompt must name the current mathematical action")
         if re.search(r"그\s*부분.*(?:기억|확인)|네가\s*말한\s*데까지", self.short_prompt):
@@ -313,8 +759,9 @@ class HomeTeachingSpec(BaseModel):
             self.note_context,
             self.fill_before,
             self.fill_after,
-            self.hint,
-            *self.help_lines,
+            self.help_plan.H1.body,
+            self.help_plan.H2.body,
+            self.help_plan.H3.body,
             *self.short_options,
             *self.fill_options,
             *self.valid_explanations,
@@ -335,8 +782,10 @@ class HomeTeachingSpec(BaseModel):
             )
         if any(len(text) > 45 for text in (*self.short_options, *self.fill_options)):
             raise ValueError("choice labels must fit one readable option")
-        if len(self.hint) > 50 or any(len(line) > 50 for line in self.help_lines):
-            raise ValueError("help-card copy must fit one readable line")
+        normalized_answer = re.sub(r"[\s,]", "", str(correct))
+        normalized_joint_model = re.sub(r"[\s,]", "", self.help_plan.H3.body)
+        if normalized_answer not in normalized_joint_model:
+            raise ValueError("H3 joint model must state the current problem's answer")
         return self
 
 
@@ -378,6 +827,12 @@ QUEUE_TASK = TaskDefinition(
     scene=SceneType.CAFE,
     stage_id="queue",
     skill_id="compare_quantity_in_context",
+    help_skills=["counting", "comparison", "queue"],
+    help_method_policy="open_methods",
+    accepted_methods=[
+        "각 줄의 사람 수를 세고 두 수를 비교하기",
+        "이미 확인한 두 줄의 사람 수를 직접 비교하기",
+    ],
     title="줄 서기",
     goal="두 줄을 세고 사람이 적은 줄을 고른다.",
     visible_facts={"left_count": 3, "right_count": 5, "same_cashier_speed": True},
@@ -608,20 +1063,28 @@ QUEUE_TASK = TaskDefinition(
         ],
     },
     hints={
-        HintLevel.H1: HintDefinition(
-            level=HintLevel.H1,
-            body="왼쪽과 오른쪽에서 센 숫자를 나란히 놓아보세요.",
+        HintLevel.H1: reviewed_help_card(
+            HintLevel.H1,
+            body="두 줄에 있는 사람 수를 각각 확인해 보자.",
+            support_mode="attention",
+            fact_refs=["left_count", "right_count"],
             visual_type=None,
         ),
-        HintLevel.H2: HintDefinition(
-            level=HintLevel.H2,
-            body="숫자 카드 3과 5를 보고 더 작은 수를 찾아보세요.",
+        HintLevel.H2: reviewed_help_card(
+            HintLevel.H2,
+            body="왼쪽 3명과 오른쪽 5명 중 작은 수를 찾아보자.",
+            support_mode="guided_choice",
+            fact_refs=["left_count", "right_count"],
+            action="3과 5 중 작은 수 고르기",
             visual_type="number_cards",
             visual_data={"cards": [3, 5], "neutral_style": True},
         ),
-        HintLevel.H3: HintDefinition(
-            level=HintLevel.H3,
-            body="한 명씩 세고, 3과 5를 비교한 뒤 사람이 적은 줄을 찾아보세요.",
+        HintLevel.H3: reviewed_help_card(
+            HintLevel.H3,
+            body="왼쪽 3명, 오른쪽 5명이라 왼쪽 줄에서 덜 기다려.",
+            support_mode="joint_model",
+            fact_refs=["left_count", "right_count", "final_choice", "reason"],
+            action="두 줄을 함께 세고 사람이 적은 줄 고르기",
             visual_type="joint_steps",
             visual_data={"steps": ["한 명씩 세기", "3과 5 비교하기", "사람이 적은 줄 찾기"]},
         ),
@@ -666,6 +1129,12 @@ def calculation_task(
         scene=scene,
         stage_id=stage_id or ("home_teach" if scene is SceneType.HOME_TEACH else "calculation"),
         skill_id=skill_id,
+        help_skills=[
+            "place_value",
+            "addition" if operation == "addition" else "subtraction",
+        ],
+        help_method_policy="target_method",
+        accepted_methods=[f"같은 자리끼리 계산하고 {method_label}하기"],
         title=title,
         goal=f"{left:,}{symbol}{right:,}을 계산하고 {method_label} 방법을 설명한다.",
         visible_facts={"left": left, "right": right, "operation": operation},
@@ -820,19 +1289,27 @@ def calculation_task(
             ],
         },
         hints={
-            HintLevel.H1: HintDefinition(
-                level=HintLevel.H1,
-                body=f"{left:,}원과 {right:,}원의 자리값을 맞춰 보세요.",
+            HintLevel.H1: reviewed_help_card(
+                HintLevel.H1,
+                body="두 수에서 같은 자리의 숫자를 확인해 보자.",
+                support_mode="attention",
+                fact_refs=["left", "right", "operation"],
             ),
-            HintLevel.H2: HintDefinition(
-                level=HintLevel.H2,
-                body=f"세로식에서 같은 자리끼리 {place_action} 보세요.",
+            HintLevel.H2: reviewed_help_card(
+                HintLevel.H2,
+                body=f"같은 자리끼리 {place_action}서 빈칸을 채워 보자.",
+                support_mode="guided_equation",
+                fact_refs=["left", "right", "operation"],
+                action=f"같은 자리끼리 {place_action}서 식의 빈칸 채우기",
                 visual_type="place_value_equation",
                 visual_data={"left": left, "right": right, "operation": operation},
             ),
-            HintLevel.H3: HintDefinition(
-                level=HintLevel.H3,
-                body=f"같은 자리부터 계산하고 {method_label} 표시를 확인하세요.",
+            HintLevel.H3: reviewed_help_card(
+                HintLevel.H3,
+                body=f"{left:,}{symbol}{right:,}={result:,}이야. 같은 자리끼리 계산해.",
+                support_mode="joint_model",
+                fact_refs=["left", "right", "operation", "result", "method"],
+                action="완성된 세로식을 함께 확인하기",
                 visual_type="joint_equation_steps",
                 visual_data={
                     "left": left,
@@ -1029,21 +1506,21 @@ def queue_task(
         "final_choice": side,
         "reason": "fewer_people",
     }
-    task.hints[HintLevel.H2] = HintDefinition(
-        level=HintLevel.H2,
-        body=(
-            f"숫자 카드 {left}{particle(left, '과', '와')} "
-            f"{right}{particle(right, '을', '를')} 보고 더 작은 수를 찾아보세요."
-        ),
+    task.hints[HintLevel.H2] = reviewed_help_card(
+        HintLevel.H2,
+        body=f"왼쪽 {left}명과 오른쪽 {right}명 중 작은 수를 찾아보자.",
+        support_mode="guided_choice",
+        fact_refs=["left_count", "right_count"],
+        action=f"{left}{particle(left, '과', '와')} {right} 중 작은 수 고르기",
         visual_type="number_cards",
         visual_data={"cards": [left, right], "neutral_style": True},
     )
-    task.hints[HintLevel.H3] = HintDefinition(
-        level=HintLevel.H3,
-        body=(
-            f"한 명씩 세고, {left}{particle(left, '과', '와')} "
-            f"{right}{particle(right, '을', '를')} 비교한 뒤 사람이 적은 줄을 찾아보세요."
-        ),
+    task.hints[HintLevel.H3] = reviewed_help_card(
+        HintLevel.H3,
+        body=f"왼쪽 {left}명, 오른쪽 {right}명이라 {side_label} 줄에서 덜 기다려.",
+        support_mode="joint_model",
+        fact_refs=["left_count", "right_count", "final_choice", "reason"],
+        action="두 줄을 함께 세고 사람이 적은 줄 고르기",
         visual_type="joint_steps",
         visual_data={"steps": ["한 명씩 세기", "두 수 비교하기", "사람이 적은 줄 찾기"]},
     )
@@ -1074,6 +1551,10 @@ def menu_selection_task(
         if item.id != mormi_menu.id
         and (budget is None or not auto_total or mormi_menu.price + item.price <= budget)
     ]
+    if not valid_ids:
+        raise ValueError("menu task needs at least one selectable reviewed menu")
+    suggested_menu = next(item for item in menu_items if item.id == valid_ids[0])
+    suggested_total = mormi_menu.price + suggested_menu.price
     choices = [
         ChoiceOption(
             id=item.id,
@@ -1114,11 +1595,38 @@ def menu_selection_task(
         choice_effects={item.id: {"child_menu": item.id} for item in menu_items},
         fallback_text=fallback,
     )
+    joint_step = StepDefinition(
+        id="joint_menu_pick",
+        prompt="도움 카드와 같이 예산에 맞는 메뉴를 담아 볼까?",
+        target_slots=["child_menu"],
+        input=InputContract(
+            kind=InputKind.JOINT,
+            target_slots=["child_menu"],
+            config={
+                "component": "cafe_menu_picker",
+                "budget": budget,
+                "mormi_menu_id": mormi_menu.id,
+                "suggested_menu_id": suggested_menu.id,
+                "completion_values": {"child_menu": suggested_menu.id},
+            },
+        ),
+        fallback_text="도움 카드와 같이 메뉴를 하나 담아 볼까?",
+    )
     return TaskDefinition(
         id=task_id,
         scene=SceneType.CAFE,
         stage_id=stage_id,
         skill_id="choose_within_budget" if budget is not None else "choose_menu_for_calculation",
+        help_skills=["budget", "selection"] if budget is not None else ["selection"],
+        help_method_policy="open_methods",
+        accepted_methods=(
+            [
+                "두 메뉴의 합계를 구해 예산과 비교하기",
+                "남은 예산 안에서 고를 수 있는 메뉴 찾기",
+            ]
+            if budget is not None
+            else ["메뉴판에서 원하는 메뉴 하나 고르기"]
+        ),
         title="예산 안에서 메뉴 고르기" if budget is not None else "계산할 메뉴 고르기",
         goal=(
             "두 메뉴가 예산 안에 들어오도록 고른다."
@@ -1143,22 +1651,43 @@ def menu_selection_task(
             )
         },
         required_slots=["child_menu"],
-        steps={level: [step.model_copy(deep=True)] for level in ExpressionLevel},
+        steps={
+            ExpressionLevel.L4: [step.model_copy(deep=True)],
+            ExpressionLevel.L3: [step.model_copy(deep=True)],
+            ExpressionLevel.L2: [step.model_copy(deep=True)],
+            ExpressionLevel.L1: [step.model_copy(deep=True)],
+            ExpressionLevel.L0: [joint_step],
+        },
         hints={
-            HintLevel.H1: HintDefinition(
-                level=HintLevel.H1,
+            HintLevel.H1: reviewed_help_card(
+                HintLevel.H1,
                 body=(
-                    "장바구니 합계와 예산을 나란히 확인해 보세요."
+                    "예산과 모르미가 고른 메뉴 가격을 확인해 보자."
                     if budget is not None
-                    else "메뉴판에서 먹고 싶은 메뉴 하나를 골라 보세요."
+                    else "모르미가 고른 메뉴를 먼저 확인해 보자."
+                ),
+                support_mode="attention",
+                fact_refs=(
+                    ["budget", "mormi_menu"] if budget is not None else ["mormi_menu"]
                 ),
             ),
-            HintLevel.H2: HintDefinition(
-                level=HintLevel.H2,
+            HintLevel.H2: reviewed_help_card(
+                HintLevel.H2,
                 body=(
-                    "모르미 메뉴 가격에 고른 메뉴 가격을 더해 보세요."
+                    "예산에서 모르미 메뉴값을 빼고 남은 돈을 보자."
                     if budget is not None
-                    else "모르미가 고른 메뉴와 다른 메뉴를 하나 골라 보세요."
+                    else "메뉴판에서 다른 메뉴 하나를 골라 보자."
+                ),
+                support_mode="guided_equation" if budget is not None else "guided_choice",
+                fact_refs=(
+                    ["budget", "mormi_menu"]
+                    if budget is not None
+                    else ["mormi_menu", "menu_items"]
+                ),
+                action=(
+                    "예산에서 모르미 메뉴값을 빼기"
+                    if budget is not None
+                    else "메뉴판에서 다른 메뉴 하나 고르기"
                 ),
                 visual_type="budget_meter" if budget is not None else "cafe_menu_focus",
                 visual_data=(
@@ -1167,18 +1696,29 @@ def menu_selection_task(
                     else {"mormi_menu": mormi_menu.model_dump()}
                 ),
             ),
-            HintLevel.H3: HintDefinition(
-                level=HintLevel.H3,
+            HintLevel.H3: reviewed_help_card(
+                HintLevel.H3,
                 body=(
-                    "합계가 예산보다 크면 더 저렴한 메뉴로 바꿔 보세요."
+                    f"두 메뉴는 {suggested_total:,}원이라 {budget:,}원 안에서 살 수 있어."
                     if budget is not None
-                    else "메뉴판에서 하나를 골라 장바구니에 담아 보세요."
+                    else "서로 다른 메뉴 두 개를 함께 장바구니에 담아 보자."
                 ),
+                support_mode="joint_model",
+                fact_refs=["mormi_menu", "menu_items", "child_menu"],
+                action="검수된 두 메뉴를 장바구니에 함께 담기",
                 visual_type="budget_menu_help" if budget is not None else "cafe_menu_focus",
                 visual_data=(
-                    {"budget": budget, "mormi_menu": mormi_menu.model_dump()}
+                    {
+                        "budget": budget,
+                        "mormi_menu": mormi_menu.model_dump(),
+                        "suggested_menu": suggested_menu.model_dump(),
+                        "total": suggested_total,
+                    }
                     if budget is not None
-                    else {"mormi_menu": mormi_menu.model_dump()}
+                    else {
+                        "mormi_menu": mormi_menu.model_dump(),
+                        "suggested_menu": suggested_menu.model_dump(),
+                    }
                 ),
             ),
         },
@@ -1336,6 +1876,13 @@ def simple_calculation_task(
         scene=SceneType.CAFE,
         stage_id=stage_id,
         skill_id="add_menu_prices" if operation == "addition" else "calculate_change",
+        help_skills=["addition" if operation == "addition" else "subtraction"],
+        help_method_policy="open_methods",
+        accepted_methods=(
+            ["두 메뉴 가격을 더해 합계 구하기"]
+            if operation == "addition"
+            else ["낸 돈에서 메뉴값을 빼 거스름돈 구하기"]
+        ),
         title=title,
         goal=f"{left:,}{symbol}{right:,}을 생활 맥락에서 계산한다.",
         visible_facts={"left": left, "right": right, "operation": operation, **dict(context)},
@@ -1366,17 +1913,22 @@ def simple_calculation_task(
             ExpressionLevel.L0: [joint],
         },
         hints={
-            HintLevel.H1: HintDefinition(
-                level=HintLevel.H1,
+            HintLevel.H1: reviewed_help_card(
+                HintLevel.H1,
                 body=(
-                    "두 메뉴 가격을 더해 보세요."
+                    "두 메뉴 가격이 각각 얼마인지 확인해 보자."
                     if operation == "addition"
-                    else "10,000원에서 메뉴값을 빼 보세요."
+                    else "낸 돈과 메뉴값이 각각 얼마인지 확인해 보자."
                 ),
+                support_mode="attention",
+                fact_refs=["left", "right", "operation"],
             ),
-            HintLevel.H2: HintDefinition(
-                level=HintLevel.H2,
-                body=f"{left:,} {symbol} {right:,} 가로식을 확인해 보세요.",
+            HintLevel.H2: reviewed_help_card(
+                HintLevel.H2,
+                body=f"{left:,}{symbol}{right:,}=□ 식의 빈칸을 채워 보자.",
+                support_mode="guided_equation",
+                fact_refs=["left", "right", "operation"],
+                action="두 금액을 식에 넣고 빈칸 채우기",
                 visual_type="money_calculation",
                 visual_data={
                     "left": left,
@@ -1385,9 +1937,16 @@ def simple_calculation_task(
                     "result_hidden": True,
                 },
             ),
-            HintLevel.H3: HintDefinition(
-                level=HintLevel.H3,
-                body=f"도움 카드에서 {left:,} {symbol} {right:,}의 계산 순서를 따라가 보세요.",
+            HintLevel.H3: reviewed_help_card(
+                HintLevel.H3,
+                body=(
+                    f"{left:,}원에 {right:,}원을 더하면 모두 {result:,}원이야."
+                    if operation == "addition"
+                    else f"{left:,}원에서 {right:,}원을 빼면 {result:,}원이 남아."
+                ),
+                support_mode="joint_model",
+                fact_refs=["left", "right", "operation", "result"],
+                action="완성된 계산식을 함께 확인하기",
                 visual_type="joint_money_calculation",
                 visual_data={
                     "left": left,
@@ -1475,6 +2034,9 @@ def home_teaching_task(
         scene=SceneType.HOME_TEACH,
         stage_id="home_teach",
         skill_id=skill_id,
+        help_skills=spec.help_skills,
+        help_method_policy=spec.help_method_policy,
+        accepted_methods=spec.accepted_methods,
         title=spec.title,
         goal=f"반복한 {spec.title}의 핵심 방법을 모르미에게 가르친다.",
         visible_facts={
@@ -1595,7 +2157,7 @@ def home_teaching_task(
                         kind=InputKind.JOINT,
                         target_slots=["rule"],
                         config={
-                            "text": expected_rule,
+                            "text": spec.help_plan.H3.body,
                             "completion_values": {"rule": expected_rule},
                         },
                     ),
@@ -1604,18 +2166,30 @@ def home_teaching_task(
             ],
         },
         hints={
-            HintLevel.H1: HintDefinition(level=HintLevel.H1, body=spec.hint),
-            HintLevel.H2: HintDefinition(
-                level=HintLevel.H2,
-                body=spec.help_lines[-1],
+            HintLevel.H1: reviewed_help_card(
+                HintLevel.H1,
+                body=spec.help_plan.H1.body,
+                support_mode=spec.help_plan.H1.support_mode,
+                fact_refs=spec.help_plan.H1.fact_refs,
+                action=spec.help_plan.H1.action,
+            ),
+            HintLevel.H2: reviewed_help_card(
+                HintLevel.H2,
+                body=spec.help_plan.H2.body,
+                support_mode=spec.help_plan.H2.support_mode,
+                fact_refs=spec.help_plan.H2.fact_refs,
+                action=spec.help_plan.H2.action,
                 visual_type="home_practice_problem",
                 visual_data=sample,
             ),
-            HintLevel.H3: HintDefinition(
-                level=HintLevel.H3,
-                body=expected_rule,
+            HintLevel.H3: reviewed_help_card(
+                HintLevel.H3,
+                body=spec.help_plan.H3.body,
+                support_mode=spec.help_plan.H3.support_mode,
+                fact_refs=spec.help_plan.H3.fact_refs,
+                action=spec.help_plan.H3.action,
                 visual_type="joint_reading_card",
-                visual_data={"text": expected_rule},
+                visual_data={"text": spec.help_plan.H3.body},
             ),
         },
         base_visual=VisualContract(

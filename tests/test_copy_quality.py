@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import json
 import re
 from itertools import permutations
+from pathlib import Path
 
-from mormi_api.content import HOME_TEACHING_CATALOG, home_teaching_task, queue_task
-from mormi_api.schemas import ExpressionLevel, SafetyCategory
+import pytest
+from pydantic import ValidationError
+
+from mormi_api.content import (
+    HOME_TEACHING_CATALOG,
+    HintDefinition,
+    home_teaching_task,
+    queue_task,
+    reviewed_help_card,
+)
+from mormi_api.schemas import ExpressionLevel, HintLevel, SafetyCategory
 from mormi_api.security import deterministic_safety, safety_redirect
 
 VAGUE_COPY = (
@@ -30,6 +41,84 @@ TEACHER_EVALUATION_COPY = re.compile(
     r"어떻게\s+[^?]*(?:했어|셌어|찾았어|읽었어|비교했어)|까닭은\s+무엇|"
     r"이유를\s*(?:말|설명)|설명해\s*봐|말해\s*봐"
 )
+
+
+def test_home_catalog_has_one_live_explicit_help_plan_per_item() -> None:
+    catalog_path = Path(__file__).parents[1] / "src/mormi_api/home_teaching_catalog.json"
+    raw_catalog = json.loads(catalog_path.read_text())
+
+    assert len(raw_catalog) == len(HOME_TEACHING_CATALOG)
+    for raw in raw_catalog:
+        assert "hint" not in raw, raw["id"]
+        assert "help_lines" not in raw, raw["id"]
+        assert set(raw["help_plan"]) == {"H1", "H2", "H3"}, raw["id"]
+        assert raw["help_skills"], raw["id"]
+
+
+def test_every_home_help_plan_increases_support_and_closes_with_current_answer() -> None:
+    for spec in HOME_TEACHING_CATALOG.values():
+        h1 = spec.help_plan.H1
+        h2 = spec.help_plan.H2
+        h3 = spec.help_plan.H3
+        normalized_bodies = {re.sub(r"\s+", "", step.body) for step in (h1, h2, h3)}
+        normalized_answer = re.sub(r"[\s,]", "", str(spec.sample_problem["correct"]))
+
+        assert len(normalized_bodies) == 3, spec.id
+        assert (h1.support_type, h1.answer_policy, h1.support_mode) == (
+            "attention",
+            "hidden",
+            "attention",
+        ), spec.id
+        assert h2.support_type == "guided_action", spec.id
+        assert h2.answer_policy == "partial", spec.id
+        assert h2.support_mode.startswith("guided_"), spec.id
+        assert h2.action, spec.id
+        assert (h3.support_type, h3.answer_policy, h3.support_mode) == (
+            "joint_model",
+            "revealed",
+            "joint_model",
+        ), spec.id
+        assert h3.action, spec.id
+        assert normalized_answer in re.sub(r"[\s,]", "", h3.body), spec.id
+        assert set(h1.fact_refs) <= {"sample_problem"}, spec.id
+        assert set(h2.fact_refs) <= {"sample_problem"}, spec.id
+        assert set(h3.fact_refs) == {"sample_problem", "sample_answer"}, spec.id
+
+
+def test_help_contract_rejects_nonprogressive_support_and_wrong_answer_policy() -> None:
+    with pytest.raises(ValidationError):
+        reviewed_help_card(
+            HintLevel.H2,
+            "숫자를 확인해 보자.",
+            support_mode="attention",
+            fact_refs=["left"],
+            action="숫자 확인하기",
+        )
+
+    with pytest.raises(ValidationError):
+        # Constructing the model directly must not let a future task reveal an
+        # answer at H1 by merely changing metadata around otherwise valid copy.
+        HintDefinition(
+            level=HintLevel.H1,
+            body="두 값을 확인해 보자.",
+            support_type="attention",
+            answer_policy="revealed",
+            support_mode="attention",
+            fact_refs=["left", "right"],
+        )
+
+
+def test_h2_can_use_a_nonvisual_but_stronger_support_medium() -> None:
+    hint = reviewed_help_card(
+        HintLevel.H2,
+        "500+100=□ 식의 빈칸을 채워 보자.",
+        support_mode="guided_equation",
+        fact_refs=["left", "right"],
+        action="두 값을 식에 넣고 빈칸 채우기",
+    )
+
+    assert hint.visual_type is None
+    assert hint.support_mode == "guided_equation"
 
 
 def test_every_home_turn_uses_reviewed_specific_copy() -> None:

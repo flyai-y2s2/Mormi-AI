@@ -295,6 +295,13 @@ class ClaudeGateway:
             "optional_partial_slots_for_this_question": step.optional_slots,
             "already_verified_slots": state.verified_slots,
             "known_misconceptions": task.misconception_tags,
+            "method_acceptance_contract": {
+                "policy": task.help_method_policy,
+                "reviewed_examples": task.accepted_methods,
+                "help_card_route_is_not_the_only_correct_method": (
+                    task.help_method_policy == "open_methods"
+                ),
+            },
             "semantic_role_policy": {
                 "observation": "화면이나 생활 장면에서 직접 확인한 수량·값·속성",
                 "conclusion": "질문이 요구한 답이나 비교 결과",
@@ -330,6 +337,15 @@ class ClaudeGateway:
                     "예: 6000원과 6,000원은 같은 값이며 expected 숫자로 claim한다."
                 ),
                 "검수된 valid_explanations나 aliases 중 어느 하나와 뜻이 맞으면 인정한다.",
+                (
+                    "method_acceptance_contract.policy가 open_methods이면 reviewed_examples는 "
+                    "예시일 뿐이다. 화면 사실과 수학적으로 맞는 다른 방법도 인정한다."
+                ),
+                (
+                    "target_method여도 표현이 다르다는 이유로 버리지 말고, 그 방법과 "
+                    "의미상 같은 행동·관계·절차인지 판정한다."
+                ),
+                "도움 카드에 제시된 한 가지 풀이 경로를 아이의 필수 정답처럼 강요하지 않는다.",
                 "wrong_guess 진입 턴에서는 응/아니의 태도를 entry_stance로 따로 판정한다.",
                 "추측을 거부했다는 사실만으로 answer나 reason claim을 만들지 않는다.",
                 "첫 발화에 태도, 답, 이유가 함께 있으면 각각 독립적으로 모두 추출한다.",
@@ -429,6 +445,9 @@ grounding_span도 아이 원문에서 글자 그대로 복사하며, 자연스�
   예를 들어 '6000원이야'는 expected=6000을 직접 말한 결론이다.
 - semantic_role=method는 실제 행동이나 절차, reason은 사실 사이의 관계,
   explanation은 검수된 수학 관계나 해결 절차가 원문에 있어야 한다.
+- method_acceptance_contract가 open_methods면 예시 목록 밖의 수학적으로 타당한 방법도
+  인정한다. 도움 카드의 대표 풀이를 유일한 정답으로 취급하지 않는다.
+- target_method여도 문구 일치를 요구하지 않고 같은 행동·관계·절차인지 의미로 판정한다.
 - 결론만 말한 것을 이유나 방법으로, 관찰만 말한 것을 완성된 절차로 부풀리지 않는다.
 - 목표 설명을 다 채우지 못했어도 사실인 관찰·중간 계산·조건·결과가 현재 문제와
   연결되면 correct_partial이다. conceptual_error나 unrelated_response로 버리지 않는다.

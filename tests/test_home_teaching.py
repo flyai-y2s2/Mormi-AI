@@ -76,7 +76,7 @@ CURRENT_FRONTEND_HOME_SESSION_IDS = {
 
 def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert set(HOME_TEACHING_CATALOG) == CURRENT_FRONTEND_HOME_SESSION_IDS
-    assert HOME_TEACHING_CATALOG["number-count"].content_version == 5
+    assert all(spec.content_version == 7 for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
     assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.entry_mode != "wrong_guess" for spec in HOME_TEACHING_CATALOG.values())

@@ -327,6 +327,12 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         }
         slots = payload["all_task_slot_contracts"]
         assert {slot_id: slots[slot_id]["semantic_role"] for slot_id in roles} == roles
+        method_contract = payload["method_acceptance_contract"]
+        assert method_contract["policy"] == task.help_method_policy
+        assert method_contract["reviewed_examples"] == task.accepted_methods
+        assert method_contract["help_card_route_is_not_the_only_correct_method"] is (
+            task.help_method_policy == "open_methods"
+        )
 
 
 def test_speaker_rejects_teacher_style_probe() -> None:
