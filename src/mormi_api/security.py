@@ -76,25 +76,6 @@ class TextCipher:
             raise ValueError("Invalid dialogue encryption key") from error
 
 
-def mask_unverified_quantities(text: str) -> str:
-    masked = re.sub(r"\d[\d,]*", "[수]", text)
-    korean_numbers = r"(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|백|천|만)"
-    return re.sub(rf"{korean_numbers}\s*(명|개|원|번)?", "[수]", masked)
-
-
-def safe_child_expression(
-    text: str | None,
-    safety: SafetyCategory,
-    *,
-    all_claims_factual: bool,
-) -> tuple[str, str | None]:
-    if safety is not SafetyCategory.NORMAL or not text:
-        return "none", None
-    if all_claims_factual:
-        return "quote_safe", text.strip()
-    return "context_only", mask_unverified_quantities(text.strip())
-
-
 def safety_redirect(category: SafetyCategory) -> str:
     """Return a short boundary that still sounds like Mormi.
 

@@ -15,7 +15,12 @@ from mormi_api.content import (
     queue_task,
     simple_calculation_task,
 )
-from mormi_api.llm import ClaudeGateway, structured_output_schema, validate_speaker_output
+from mormi_api.llm import (
+    ClaudeGateway,
+    structured_output_schema,
+    validate_speaker_output,
+    validate_speaker_verification,
+)
 from mormi_api.schemas import (
     CafeMenuItem,
     ChildResponse,
@@ -28,7 +33,10 @@ from mormi_api.schemas import (
     SessionState,
     SlotClaim,
     SpeakerContext,
+    SpeakerGuardContract,
     SpeakerOutput,
+    SpeakerVerification,
+    SpeakerVerificationPolicy,
     UtteranceAnalysis,
 )
 from mormi_api.settings import Settings
@@ -64,13 +72,31 @@ def test_speaker_schema_is_strict() -> None:
     assert all(item.get("additionalProperties") is False for item in objects)
     assert all(item.get("required") == list(item.get("properties", {})) for item in objects)
 
+    verifier_objects = object_schemas(structured_output_schema(SpeakerVerification))
+    assert verifier_objects
+    assert all(item.get("additionalProperties") is False for item in verifier_objects)
+
 
 def speaker_context() -> SpeakerContext:
     return SpeakerContext(
         dialogue_act="acknowledge_partial",
         required_question="나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        required_slot_ids=["reason"],
+        required_slot_descriptions={"reason": "왼쪽 줄에서 덜 기다리는 이유"},
         fallback_text="아, 왼쪽이구나! 나는 왜 이 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
     )
+
+
+def speaker_output(text: str, context: SpeakerContext) -> SpeakerOutput:
+    return SpeakerOutput(
+        text=text,
+        dialogue_act=context.dialogue_act,
+        asked_slot_ids=context.required_slot_ids,
+    )
+
+
+def speaker_guard() -> SpeakerGuardContract:
+    return SpeakerGuardContract()
 
 
 def test_speaker_rejects_grading_synonyms() -> None:
@@ -81,7 +107,12 @@ def test_speaker_rejects_grading_synonyms() -> None:
         "잘했어! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
         "옳아! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
     ):
-        assert validate_speaker_output(SpeakerOutput(text=text), context) is None
+        assert (
+            validate_speaker_output(
+                speaker_output(text, context), context, speaker_guard()
+            )
+            is None
+        )
 
 
 def test_speaker_rejects_system_status_voice() -> None:
@@ -91,27 +122,91 @@ def test_speaker_rejects_system_status_voice() -> None:
         "네가 말한 데까지는 들었어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
         "그 부분은 확인했어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
     ):
-        assert validate_speaker_output(SpeakerOutput(text=text), context) is None
+        assert (
+            validate_speaker_output(
+                speaker_output(text, context), context, speaker_guard()
+            )
+            is None
+        )
 
 
 def test_speaker_must_keep_the_orchestrator_question() -> None:
     context = speaker_context()
     assert (
         validate_speaker_output(
-            SpeakerOutput(
-                text="아, 왼쪽이구나! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?"
+            speaker_output(
+                "아, 왼쪽이구나! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+                context,
             ),
             context,
+            speaker_guard(),
         )
         is not None
     )
     assert (
         validate_speaker_output(
-            SpeakerOutput(text="왼쪽이구나. 무슨 색을 좋아해?"),
+            speaker_output("왼쪽이구나. 무슨 색을 좋아해?", context),
             context,
+            speaker_guard(),
         )
         is None
     )
+
+
+def test_semantic_speaker_may_paraphrase_only_with_matching_contract() -> None:
+    context = speaker_context().model_copy(
+        update={"verification_policy": SpeakerVerificationPolicy.SEMANTIC}
+    )
+    output = speaker_output("나는 이 줄이 왜 더 빠른지 헷갈려... 알려줄 수 있어?", context)
+    assert validate_speaker_output(output, context, speaker_guard()) is not None
+
+    wrong_focus = output.model_copy(update={"asked_slot_ids": ["answer"]})
+    assert validate_speaker_output(wrong_focus, context, speaker_guard()) is None
+
+
+def test_speaker_can_ground_a_clarification_in_an_exact_child_phrase() -> None:
+    context = SpeakerContext(
+        dialogue_act="acknowledge_partial",
+        required_question="어떻게 세는지 알려주면 안 될까?",
+        verified_facts={"answer": "점은 세 개야."},
+        required_slot_ids=["tracking"],
+        required_slot_descriptions={"tracking": "점을 빠뜨리지 않고 세는 방법"},
+        child_expression_mode="quote_safe",
+        child_expression="차근차근 세어봐",
+        allowed_numbers=["3"],
+        verification_policy=SpeakerVerificationPolicy.SEMANTIC,
+        fallback_text="아, 세 개구나! 어떻게 세는지 알려주면 안 될까?",
+    )
+    guard = SpeakerGuardContract(child_expression_source="차근차근 세어봐")
+    output = SpeakerOutput(
+        text="아, 세 개구나! ‘차근차근’은 어떻게 세는 거야?",
+        dialogue_act=context.dialogue_act,
+        asked_slot_ids=["tracking"],
+        used_verified_slots=["answer"],
+        used_child_expression=True,
+        used_child_expression_spans=["차근차근"],
+    )
+    assert validate_speaker_output(output, context, guard) is not None
+
+    verification = SpeakerVerification(
+        approved=True,
+        dialogue_act_preserved=True,
+        required_focus_preserved=True,
+        only_allowed_math_used=True,
+        child_not_evaluated=True,
+        character_consistent=True,
+        detected_dialogue_act=context.dialogue_act,
+        detected_asked_slot_ids=["tracking"],
+        question_evidence_span="‘차근차근’은 어떻게 세는 거야?",
+        child_expression_spans=["차근차근"],
+        reason_code="approved",
+    )
+    assert validate_speaker_verification(verification, context, guard, output) is True
+
+    invented_quote = output.model_copy(
+        update={"used_child_expression_spans": ["천천히"]}
+    )
+    assert validate_speaker_output(invented_quote, context, guard) is None
 
 
 def test_speaker_cannot_repeat_the_previous_line_verbatim() -> None:
@@ -123,8 +218,9 @@ def test_speaker_cannot_repeat_the_previous_line_verbatim() -> None:
     )
     assert (
         validate_speaker_output(
-            SpeakerOutput(text="어떻게 세는지 알려주면 안 될까?"),
+            speaker_output("어떻게 세는지 알려주면 안 될까?", context),
             context,
+            speaker_guard(),
         )
         is None
     )
@@ -236,7 +332,9 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
 def test_speaker_rejects_teacher_style_probe() -> None:
     context = SpeakerContext(
         dialogue_act="acknowledge_partial",
-        required_question=None,
+        required_question="나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?",
+        required_slot_ids=["reason"],
+        required_slot_descriptions={"reason": "3과 5를 비교하는 방법"},
         allowed_numbers=["3", "5"],
         fallback_text="나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?",
     )
@@ -246,12 +344,21 @@ def test_speaker_rejects_teacher_style_probe() -> None:
         "그렇게 생각한 근거가 뭐야?",
         "이유를 설명해 봐.",
     ):
-        assert validate_speaker_output(SpeakerOutput(text=text), context) is None
+        assert (
+            validate_speaker_output(
+                speaker_output(text, context), context, speaker_guard()
+            )
+            is None
+        )
 
     assert (
         validate_speaker_output(
-            SpeakerOutput(text="나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?"),
+            speaker_output(
+                "나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?",
+                context,
+            ),
             context,
+            speaker_guard(),
         )
         is not None
     )

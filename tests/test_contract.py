@@ -20,6 +20,7 @@ def test_openapi_exposes_frontend_agreed_paths() -> None:
     paths = schema["paths"]
     assert "/v1/conversations" in paths
     assert "/v1/conversations/{conversation_id}/responses" in paths
+    assert "/v1/conversations/{conversation_id}/responses/stream" in paths
     assert "/v1/conversations/{conversation_id}" in paths
     assert "/v1/learners/{learner_id}/skill-profiles" in paths
     assert "/v1/learners/{learner_id}/star-notes" in paths

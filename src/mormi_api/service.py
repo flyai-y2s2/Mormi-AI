@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Literal
+
 from .content import create_scenario_data, get_scenario, get_task
-from .engine import ConversationEngine, select_start_level, update_skill_profile
+from .engine import (
+    ConversationEngine,
+    EngineProgress,
+    EngineTurnResult,
+    select_start_level,
+    update_skill_profile,
+)
 from .repository import DuplicateResponseError, Repository
 from .schemas import (
     ChildResponse,
@@ -17,6 +27,14 @@ from .schemas import (
     SessionState,
     utc_now,
 )
+
+
+@dataclass(frozen=True)
+class ConversationStreamEvent:
+    name: Literal["accepted", "progress", "turn"]
+    stage: str | None = None
+    envelope: SessionEnvelope | None = None
+    replayed: bool = False
 
 
 class ConversationService:
@@ -136,10 +154,30 @@ class ConversationService:
         conversation_id: str,
         response: ChildResponse,
     ) -> SessionEnvelope:
+        final: SessionEnvelope | None = None
+        async for event in self.respond_stream(conversation_id, response):
+            if event.envelope is not None:
+                final = event.envelope
+        if final is None:  # pragma: no cover - stream always ends with a turn
+            raise RuntimeError("Conversation response produced no final turn")
+        return final
+
+    async def respond_stream(
+        self,
+        conversation_id: str,
+        response: ChildResponse,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        """Run one canonical response path while exposing non-sensitive progress."""
+
         response_id = str(response.response_id)
         prior = await self.repository.response_exists(conversation_id, response_id)
         if prior:
-            return SessionEnvelope(conversation_id=conversation_id, turn=prior)
+            yield ConversationStreamEvent(
+                name="turn",
+                envelope=SessionEnvelope(conversation_id=conversation_id, turn=prior),
+                replayed=True,
+            )
+            return
 
         state = await self.repository.get_state(conversation_id)
         active_turn = await self.repository.active_turn(state)
@@ -151,12 +189,22 @@ class ConversationService:
                 f"input kind {active_turn.input.kind.value}"
             )
         validate_response_payload(active_turn.input, response)
+        yield ConversationStreamEvent(name="accepted", stage="accepted")
         previous_task = get_task(state.current_task_id, state.scenario_data)
-        next_state, analysis, next_turn = await self.engine.run_turn(
-            state,
-            response,
-            active_turn.mormi.text,
-        )
+        result: EngineTurnResult | None = None
+        async for engine_event in self.engine.run_turn_stream(
+            state, response, active_turn.mormi.text
+        ):
+            if isinstance(engine_event, EngineProgress):
+                yield ConversationStreamEvent(
+                    name="progress",
+                    stage=engine_event.stage,
+                )
+            else:
+                result = engine_event
+        if result is None:  # pragma: no cover - graph always reaches END
+            raise RuntimeError("Conversation graph produced no result")
+        next_state, analysis, next_turn = result.state, result.analysis, result.turn
         try:
             await self.repository.commit_turn(
                 previous_state=state,
@@ -170,7 +218,12 @@ class ConversationService:
         except DuplicateResponseError:
             prior = await self.repository.response_exists(conversation_id, response_id)
             if prior:
-                return SessionEnvelope(conversation_id=conversation_id, turn=prior)
+                yield ConversationStreamEvent(
+                    name="turn",
+                    envelope=SessionEnvelope(conversation_id=conversation_id, turn=prior),
+                    replayed=True,
+                )
+                return
             raise
 
         if next_turn.note_update:
@@ -183,7 +236,10 @@ class ConversationService:
             profile = update_skill_profile(profile, evidence_state, previous_task)
             await self.repository.save_profile(profile)
 
-        return SessionEnvelope(conversation_id=conversation_id, turn=next_turn)
+        yield ConversationStreamEvent(
+            name="turn",
+            envelope=SessionEnvelope(conversation_id=conversation_id, turn=next_turn),
+        )
 
     async def snapshot(self, conversation_id: str) -> SessionEnvelope:
         state = await self.repository.get_state(conversation_id)

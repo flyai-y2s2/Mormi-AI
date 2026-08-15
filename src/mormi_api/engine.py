@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
-from collections.abc import Mapping
-from typing import Any, TypedDict
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass
+from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .content import TaskDefinition, get_task
-from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError, validate_speaker_output
+from .content import StepDefinition, TaskDefinition, get_task
+from .llm import (
+    ClaudeGateway,
+    extract_numeric_values,
+    validate_speaker_output,
+    validate_speaker_verification,
+)
 from .schemas import (
     CafeMenuItem,
     ChildResponse,
@@ -35,7 +43,11 @@ from .schemas import (
     SessionStatus,
     SkillProfile,
     SpeakerContext,
+    SpeakerGuardContract,
     SpeakerOutput,
+    SpeakerQuestionIntent,
+    SpeakerVerification,
+    SpeakerVerificationPolicy,
     TurnContract,
     UtteranceAnalysis,
     VisualContract,
@@ -43,9 +55,22 @@ from .schemas import (
 )
 from .security import (
     deterministic_safety,
-    safe_child_expression,
     safety_redirect,
 )
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EngineProgress:
+    stage: Literal["understanding", "planning", "speaking", "validating"]
+
+
+@dataclass(frozen=True)
+class EngineTurnResult:
+    state: SessionState
+    analysis: UtteranceAnalysis
+    turn: TurnContract
 
 
 class ConversationGraphState(TypedDict, total=False):
@@ -60,9 +85,20 @@ class ConversationGraphState(TypedDict, total=False):
 
 
 class ConversationEngine:
-    def __init__(self, gateway: ClaudeGateway, *, show_internal_pedagogy: bool = False) -> None:
+    def __init__(
+        self,
+        gateway: ClaudeGateway,
+        *,
+        show_internal_pedagogy: bool = False,
+        speaker_timeout_seconds: float = 8.0,
+        semantic_verifier_enabled: bool = True,
+        verifier_timeout_seconds: float = 1.8,
+    ) -> None:
         self.gateway = gateway
         self.show_internal_pedagogy = show_internal_pedagogy
+        self.speaker_timeout_seconds = speaker_timeout_seconds
+        self.semantic_verifier_enabled = semantic_verifier_enabled
+        self.verifier_timeout_seconds = verifier_timeout_seconds
         self.graph = self._build_graph()
 
     def _build_graph(self) -> Any:
@@ -92,17 +128,51 @@ class ConversationEngine:
         response: ChildResponse,
         previous_question: str,
     ) -> tuple[SessionState, UtteranceAnalysis, TurnContract]:
-        output = await self.graph.ainvoke(
+        result: EngineTurnResult | None = None
+        async for event in self.run_turn_stream(state, response, previous_question):
+            if isinstance(event, EngineTurnResult):
+                result = event
+        if result is None:  # pragma: no cover - LangGraph always reaches END
+            raise RuntimeError("Conversation graph produced no final turn")
+        return result.state, result.analysis, result.turn
+
+    async def run_turn_stream(
+        self,
+        state: SessionState,
+        response: ChildResponse,
+        previous_question: str,
+    ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
+        """Expose safe graph milestones without leaking unvalidated model text."""
+
+        final_values: dict[str, Any] | None = None
+        node_stages: dict[str, EngineProgress] = {
+            "understand": EngineProgress("understanding"),
+            "orchestrate": EngineProgress("planning"),
+            "speak": EngineProgress("speaking"),
+            "validate_and_compose": EngineProgress("validating"),
+        }
+        async for mode, payload in self.graph.astream(
             {
                 "session": state.model_dump(mode="json"),
                 "response": response.model_dump(mode="json"),
                 "previous_question": previous_question,
-            }
-        )
-        return (
-            SessionState.model_validate(output["session"]),
-            UtteranceAnalysis.model_validate(output["analysis"]),
-            TurnContract.model_validate(output["turn"]),
+            },
+            stream_mode=["updates", "values"],
+        ):
+            if mode == "updates":
+                for node_name in payload:
+                    progress = node_stages.get(node_name)
+                    if progress:
+                        yield progress
+            elif mode == "values":
+                final_values = payload
+
+        if final_values is None or "turn" not in final_values:
+            raise RuntimeError("Conversation graph produced no final turn")
+        yield EngineTurnResult(
+            state=SessionState.model_validate(final_values["session"]),
+            analysis=UtteranceAnalysis.model_validate(final_values["analysis"]),
+            turn=TurnContract.model_validate(final_values["turn"]),
         )
 
     def initial_turn(self, state: SessionState) -> TurnContract:
@@ -212,9 +282,14 @@ class ConversationEngine:
         }:
             return {"speaker_text": context.fallback_text}
         try:
-            output = await self.gateway.speak(context)
+            async with asyncio.timeout(self.speaker_timeout_seconds):
+                output = await self.gateway.speak(context)
             return {"speaker_output": output.model_dump(mode="json")}
-        except (ModelOutputError, ModelUnavailableError):
+        except Exception as error:
+            logger.warning(
+                "speaker_fallback stage=generation error_type=%s",
+                type(error).__name__,
+            )
             return {"speaker_text": context.fallback_text}
 
     async def _validate_and_compose_node(
@@ -222,12 +297,44 @@ class ConversationEngine:
         graph_state: ConversationGraphState,
     ) -> dict[str, Any]:
         decision = PedagogicalDecision.model_validate(graph_state["decision"])
+        task = get_task(decision.state.current_task_id, decision.state.scenario_data)
+        guard = self._speaker_guard(task, decision.state, decision.speaker_context)
         text = graph_state.get("speaker_text")
         if not text and graph_state.get("speaker_output"):
             output = SpeakerOutput.model_validate(graph_state["speaker_output"])
-            text = validate_speaker_output(output, decision.speaker_context)
+            text = validate_speaker_output(output, decision.speaker_context, guard)
+            if (
+                text
+                and decision.speaker_context.verification_policy
+                is SpeakerVerificationPolicy.SEMANTIC
+            ):
+                try:
+                    async with asyncio.timeout(self.verifier_timeout_seconds):
+                        verification = await self.gateway.verify_speaker(
+                            decision.speaker_context,
+                            guard,
+                            output,
+                        )
+                    verified = SpeakerVerification.model_validate(verification)
+                    if not validate_speaker_verification(
+                        verified,
+                        decision.speaker_context,
+                        guard,
+                        output,
+                    ):
+                        text = None
+                        logger.info(
+                            "speaker_fallback stage=semantic reason=%s dialogue_act=%s",
+                            verified.reason_code,
+                            decision.dialogue_act,
+                        )
+                except Exception as error:
+                    text = None
+                    logger.warning(
+                        "speaker_fallback stage=verification error_type=%s",
+                        type(error).__name__,
+                    )
         text = text or decision.speaker_context.fallback_text
-        task = get_task(decision.state.current_task_id, decision.state.scenario_data)
         turn = self._turn_contract(
             decision.state,
             task,
@@ -682,7 +789,9 @@ class ConversationEngine:
                     dialogue_act="task_transition",
                     previous_question=previous_question,
                     required_question=next_step.prompt,
-                    verified_facts=[contribution] if contribution else [],
+                    verified_facts=(
+                        {"previous_contribution": contribution} if contribution else {}
+                    ),
                     analysis=analysis,
                     child_text=child_text,
                     fallback=fallback,
@@ -710,7 +819,9 @@ class ConversationEngine:
                 dialogue_act="session_complete",
                 previous_question=previous_question,
                 required_question=None,
-                verified_facts=[contribution] if contribution else [],
+                verified_facts=(
+                    {"completion_contribution": contribution} if contribution else {}
+                ),
                 analysis=analysis,
                 child_text=child_text,
                 fallback=fallback,
@@ -740,7 +851,9 @@ class ConversationEngine:
         state.subgoal_id = step.id
         help_card = self._help_card(task, state.hint_level)
         visual = self._visual_for(task, state.hint_level)
-        verified_facts = [task.slots[slot].fact_sentence for slot in (newly_verified or {})]
+        verified_facts = {
+            slot: task.slots[slot].fact_sentence for slot in (newly_verified or {})
+        }
         if dialogue_act == "show_help_card":
             fallback = self._preface_question("도움 카드가 열렸네.", step.prompt)
         elif dialogue_act == "joint_mode":
@@ -775,33 +888,176 @@ class ConversationEngine:
         dialogue_act: str,
         previous_question: str,
         required_question: str | None,
-        verified_facts: list[str],
+        verified_facts: Mapping[str, str],
         analysis: UtteranceAnalysis,
         child_text: str | None,
         fallback: str,
     ) -> SpeakerContext:
-        all_factual = bool(analysis.claims) and all(claim.factual for claim in analysis.claims)
-        mode, expression = safe_child_expression(
-            child_text,
-            analysis.safety_category,
-            all_claims_factual=all_factual,
+        active_step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=(state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE),
+            targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
         )
-        missing = [
-            task.slots[slot].description for slot in task.missing_slots(state.verified_slots)
-        ]
+        required_slot_ids = (
+            [slot for slot in active_step.target_slots if slot not in state.verified_slots]
+            if required_question
+            else []
+        )
+        required_slot_descriptions = {
+            slot: task.slots[slot].description for slot in required_slot_ids
+        }
         allowed_numbers = sorted(
-            set(re.findall(r"\d[\d,]*", " ".join(verified_facts + [required_question or ""])))
+            extract_numeric_values(
+                " ".join([*verified_facts.values(), required_question or ""])
+            )
+        )
+        expression = self._safe_grounding_span(
+            child_text,
+            analysis,
+            allowed_numbers=set(allowed_numbers),
+        )
+        mode: Literal["none", "quote_safe"] = "quote_safe" if expression else "none"
+        question_intent = SpeakerQuestionIntent(
+            operation=task.skill_id,
+            response_kind=self._speaker_response_kind(
+                task,
+                active_step,
+                required_slot_ids,
+            ),
+            referents=[task.title, *allowed_numbers] if required_question else [],
+            required_meanings=required_slot_descriptions,
+        )
+        verification_policy = self._speaker_verification_policy(
+            task,
+            dialogue_act,
+            required_slot_ids,
+            has_child_grounding=bool(expression),
         )
         return SpeakerContext(
             dialogue_act=dialogue_act,
             previous_question=previous_question,
             required_question=required_question,
-            verified_facts=verified_facts,
-            missing_slots=missing,
-            child_expression_mode=mode,  # type: ignore[arg-type]
+            verified_facts=dict(verified_facts),
+            required_slot_ids=required_slot_ids,
+            required_slot_descriptions=required_slot_descriptions,
+            question_intent=question_intent,
+            child_expression_mode=mode,
             child_expression=expression,
             allowed_numbers=allowed_numbers,
+            verification_policy=verification_policy,
             fallback_text=fallback,
+        )
+
+    @staticmethod
+    def _speaker_response_kind(
+        task: TaskDefinition,
+        step: StepDefinition,
+        required_slot_ids: list[str],
+    ) -> Literal[
+        "answer",
+        "reason_or_method",
+        "answer_and_reason",
+        "choice",
+        "count",
+        "relation",
+        "action",
+        "joint",
+        "none",
+    ]:
+        if not required_slot_ids:
+            return "none"
+        if step.input.kind is InputKind.JOINT:
+            return "joint"
+        if step.input.kind is InputKind.COUNT:
+            return "count"
+        if step.input.kind is InputKind.EQUATION:
+            return "action"
+        explanation_slots = set(task.text_explanation_slots)
+        required = set(required_slot_ids)
+        if explanation_slots.intersection(required) and required - explanation_slots:
+            return "answer_and_reason"
+        if required.issubset(explanation_slots) or required.intersection(
+            {"reason", "rule", "tracking", "method", "operation"}
+        ):
+            return "reason_or_method"
+        if step.input.kind in {InputKind.CHOICES, InputKind.FILL}:
+            return "choice"
+        if any("관계" in task.slots[slot].description for slot in required_slot_ids):
+            return "relation"
+        return "answer"
+
+    def _speaker_verification_policy(
+        self,
+        task: TaskDefinition,
+        dialogue_act: str,
+        required_slot_ids: list[str],
+        *,
+        has_child_grounding: bool,
+    ) -> SpeakerVerificationPolicy:
+        if not self.semantic_verifier_enabled:
+            return SpeakerVerificationPolicy.DETERMINISTIC
+        explanation_slots = set(task.text_explanation_slots)
+        semantic_dialogue_acts = {
+            "acknowledge_partial",
+            "acknowledge_unstructured_partial",
+            "entry_rejection_followup",
+        }
+        if (
+            has_child_grounding
+            or bool(explanation_slots.intersection(required_slot_ids))
+            or dialogue_act in semantic_dialogue_acts
+        ):
+            return SpeakerVerificationPolicy.SEMANTIC
+        return SpeakerVerificationPolicy.DETERMINISTIC
+
+    @staticmethod
+    def _safe_grounding_span(
+        child_text: str | None,
+        analysis: UtteranceAnalysis,
+        *,
+        allowed_numbers: set[str],
+    ) -> str | None:
+        if analysis.safety_category is not SafetyCategory.NORMAL or not child_text:
+            return None
+        span = re.sub(r"\s+", " ", analysis.grounding_span).strip()
+        source = re.sub(r"\s+", " ", child_text).strip()
+        if not span or len(span) > 30 or span not in source:
+            return None
+        if deterministic_safety(span) is not SafetyCategory.NORMAL:
+            return None
+        if not extract_numeric_values(span).issubset(allowed_numbers):
+            return None
+        return span
+
+    @staticmethod
+    def _speaker_guard(
+        task: TaskDefinition,
+        state: SessionState,
+        context: SpeakerContext,
+    ) -> SpeakerGuardContract:
+        del state  # The explicit parameter documents that the guard is task-state scoped.
+        question_compact = re.sub(r"[\s\W_]", "", context.required_question or "").lower()
+        forbidden: list[str] = []
+        for slot_id in context.required_slot_ids:
+            slot = task.slots[slot_id]
+            forms = [
+                str(slot.expected),
+                *slot.aliases,
+                *(str(value) for value in slot.accepted_values),
+            ]
+            for form in forms:
+                compact = re.sub(r"[\s\W_]", "", form).lower()
+                if len(compact) < 2 or compact in question_compact:
+                    continue
+                forbidden.append(form)
+        return SpeakerGuardContract(
+            forbidden_answer_forms=list(dict.fromkeys(forbidden)),
+            child_expression_source=(
+                context.child_expression
+                if context.child_expression_mode == "quote_safe"
+                else None
+            ),
         )
 
     def _turn_contract(

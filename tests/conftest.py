@@ -4,7 +4,13 @@ from collections.abc import Iterator
 
 import pytest
 
-from mormi_api.schemas import SpeakerContext, SpeakerOutput, UtteranceAnalysis
+from mormi_api.schemas import (
+    SpeakerContext,
+    SpeakerGuardContract,
+    SpeakerOutput,
+    SpeakerVerification,
+    UtteranceAnalysis,
+)
 
 
 class FakeGateway:
@@ -17,7 +23,32 @@ class FakeGateway:
         return self.analyses.pop(0)
 
     async def speak(self, context: SpeakerContext) -> SpeakerOutput:
-        return SpeakerOutput(text=context.fallback_text)
+        return SpeakerOutput(
+            text=context.fallback_text,
+            dialogue_act=context.dialogue_act,
+            asked_slot_ids=context.required_slot_ids,
+        )
+
+    async def verify_speaker(
+        self,
+        context: SpeakerContext,
+        guard: SpeakerGuardContract,
+        output: SpeakerOutput,
+    ) -> SpeakerVerification:
+        del guard
+        return SpeakerVerification(
+            approved=True,
+            dialogue_act_preserved=True,
+            required_focus_preserved=True,
+            only_allowed_math_used=True,
+            child_not_evaluated=True,
+            character_consistent=True,
+            detected_dialogue_act=context.dialogue_act,
+            detected_asked_slot_ids=context.required_slot_ids,
+            question_evidence_span=context.required_question or "",
+            child_expression_spans=output.used_child_expression_spans,
+            reason_code="approved",
+        )
 
 
 @pytest.fixture

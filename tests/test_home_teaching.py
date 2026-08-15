@@ -25,7 +25,10 @@ from mormi_api.schemas import (
     SkillProfile,
     SlotClaim,
     SpeakerContext,
+    SpeakerGuardContract,
     SpeakerOutput,
+    SpeakerVerification,
+    SpeakerVerificationPolicy,
     UtteranceAnalysis,
 )
 from mormi_api.security import TextCipher
@@ -771,6 +774,113 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
         assert child_method not in str(record.state_json["child_note_evidence"])
     restored = await repository.get_state(started.conversation_id)
     assert restored.child_note_evidence["tracking"] == child_method
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_safe_child_phrase_can_ground_a_natural_targeted_followup(
+    tmp_path: object,
+) -> None:
+    child_text = "3개야. 차근차근 세어봐"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="3",
+                factual=True,
+                evidence_span="3개야",
+            )
+        ],
+        grounding_span="차근차근 세어봐",
+        confidence=1,
+    )
+
+    class GroundedSpeakerGateway(FakeGateway):
+        speaker_context: SpeakerContext | None = None
+
+        async def speak(self, context: SpeakerContext) -> SpeakerOutput:
+            self.speaker_context = context
+            return SpeakerOutput(
+                text="아, 세 개구나! ‘차근차근 세어봐’는 어떻게 하는 거야?",
+                dialogue_act=context.dialogue_act,
+                asked_slot_ids=context.required_slot_ids,
+                used_verified_slots=["answer"],
+                used_child_expression=True,
+                used_child_expression_spans=["차근차근 세어봐"],
+            )
+
+        async def verify_speaker(
+            self,
+            context: SpeakerContext,
+            guard: SpeakerGuardContract,
+            output: SpeakerOutput,
+        ) -> SpeakerVerification:
+            del guard
+            return SpeakerVerification(
+                approved=True,
+                dialogue_act_preserved=True,
+                required_focus_preserved=True,
+                only_allowed_math_used=True,
+                child_not_evaluated=True,
+                character_consistent=True,
+                detected_dialogue_act=context.dialogue_act,
+                detected_asked_slot_ids=context.required_slot_ids,
+                question_evidence_span="‘차근차근 세어봐’는 어떻게 하는 거야?",
+                child_expression_spans=output.used_child_expression_spans,
+                reason_code="approved",
+            )
+
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/grounded-followup.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    gateway = GroundedSpeakerGateway([analysis])
+    service = ConversationService(
+        repository,
+        ConversationEngine(gateway),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=10,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_grounded_followup",
+            practice_result_id="practice_grounded_followup",
+            practice_summary={
+                "curriculum_session_id": "number-count",
+                "skill_id": "number-count",
+                "question_count": 5,
+                "first_try_correct_count": 5,
+            },
+        )
+    )
+
+    after_answer = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="5d0496e3-2762-4d3a-a2ae-1cbdf49ead06",
+            type="text",
+            text=child_text,
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.verified_slots["answer"] == "3"
+    assert "tracking" not in state.verified_slots
+    assert gateway.speaker_context is not None
+    assert gateway.speaker_context.child_expression == "차근차근 세어봐"
+    assert (
+        gateway.speaker_context.verification_policy
+        is SpeakerVerificationPolicy.SEMANTIC
+    )
+    assert gateway.speaker_context.required_slot_ids == ["tracking"]
+    assert after_answer.turn.mormi.text == (
+        "아, 세 개구나! ‘차근차근 세어봐’는 어떻게 하는 거야?"
+    )
+    assert after_answer.turn.input.target_slots == ["tracking"]
     await database.dispose()
 
 

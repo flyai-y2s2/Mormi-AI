@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -8,7 +10,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from .db import Database
@@ -51,6 +53,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = ConversationEngine(
         gateway,
         show_internal_pedagogy=settings.show_internal_pedagogy,
+        speaker_timeout_seconds=settings.speaker_timeout_seconds,
+        semantic_verifier_enabled=settings.speaker_verifier_enabled,
+        verifier_timeout_seconds=settings.speaker_verifier_timeout_seconds,
     )
     app.state.settings = settings
     app.state.database = database
@@ -314,6 +319,100 @@ async def respond(
             detail={"code": code, "issues": []},
             headers=_diagnostic_headers(code),
         ) from error
+
+
+def _sse(event: str, data: dict[str, object], *, event_id: str | None = None) -> str:
+    lines = [f"event: {event}"]
+    if event_id:
+        lines.append(f"id: {event_id}")
+    lines.append(f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}")
+    return "\n".join(lines) + "\n\n"
+
+
+def _text_chunks(text: str, size: int = 8) -> list[str]:
+    return [text[index : index + size] for index in range(0, len(text), size)]
+
+
+@app.post(
+    "/v1/conversations/{conversation_id}/responses/stream",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {"text/event-stream": {}},
+            "description": "Progress, validated Mormi text deltas, and the authoritative turn.",
+        }
+    },
+    tags=["conversation"],
+)
+async def respond_stream(
+    conversation_id: str,
+    body: ChildResponse,
+    _: Auth,
+    conversation: Service,
+) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        try:
+            async for event in conversation.respond_stream(conversation_id, body):
+                if event.name == "accepted":
+                    yield _sse(
+                        "response.accepted",
+                        {
+                            "conversation_id": conversation_id,
+                            "response_id": str(body.response_id),
+                        },
+                    )
+                    continue
+                if event.name == "progress" and event.stage:
+                    yield _sse(
+                        "response.progress",
+                        {"conversation_id": conversation_id, "stage": event.stage},
+                    )
+                    continue
+                if event.envelope is None:
+                    continue
+
+                envelope = event.envelope
+                turn_id = envelope.turn.turn_id
+                yield _sse(
+                    "mormi.start",
+                    {"turn_id": turn_id, "replayed": event.replayed},
+                    event_id=turn_id,
+                )
+                for delta in _text_chunks(envelope.turn.mormi.text):
+                    yield _sse("mormi.delta", {"turn_id": turn_id, "delta": delta})
+                    # Yield control so ASGI can flush each already-validated chunk.
+                    await asyncio.sleep(0)
+                yield _sse(
+                    "turn.completed",
+                    envelope.model_dump(mode="json"),
+                    event_id=turn_id,
+                )
+                yield _sse("done", {"turn_id": turn_id})
+        except ConversationNotFoundError:
+            yield _sse(
+                "error",
+                {"code": "conversation_not_found", "retryable": False},
+            )
+        except (StaleConversationError, ValueError):
+            yield _sse(
+                "error",
+                {"code": "stale_or_invalid_response", "retryable": False},
+            )
+        except (ModelUnavailableError, ModelOutputError) as error:
+            yield _sse(
+                "error",
+                {"code": _model_error_code(error), "retryable": True},
+            )
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get(

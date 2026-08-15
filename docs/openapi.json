@@ -273,6 +273,70 @@
         }
       }
     },
+    "/v1/conversations/{conversation_id}/responses/stream": {
+      "post": {
+        "tags": [
+          "conversation"
+        ],
+        "summary": "Respond Stream",
+        "operationId": "respond_stream_v1_conversations__conversation_id__responses_stream_post",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChildResponse"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Progress, validated Mormi text deltas, and the authoritative turn.",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/conversations/{conversation_id}": {
       "get": {
         "tags": [

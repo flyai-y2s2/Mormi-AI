@@ -44,6 +44,7 @@ X-Mormi-Service-Key: <service-key>
 | POST | `/v1/practice-results` | 반복학습 결과 스냅샷 저장 |
 | POST | `/v1/conversations` | AI 대화 시작 |
 | POST | `/v1/conversations/{conversation_id}/responses` | 아이 응답 제출 및 다음 턴 생성 |
+| POST | `/v1/conversations/{conversation_id}/responses/stream` | SSE 진행 상태와 검증된 다음 턴 전송 |
 | GET | `/v1/conversations/{conversation_id}` | 최신 턴 복구 |
 | GET | `/v1/learners/{learner_id}/skill-profiles` | 학습자별 시작 발화 단계 정보 조회 |
 | GET | `/v1/learners/{learner_id}/star-notes` | 별노트 조회 |
@@ -368,6 +369,48 @@ AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionSt
 응답 `200 OK`: 대화 시작과 동일한 `{ conversation_id, turn }` 구조로 다음 턴을
 반환합니다.
 
+### `POST /v1/conversations/{conversation_id}/responses/stream`
+
+요청 본문과 멱등성 규칙은 비스트리밍 `responses` API와 같습니다. 응답은
+`Content-Type: text/event-stream`이며 다음 이벤트를 순서대로 보냅니다.
+
+```text
+response.accepted
+response.progress  stage=understanding
+response.progress  stage=planning
+response.progress  stage=speaking
+response.progress  stage=validating
+mormi.start
+mormi.delta        검증된 모르미 문장의 일부
+turn.completed     최종 { conversation_id, turn }
+done
+```
+
+`mormi.delta`는 모델이 생성 중인 원시 토큰이 아닙니다. 전체 후보가 결정형 검증과
+필요한 경우 의미 검증까지 통과하고 DB에 원자적으로 저장된 뒤에만 나누어 전송합니다.
+따라서 프론트는 진행 단계를 먼저 보여 줄 수 있으면서도, 검증되지 않은 오개념이나
+부적절한 문구를 잠깐이라도 화면에 노출하지 않습니다. 화면과 상태의 최종 단일 출처는
+항상 `turn.completed`의 전체 `TurnContract`입니다.
+
+예시:
+
+```text
+event: response.progress
+data: {"conversation_id":"conversation_123","stage":"speaking"}
+
+event: mormi.delta
+data: {"turn_id":"turn_456","delta":"아, 세 개구나!"}
+
+event: turn.completed
+data: {"conversation_id":"conversation_123","turn":{"turn_id":"turn_456"}}
+```
+
+Spring 프록시는 SSE 응답을 버퍼링하거나 JSON 한 덩어리로 변환하지 않고 즉시
+플러시해야 합니다. `Cache-Control: no-cache, no-transform`과
+`X-Accel-Buffering: no`를 유지하고, 프론트 연결이 스트리밍을 지원하지 않는 경우에는
+기존 비스트리밍 엔드포인트를 사용합니다. 재연결·재시도에는 최초 요청과 같은
+`response_id`를 사용하며, 이미 처리된 응답은 저장된 동일 턴을 재생합니다.
+
 ## 7. `TurnContract`
 
 ```ts
@@ -549,6 +592,10 @@ type TurnContract = {
 | `409` | 이미 답한 턴 또는 오래된 `turn_id` | 최신 턴 GET 후 화면 복구 |
 | `422` | 요청 필드·정책 조합 오류 | 입력을 보존하고 개발 로그 기록 |
 | `503` | LLM 호출 실패 | 상태는 그대로이므로 같은 `response_id`로 재시도 |
+
+SSE는 스트림이 열린 뒤 발생한 오류를 HTTP 상태 변경 대신 `event: error`로 보냅니다.
+`data.retryable=true`이면 같은 `response_id`로 재시도하고, `false`이면 최신 턴을
+조회하거나 요청 계약을 수정합니다.
 
 `409 Conflict`:
 

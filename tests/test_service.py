@@ -127,6 +127,64 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_streaming_response_uses_the_same_persisted_turn_path(tmp_path: object) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/streaming.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=2,
+            scene="cafe",
+            scenario_id="cafe_queue_demo",
+        )
+    )
+    response = ChildResponse(
+        turn_id=started.turn.turn_id,
+        response_id="c65cf607-586b-492d-8d10-8a784e394973",
+        type="no_response",
+    )
+
+    events = [
+        event
+        async for event in service.respond_stream(started.conversation_id, response)
+    ]
+
+    assert [event.name for event in events] == [
+        "accepted",
+        "progress",
+        "progress",
+        "progress",
+        "progress",
+        "turn",
+    ]
+    assert [event.stage for event in events if event.name == "progress"] == [
+        "understanding",
+        "planning",
+        "speaking",
+        "validating",
+    ]
+    final = events[-1].envelope
+    assert final is not None
+    snapshot = await service.snapshot(started.conversation_id)
+    assert snapshot.turn.turn_id == final.turn.turn_id
+
+    replay = [
+        event
+        async for event in service.respond_stream(started.conversation_id, response)
+    ]
+    assert len(replay) == 1
+    assert replay[0].name == "turn"
+    assert replay[0].replayed is True
+    assert replay[0].envelope is not None
+    assert replay[0].envelope.turn.turn_id == final.turn.turn_id
+    await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_existing_no_raw_conversation_is_upgraded_once_to_permanent(
     tmp_path: object,
 ) -> None:

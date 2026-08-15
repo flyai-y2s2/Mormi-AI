@@ -13,6 +13,8 @@
 - 발화사다리 `L4~L0`와 힌트사다리 `H0~H3`를 독립적으로 조절
 - 도움 카드 자동 공개
 - 발화 이해 LLM, 결정형 오케스트레이터, 모르미 화자 LLM 분리
+- 모든 화자 대사의 결정형 검증과 위험 턴의 조건부 의미 검증
+- 검증된 대사만 전송하는 SSE 진행·대사 스트리밍
 - 자유문장은 LLM, 선택·빈칸·조작은 검수 ID 기반 결정형 판정 후 동일 오케스트레이터 사용
 - 아이 근거를 보존한 직접 별노트와 검수된 공동 별노트를 구분해 생성
 - 학습자별 안정 발화 단계와 최근 힌트 의존도 저장
@@ -46,6 +48,7 @@
   → 결정형 교육 오케스트레이터
   → Claude Sonnet 모르미 화자
   → 코드 출력 검증
+  → 위험 턴만 Claude Haiku 의미 검증
   → TurnContract
 ```
 
@@ -63,6 +66,12 @@
 - **동생다운 화자**: 모르미는 교사처럼 퀴즈를 내거나 상태를 보고하지 않고,
   “아, 세 개구나!”, “나 3이랑 5를 어떻게 비교할지 헷갈려...”처럼 자신이 모르는
   지점을 털어놓고 도움을 청합니다. 아이에게 생각의 근거를 입증시키지 않습니다.
+- **안전한 자연스러움**: 코드는 검증된 사실, 빠진 슬롯, 질문 목적과 금지 답을
+  정하고 Sonnet은 그 범위 안에서 말투를 만듭니다. 아이의 안전한 원문 구절은
+  분류기가 정확한 인용 범위로 지정한 경우에만 자연스러운 되물음에 사용할 수 있습니다.
+- **조건부 의미 검증**: 부분 답변, 설명 요청, 아이 표현을 되받는 턴만 Haiku가
+  질문 의미와 캐릭터를 재검증합니다. 단순 안전 대응과 검수 문구에는 추가 호출을
+  하지 않으며, 시간 초과나 거절 시 교육 진행은 유지하고 검수 문구로 대체합니다.
 - **원문 기록 분리**: 원문은 암호화된 대화 기록에만 저장하며 학습 상태에는 검증된 사실만 저장합니다.
 - **완료 사실 연동**: `completion.verified_facts`에는 코드가 검증한 슬롯만 담아
   Spring BE가 카페 진행을 동기화하며, 원문 발화나 LLM 추측은 넣지 않습니다.
@@ -105,6 +114,7 @@ pip install -r requirements.txt
 | POST | `/v1/practice-results` | 집 반복학습 결과 저장 |
 | POST | `/v1/conversations` | 가르치기/카페 대화 시작 |
 | POST | `/v1/conversations/{conversation_id}/responses` | 발화·선택·조작 응답 제출 |
+| POST | `/v1/conversations/{conversation_id}/responses/stream` | SSE 진행 상태와 검증된 다음 턴 스트리밍 |
 | GET | `/v1/conversations/{conversation_id}` | 최신 상태와 턴 복구 |
 | GET | `/v1/learners/{learner_id}/skill-profiles` | 학습자별 L/H 근거 조회 |
 | GET | `/v1/learners/{learner_id}/star-notes` | 별노트 조회 |
@@ -212,6 +222,9 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_SERVICE_API_KEY` | 예 | Spring→AI 호출을 보호하는 서비스 간 공유 키 |
 | `MORMI_CLASSIFIER_MODEL` | 아니요 | 기본값 `claude-haiku-4-5-20251001` |
 | `MORMI_SPEAKER_MODEL` | 아니요 | 기본값 `claude-sonnet-4-6` |
+| `MORMI_SPEAKER_TIMEOUT_SECONDS` | 아니요 | 화자 생성 제한 시간, 기본 8초 |
+| `MORMI_SPEAKER_VERIFIER_ENABLED` | 아니요 | 위험 턴 조건부 의미 검증, 기본 `true` |
+| `MORMI_SPEAKER_VERIFIER_TIMEOUT_SECONDS` | 아니요 | 의미 검증 제한 시간, 기본 1.8초 |
 | `MORMI_IDEMPOTENCY_RETENTION_DAYS` | 아니요 | 멱등 응답 보존 기간, 기본 30일 |
 | `MORMI_CORS_ORIGINS` | 아니요 | 브라우저 직접 호출을 허용할 오리진 JSON 배열. Spring 경유만 하면 `[]` |
 | `MORMI_SHOW_INTERNAL_PEDAGOGY=false` | 아니요 | 운영 응답에서 내부 L/H·판정 근거를 숨김 |

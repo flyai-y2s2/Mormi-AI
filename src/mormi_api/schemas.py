@@ -137,6 +137,18 @@ class SafetyCategory(StrEnum):
     DANGEROUS = "dangerous"
 
 
+class SpeakerVerificationPolicy(StrEnum):
+    """How much validation a generated character line requires.
+
+    Deterministic validation always runs.  ``semantic`` adds an independent
+    low-latency audit only for turns where a paraphrased question or a child
+    expression could subtly change the pedagogical meaning.
+    """
+
+    DETERMINISTIC = "deterministic"
+    SEMANTIC = "semantic"
+
+
 class SessionStatus(StrEnum):
     ACTIVE = "active"
     COMPLETED = "completed"
@@ -367,6 +379,10 @@ class UtteranceAnalysis(BaseModel):
     claims: list[SlotClaim] = Field(default_factory=list)
     misconception_tag: str | None = None
     bottleneck: str = "unknown"
+    # A short, exact substring of the child's response that is safe and useful
+    # for a natural acknowledgement or clarification.  The orchestrator checks
+    # that it really occurs in the raw response before a speaker can quote it.
+    grounding_span: str = ""
     note_candidate: str = ""
     confidence: float = Field(default=0, ge=0, le=1)
 
@@ -503,15 +519,48 @@ class SessionState(BaseModel):
         return self.task_ids[self.task_index]
 
 
+class SpeakerQuestionIntent(BaseModel):
+    """Meaning selected by code while leaving surface wording to the speaker."""
+
+    operation: str = ""
+    response_kind: Literal[
+        "answer",
+        "reason_or_method",
+        "answer_and_reason",
+        "choice",
+        "count",
+        "relation",
+        "action",
+        "joint",
+        "none",
+    ] = "none"
+    referents: list[str] = Field(default_factory=list)
+    required_meanings: dict[str, str] = Field(default_factory=dict)
+
+
+class SpeakerGuardContract(BaseModel):
+    """Validation-only facts that are never sent to the Sonnet speaker."""
+
+    forbidden_answer_forms: list[str] = Field(default_factory=list)
+    child_expression_source: str | None = None
+
+
 class SpeakerContext(BaseModel):
     dialogue_act: str
     previous_question: str | None = None
     required_question: str | None = None
-    verified_facts: list[str] = Field(default_factory=list)
-    missing_slots: list[str] = Field(default_factory=list)
-    child_expression_mode: Literal["none", "context_only", "quote_safe"] = "none"
+    # Slot id -> reviewed fact sentence.  Missing-slot answers are never sent
+    # to the speaker model.
+    verified_facts: dict[str, str] = Field(default_factory=dict)
+    required_slot_ids: list[str] = Field(default_factory=list)
+    required_slot_descriptions: dict[str, str] = Field(default_factory=dict)
+    question_intent: SpeakerQuestionIntent = Field(default_factory=SpeakerQuestionIntent)
+    child_expression_mode: Literal["none", "quote_safe"] = "none"
     child_expression: str | None = None
     allowed_numbers: list[str] = Field(default_factory=list)
+    verification_policy: SpeakerVerificationPolicy = (
+        SpeakerVerificationPolicy.DETERMINISTIC
+    )
     fallback_text: str
 
 
@@ -529,8 +578,38 @@ class PedagogicalDecision(BaseModel):
 
 class SpeakerOutput(BaseModel):
     text: str
+    dialogue_act: str = ""
+    asked_slot_ids: list[str] = Field(default_factory=list)
     used_verified_slots: list[str] = Field(default_factory=list)
     used_child_expression: bool = False
+    used_child_expression_spans: list[str] = Field(default_factory=list)
+
+
+class SpeakerVerification(BaseModel):
+    """Independent semantic audit of a freely paraphrased Mormi line."""
+
+    approved: bool = False
+    dialogue_act_preserved: bool = False
+    required_focus_preserved: bool = False
+    only_allowed_math_used: bool = False
+    child_not_evaluated: bool = False
+    character_consistent: bool = False
+    detected_dialogue_act: str = ""
+    detected_asked_slot_ids: list[str] = Field(default_factory=list)
+    question_evidence_span: str = ""
+    unverified_claim_spans: list[str] = Field(default_factory=list)
+    answer_leak_spans: list[str] = Field(default_factory=list)
+    child_evaluation_spans: list[str] = Field(default_factory=list)
+    child_expression_spans: list[str] = Field(default_factory=list)
+    reason_code: Literal[
+        "approved",
+        "wrong_focus",
+        "answer_leak",
+        "unverified_claim",
+        "child_evaluation",
+        "character_break",
+        "other",
+    ] = "other"
 
 
 class SessionEnvelope(BaseModel):
