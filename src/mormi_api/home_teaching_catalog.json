@@ -41,8 +41,7 @@
       }
     },
     "content_version": 5,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "지금 점이 두 개 있는 거 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "점이 몇 개인지랑 어떻게 세는지 알려주면 안 될까?"
   },
   {
@@ -92,8 +91,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "왼쪽 점이 더 많은 것 같은데, 맞아?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 어느 쪽이 더 많은지랑 두 수를 어떻게 보는지 헷갈려... 알려줄 수 있어?"
   },
   {
@@ -141,8 +139,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "저금통에 500원이 있었어. 100원을 더 넣으면 510원일까?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 모두 얼마인지랑 돈을 어떻게 더하는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -244,7 +241,7 @@
     },
     "content_version": 2,
     "entry_mode": "genuine_question",
-    "l4_prompt": "34에서 3과 4는 각각 무엇을 뜻해?"
+    "l4_prompt": "나 34에서 3이랑 4가 뭘 뜻하는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "add-pictures",
@@ -290,8 +287,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "공 2개에 3개가 더 오면 모두 4개 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 모두 몇 개인지랑 어떻게 세야 하는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -343,8 +339,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "700원짜리와 500원짜리를 사면 200원 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 모두 얼마인지랑 돈을 어떻게 더하는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -392,7 +387,7 @@
     },
     "content_version": 2,
     "entry_mode": "incomplete_attempt",
-    "l4_prompt": "12와 5를 세로로 더하려는데, 5를 어디에 놓아야 해?"
+    "l4_prompt": "나 12랑 5를 세로로 더할 때 5를 어디에 놓는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "add-make-ten",
@@ -439,7 +434,7 @@
     },
     "content_version": 2,
     "entry_mode": "incomplete_attempt",
-    "l4_prompt": "8과 5를 더할 때 10을 먼저 만들면 어떻게 돼?"
+    "l4_prompt": "나 8이랑 5를 더할 때 10을 먼저 어떻게 만드는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "sub-pictures",
@@ -485,8 +480,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "공 5개에서 2개를 빼면 7개 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 몇 개가 남는지랑 어떻게 세야 하는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -585,7 +579,7 @@
     },
     "content_version": 2,
     "entry_mode": "incomplete_attempt",
-    "l4_prompt": "17에서 5를 세로로 빼려는데, 5를 어디에 놓아야 해?"
+    "l4_prompt": "나 17에서 5를 세로로 뺄 때 5를 어디에 놓는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "sub-borrow",
@@ -632,7 +626,7 @@
     },
     "content_version": 2,
     "entry_mode": "incomplete_attempt",
-    "l4_prompt": "12에서 5를 빼려는데 2에서 5를 못 빼겠어. 어떻게 해?"
+    "l4_prompt": "나 12에서 5를 빼려는데 2에서 5를 못 빼겠어... 어떻게 하면 돼?"
   },
   {
     "id": "multiply-groups",
@@ -678,8 +672,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "2개씩 3묶음이면 2+3=5개 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 모두 몇 개인지랑 어떻게 계산하는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -726,9 +719,8 @@
       }
     },
     "content_version": 2,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "2개씩 4묶음은 2+4로 나타내면 되지?",
-    "l4_prompt": "그럼 덧셈으로 어떻게 나타내?"
+    "entry_mode": "genuine_question",
+    "l4_prompt": "나 2개씩 4묶음을 덧셈으로 어떻게 쓰는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "money-mission",
@@ -781,7 +773,7 @@
     },
     "content_version": 2,
     "entry_mode": "genuine_question",
-    "l4_prompt": "1,200원과 800원을 사고 5,000원을 내면 얼마가 남아?"
+    "l4_prompt": "나 5,000원을 내면 얼마가 남는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "multiply-easy-tables",
@@ -828,7 +820,7 @@
     },
     "content_version": 2,
     "entry_mode": "incomplete_attempt",
-    "l4_prompt": "2씩 네 번 세는데 2, 4, 6 다음은 뭐야?"
+    "l4_prompt": "나 2씩 세는데 2, 4, 6 다음이 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "multiply-tables",
@@ -875,7 +867,7 @@
     },
     "content_version": 2,
     "entry_mode": "incomplete_attempt",
-    "l4_prompt": "3×5가 15일 때 3×6은 어떻게 이어서 구해?"
+    "l4_prompt": "나 3×5 다음 3×6을 어떻게 구하는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "divide-share",
@@ -922,7 +914,7 @@
     },
     "content_version": 2,
     "entry_mode": "genuine_question",
-    "l4_prompt": "6개를 2명에게 똑같이 나누려면 어떻게 해야 해?"
+    "l4_prompt": "나 6개를 2명에게 똑같이 나누는 방법이 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "divide-group",
@@ -968,8 +960,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "8개를 2개씩 묶으면 2묶음 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 몇 묶음인지랑 어떻게 세는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -1021,8 +1012,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "●▲●▲ 다음에는 ■가 오는 거 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 다음에 뭐가 오는지랑 어떻게 찾는지 헷갈려... 알려줄 수 있어?"
   },
   {
@@ -1076,9 +1066,8 @@
       }
     },
     "content_version": 2,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "2, 4, 6, 8은 4씩 커지는 거 맞지?",
-    "l4_prompt": "그럼 얼마씩 커지고, 다음 수는 뭐야?"
+    "entry_mode": "genuine_question",
+    "l4_prompt": "나 얼마씩 커지는지랑 다음 수가 뭔지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "pattern-unknown",
@@ -1127,8 +1116,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "□+3=8에서 빈칸은 8 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 빈칸에 뭐가 들어가는지랑 어떻게 찾는지 헷갈려... 알려줄 수 있어?"
   },
   {
@@ -1174,8 +1162,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "긴 바늘이 6이면 6분 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 몇 분인지랑 시계를 어떻게 읽는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -1221,8 +1208,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "긴 바늘이 3이면 3분 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 몇 분인지랑 시계를 어떻게 읽는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -1272,8 +1258,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "2시부터 3시까지는 3시간 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 몇 시간인지랑 어떻게 세는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -1319,8 +1304,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "8월 8일에서 사흘 뒤는 10일 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 며칠인지랑 어떻게 세는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -1415,8 +1399,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "0부터 6까지 재면 5cm 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 몇 cm인지랑 자를 어떻게 읽는지 헷갈려. 알려줄 수 있어?"
   },
   {
@@ -1464,8 +1447,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "500g이 1,000g보다 더 무거운 거 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 어느 쪽이 더 무거운지랑 두 무게를 어떻게 보는지 헷갈려... 알려줄 수 있어?"
   },
   {
@@ -1514,8 +1496,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "변과 꼭짓점이 3개인 도형은 사각형 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 이 도형 이름이랑 어떤 점을 봐야 하는지 헷갈려... 알려줄 수 있어?"
   },
   {
@@ -1565,7 +1546,7 @@
     },
     "content_version": 2,
     "entry_mode": "genuine_question",
-    "l4_prompt": "삼각형 두 개로 사각형을 어떻게 만들 수 있어?"
+    "l4_prompt": "나 삼각형 두 개로 사각형을 어떻게 만드는지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "geometry-position",
@@ -1613,9 +1594,8 @@
       }
     },
     "content_version": 2,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "세모에서 보면 별이 왼쪽에 있는 거 맞지?",
-    "l4_prompt": "그럼 별은 어느 쪽에 있어?"
+    "entry_mode": "genuine_question",
+    "l4_prompt": "나 세모에서 보면 별이 어느 쪽인지 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "data-classify",
@@ -1664,7 +1644,7 @@
     },
     "content_version": 2,
     "entry_mode": "genuine_question",
-    "l4_prompt": "원 두 개와 삼각형을 모양대로 나누려면 어떻게 해야 해?"
+    "l4_prompt": "나 원 두 개랑 삼각형을 모양대로 나누는 게 헷갈려... 알려줄 수 있어?"
   },
   {
     "id": "data-chart",
@@ -1717,8 +1697,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "막대가 3칸인 배가 가장 많은 거 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 어떤 과일이 가장 많은지랑 표를 어떻게 보는지 헷갈려... 알려줄 수 있어?"
   },
   {
@@ -1770,8 +1749,7 @@
       }
     },
     "content_version": 3,
-    "entry_mode": "wrong_guess",
-    "entry_prompt": "빨강 2개, 파랑 6개면 빨강이 더 잘 나오는 거 맞지?",
+    "entry_mode": "genuine_question",
     "l4_prompt": "나 어떤 색이 더 잘 나올지랑 어떻게 아는지 헷갈려... 알려줄 수 있어?"
   }
 ]

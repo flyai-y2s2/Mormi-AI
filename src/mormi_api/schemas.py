@@ -95,7 +95,7 @@ class ResponseCategory(StrEnum):
 
 
 class EntryStance(StrEnum):
-    """How the child responded to a reviewed wrong-guess entry.
+    """Legacy v2 interpretation of a reviewed wrong-guess entry.
 
     This is deliberately separate from mathematical claims.  Rejecting
     Mormi's guess is useful conversational evidence, but it is not by itself
@@ -109,7 +109,7 @@ class EntryStance(StrEnum):
 
 
 class EntryPhase(StrEnum):
-    """Conversation phase before the ordinary expression ladder begins."""
+    """Legacy entry state plus the reusable split-L4 follow-up state."""
 
     AWAITING_ENTRY_RESPONSE = "awaiting_entry_response"
     AWAITING_OPEN_FOLLOWUP = "awaiting_open_followup"
@@ -470,8 +470,9 @@ class SessionState(BaseModel):
     expression_level: ExpressionLevel
     hint_level: HintLevel = HintLevel.H0
     subgoal_id: str = "initial"
-    # Version 1 sessions predate conditional entry turns.  Defaults must keep
-    # those persisted sessions on their original path after a deployment.
+    # v1 predates entry turns, v2 used conditional wrong guesses, and v3 starts
+    # every new session from a genuine help request. Persisted values remain
+    # readable so deployments do not break conversations already in progress.
     dialogue_policy_version: int = Field(default=1, ge=1)
     entry_phase: EntryPhase = EntryPhase.RESOLVED
     verified_slots: dict[str, str | int | float | bool] = Field(default_factory=dict)

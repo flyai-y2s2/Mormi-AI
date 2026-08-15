@@ -31,6 +31,7 @@ from .schemas import (
     ResponseCategory,
     ResponseType,
     SafetyCategory,
+    SceneType,
     SessionState,
     SessionStatus,
     SkillProfile,
@@ -424,20 +425,36 @@ class ConversationEngine:
                     response.text,
                     previous_question,
                 )
-            if entry_active or open_followup_active or targeted_followup_active:
-                next_state.entry_phase = EntryPhase.AWAITING_TARGETED_FOLLOWUP
-            # A partial answer is useful evidence, but the next prompt should
-            # request only the missing piece instead of repeating the original
-            # multi-part L4 question.
             next_step = task.step_for(
                 next_state.expression_level,
                 next_state.verified_slots,
             )
-            if not (entry_active or open_followup_active or targeted_followup_active) and (
+            # In home teaching, a child who supplies one useful part of an L4
+            # answer has already responded independently. Keep the L4 credit
+            # and ask only for the missing slot with the shorter L3-shaped
+            # prompt. This is no longer coupled to the old wrong-guess opening.
+            split_l4_followup = (
+                state.scene is SceneType.HOME_TEACH
+                and next_state.expression_level is ExpressionLevel.L4
+                and next_step.id == state.subgoal_id
+            )
+            if (
+                entry_active
+                or open_followup_active
+                or targeted_followup_active
+                or split_l4_followup
+            ):
+                next_state.entry_phase = EntryPhase.AWAITING_TARGETED_FOLLOWUP
+            elif (
                 next_state.expression_level is ExpressionLevel.L4
                 and next_step.id == state.subgoal_id
             ):
+                # Other scenes keep their established ladder semantics: an
+                # incomplete L4 response moves to the shorter L3 contract.
                 next_state.expression_level = ExpressionLevel.L3
+            # A partial answer is useful evidence, but the next prompt should
+            # request only the missing piece instead of repeating the original
+            # multi-part L4 question.
             return self._decision_for_current_step(
                 next_state,
                 task,
@@ -646,7 +663,7 @@ class ConversationEngine:
             next_task = get_task(state.current_task_id, state.scenario_data)
             state.entry_phase = (
                 EntryPhase.AWAITING_ENTRY_RESPONSE
-                if state.dialogue_policy_version >= 2
+                if state.dialogue_policy_version == 2
                 and next_task.entry_step is not None
                 and state.expression_level is ExpressionLevel.L4
                 else EntryPhase.RESOLVED

@@ -103,7 +103,6 @@ class ConversationService:
             for task_id in scenario.task_ids
         }
         start_level = task_start_levels[scenario.task_ids[0]]
-        first_task = get_task(scenario.task_ids[0], scenario_data)
         started_at = utc_now()
         state = SessionState(
             learner_id=request.learner_id,
@@ -115,12 +114,12 @@ class ConversationService:
             task_start_levels=task_start_levels,
             expression_level=start_level,
             task_start_level=start_level,
-            dialogue_policy_version=2,
-            entry_phase=(
-                EntryPhase.AWAITING_ENTRY_RESPONSE
-                if first_task.entry_step is not None and start_level is ExpressionLevel.L4
-                else EntryPhase.RESOLVED
-            ),
+            # Policy v3 removes deliberate wrong-guess openings for all new
+            # sessions.  Legacy snapshots retain their persisted entry phase,
+            # but a newly created conversation always starts from the genuine
+            # L4-H0 help request.
+            dialogue_policy_version=3,
+            entry_phase=EntryPhase.RESOLVED,
             raw_storage_enabled=request.conversation_storage_consent,
             retention_policy=request.retention_policy,
             raw_retention_until=request.retention_policy.expires_at(started_at),

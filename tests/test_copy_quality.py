@@ -23,6 +23,8 @@ SYSTEM_STATUS_COPY = (
     "네가 말한 데까지",
 )
 
+WRONG_GUESS_OPENING = re.compile(r"(?:맞지|맞아|되는\s*거지|인\s*거지)\s*\?")
+
 TEACHER_EVALUATION_COPY = re.compile(
     r"왜\s+.+(?:라고\s+)?생각했어|왜\s+그렇게\s+생각|어떻게\s+알았어|"
     r"어떻게\s+[^?]*(?:했어|셌어|찾았어|읽었어|비교했어)|까닭은\s+무엇|"
@@ -49,6 +51,7 @@ def test_every_home_turn_uses_reviewed_specific_copy() -> None:
         assert not any(term in text for term in VAGUE_COPY for text in copy), spec.id
         assert not any(term in text for term in SYSTEM_STATUS_COPY for text in copy), spec.id
         assert not any(TEACHER_EVALUATION_COPY.search(text) for text in copy), spec.id
+        assert not WRONG_GUESS_OPENING.search(spec.effective_l4_prompt), spec.id
 
 
 def test_korean_postpositions_attach_to_the_fill_blank() -> None:

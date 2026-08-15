@@ -124,9 +124,9 @@ class TaskDefinition(BaseModel):
     # span.  A bare result may fill an answer slot, but cannot satisfy a method
     # or reason slot even if the classifier overclaims it.
     text_explanation_slots: list[str] = Field(default_factory=list)
-    # A reviewed wrong guess may precede the actual L4 teaching prompt.  It is
-    # a conversational entry, not a separate learning level or required
-    # knowledge slot.  Other entry modes start directly from the L4 steps.
+    # Compatibility fields for conversations snapshotted under dialogue policy
+    # v2.  New v3 sessions never activate a wrong-guess entry and start from
+    # the genuine L4 help request instead.
     entry_mode: Literal["wrong_guess", "incomplete_attempt", "genuine_question"] = (
         "genuine_question"
     )
@@ -319,6 +319,11 @@ class HomeTeachingSpec(BaseModel):
 def _load_home_teaching_catalog() -> dict[str, HomeTeachingSpec]:
     path = Path(__file__).with_name("home_teaching_catalog.json")
     entries = [HomeTeachingSpec.model_validate(item) for item in json.loads(path.read_text())]
+    if any(entry.entry_mode == "wrong_guess" for entry in entries):
+        raise ValueError(
+            "current home teaching catalog must start with genuine help requests; "
+            "wrong_guess is legacy snapshot compatibility only"
+        )
     catalog = {entry.id: entry for entry in entries}
     if len(catalog) != len(entries):
         raise ValueError("home teaching catalog contains duplicate ids")
@@ -1625,11 +1630,12 @@ def home_teaching_task(
 
 
 def _configure_home_entry(task: TaskDefinition, spec: HomeTeachingSpec) -> None:
-    """Add a pre-evaluation wrong-guess turn only when content requests one.
+    """Rebuild a legacy v2 wrong-guess step for persisted snapshots only.
 
-    Incomplete attempts and genuine questions begin directly at the ordinary
-    L4 step.  This prevents the character from manufacturing an error in
-    lessons where a natural, evidence-based misconception does not exist.
+    Current catalog content uses genuine questions.  Keeping this parser lets
+    an already-open v2 conversation finish without invalidating its stored
+    scenario, while ConversationService guarantees that v3 sessions never
+    activate this step.
     """
 
     task.entry_mode = spec.entry_mode
