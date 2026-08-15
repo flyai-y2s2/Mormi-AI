@@ -61,13 +61,37 @@ class SlotDefinition(BaseModel):
     def accepts(self, value: object) -> bool:
         if value == self.expected:
             return True
-        normalized = str(value).strip().lower().replace(" ", "")
+        # Children and the classifier can write the same amount either as
+        # ``6,000원`` or ``6000원``.  Commas are presentation, not meaning, so
+        # they must never decide whether a reviewed numeric fact is accepted.
+        # Keep the normalization deliberately narrow: units and surrounding
+        # words still have to match an explicit alias below.
+        normalized = (
+            str(value)
+            .strip()
+            .lower()
+            .replace(" ", "")
+            .replace(",", "")
+        )
+        if isinstance(self.expected, (int, float)) and not isinstance(self.expected, bool):
+            numeric_claim = re.fullmatch(
+                r"([+-]?\d+(?:\.\d+)?)(?:원|개|명)?"
+                r"(?:이야|야|이에요|예요|입니다)?[.!?]?",
+                normalized,
+            )
+            if numeric_claim is not None:
+                parsed = float(numeric_claim.group(1))
+                if parsed == float(self.expected):
+                    return True
         candidates = [
             str(self.expected),
             *self.aliases,
             *(str(item) for item in self.accepted_values),
         ]
-        return normalized in {item.strip().lower().replace(" ", "") for item in candidates}
+        return normalized in {
+            item.strip().lower().replace(" ", "").replace(",", "")
+            for item in candidates
+        }
 
     def canonical(self, value: object) -> str | int | float | bool:
         if self.preserve_value and isinstance(value, (str, int, float, bool)):
@@ -1227,17 +1251,21 @@ def simple_calculation_task(
     l3 = [
         StepDefinition(
             id="short_result",
-            prompt="계산한 값은 얼마야?",
+            prompt=(
+                "그럼 두 메뉴는 모두 얼마야?"
+                if operation == "addition"
+                else "그럼 거스름돈은 얼마야?"
+            ),
             target_slots=["result"],
             input=text_input("result", placeholder="금액만 알려줘"),
             fallback_text="내가 많이 물어봤네. 금액부터 알려줘.",
         ),
         StepDefinition(
             id="short_operation",
-            prompt="두 금액을 더해야 해, 빼야 해?",
+            prompt="그 금액은 어떻게 계산한 건지 알려줄 수 있어?",
             target_slots=["operation"],
             input=text_input("operation", placeholder="더하기 또는 빼기"),
-            fallback_text="어떤 계산인지도 짧게 알려줘.",
+            fallback_text="나는 계산하는 방법이 아직 헷갈려... 알려줄 수 있어?",
         ),
     ]
     l2 = [
@@ -1325,7 +1353,7 @@ def simple_calculation_task(
                 description="계산 결과",
                 semantic_role="conclusion",
                 expected=result,
-                aliases=[str(result), f"{result:,}", f"{result:,}원"],
+                aliases=[str(result), f"{result:,}", f"{result}원", f"{result:,}원"],
                 fact_sentence=f"계산 결과는 {result:,}원이야.",
             ),
         },

@@ -277,6 +277,10 @@ class ClaudeGateway:
                 "unrelated_response는 현재 질문과 의미 연결이 전혀 없을 때만 사용한다.",
                 "정답 방향의 일부 의미만 있으면 correct_partial로 분류한다.",
                 "부분 의미가 슬롯 하나를 뒷받침하면 그 슬롯의 expected 값을 claim한다.",
+                (
+                    "숫자 expected에는 쉼표나 단위가 붙어도 같은 수로 해석한다. "
+                    "예: 6000원과 6,000원은 같은 값이며 expected 숫자로 claim한다."
+                ),
                 "검수된 valid_explanations나 aliases 중 어느 하나와 뜻이 맞으면 인정한다.",
                 "wrong_guess 진입 턴에서는 응/아니의 태도를 entry_stance로 따로 판정한다.",
                 "추측을 거부했다는 사실만으로 answer나 reason claim을 만들지 않는다.",
@@ -358,6 +362,8 @@ CLASSIFIER_SYSTEM = """
 - 교과서 문장과 어휘가 다르다는 이유로 unrelated_response를 선택하지 않는다.
 - semantic_role=observation은 화면이나 생활 장면에서 직접 확인한 사실이다.
 - semantic_role=conclusion·operation·selection은 요청한 결과가 명시된 범위만 채운다.
+- 숫자 expected에 쉼표나 단위가 붙어도 같은 수면 expected 숫자로 claim한다.
+  예를 들어 '6000원이야'는 expected=6000을 직접 말한 결론이다.
 - semantic_role=method는 실제 행동이나 절차, reason은 사실 사이의 관계,
   explanation은 검수된 수학 관계나 해결 절차가 원문에 있어야 한다.
 - 결론만 말한 것을 이유나 방법으로, 관찰만 말한 것을 완성된 절차로 부풀리지 않는다.

@@ -31,7 +31,6 @@ from .schemas import (
     ResponseCategory,
     ResponseType,
     SafetyCategory,
-    SceneType,
     SessionState,
     SessionStatus,
     SkillProfile,
@@ -429,13 +428,14 @@ class ConversationEngine:
                 next_state.expression_level,
                 next_state.verified_slots,
             )
-            # In home teaching, a child who supplies one useful part of an L4
-            # answer has already responded independently. Keep the L4 credit
-            # and ask only for the missing slot with the shorter L3-shaped
-            # prompt. This is no longer coupled to the old wrong-guess opening.
+            # A child who supplies one useful part of an L4 answer has already
+            # responded independently, regardless of whether the scene is the
+            # home or the cafe. Keep the L4 credit and split only the question:
+            # the next turn uses the shorter L3-shaped prompt for the missing
+            # slot. Scene-specific handling here used to make cafe calculations
+            # repeat the original result+method question after a correct result.
             split_l4_followup = (
-                state.scene is SceneType.HOME_TEACH
-                and next_state.expression_level is ExpressionLevel.L4
+                next_state.expression_level is ExpressionLevel.L4
                 and next_step.id == state.subgoal_id
             )
             if (
@@ -445,13 +445,6 @@ class ConversationEngine:
                 or split_l4_followup
             ):
                 next_state.entry_phase = EntryPhase.AWAITING_TARGETED_FOLLOWUP
-            elif (
-                next_state.expression_level is ExpressionLevel.L4
-                and next_step.id == state.subgoal_id
-            ):
-                # Other scenes keep their established ladder semantics: an
-                # incomplete L4 response moves to the shorter L3 contract.
-                next_state.expression_level = ExpressionLevel.L3
             # A partial answer is useful evidence, but the next prompt should
             # request only the missing piece instead of repeating the original
             # multi-part L4 question.
@@ -1059,6 +1052,8 @@ class ConversationEngine:
             return "아, 세 개구나!"
         if task.skill_id == "number-compare" and "answer" in newly_verified:
             return "아, 오른쪽이 더 많구나!"
+        if "result" in newly_verified and isinstance(newly_verified["result"], int):
+            return f"아, {newly_verified['result']:,}원이구나!"
         return "아, 그렇구나!"
 
     @staticmethod
