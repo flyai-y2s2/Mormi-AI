@@ -5,8 +5,9 @@ from datetime import datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy import event
 
-from mormi_api.db import ConversationRecord, Database, TurnRecord
+from mormi_api.db import ConversationRecord, Database, NoteRecord, TurnRecord
 from mormi_api.llm import ModelUnavailableError
 from mormi_api.main import app
 from mormi_api.reporting import validate_report_summary
@@ -15,6 +16,7 @@ from mormi_api.schemas import (
     CompletionOutcome,
     ExpressionLevel,
     HintLevel,
+    LearnerProfile,
     ReportFact,
     ReportNarrative,
     ReportSummaryRequest,
@@ -23,6 +25,7 @@ from mormi_api.schemas import (
     SceneType,
     SessionState,
     SessionStatus,
+    SkillProfile,
     utc_now,
 )
 from mormi_api.security import TextCipher
@@ -484,6 +487,31 @@ async def seed_completed_conversation(
     return conversation_id
 
 
+async def seed_direct_note(
+    repository: Repository,
+    *,
+    conversation_id: str,
+    learner_id: int,
+    text: str,
+) -> None:
+    async with repository.database.sessions() as db:
+        db.add(
+            NoteRecord(
+                note_id=f"note_{learner_id}",
+                conversation_id=conversation_id,
+                learner_id=learner_id,
+                skill_id="compare_quantity_in_context",
+                text=text,
+                attribution="child",
+                evidence="direct_explanation",
+                attribution_label="아이의 직접 설명",
+                active=True,
+                created_at=utc_now(),
+            )
+        )
+        await db.commit()
+
+
 @pytest.mark.asyncio
 async def test_report_evidence_returns_only_the_requested_learner(tmp_path: object) -> None:
     repository = await reporting_repository(tmp_path)
@@ -551,6 +579,143 @@ async def test_report_evidence_omits_raw_text_when_stored_state_has_no_consent(
 
     assert evidence.conversations[0].turns[0].response is None
     assert evidence.conversations[0].turns[0].response_category == "correct_full"
+    await repository.database.dispose()
+
+
+@pytest.mark.parametrize(
+    (
+        "include_raw",
+        "raw_storage_enabled",
+        "retention_policy",
+        "retention_expired",
+        "expected_turn_response",
+    ),
+    [
+        pytest.param(
+            False,
+            True,
+            RetentionPolicy.PERMANENT,
+            False,
+            None,
+            id="raw-not-requested",
+        ),
+        pytest.param(
+            True,
+            False,
+            RetentionPolicy.NO_RAW,
+            False,
+            None,
+            id="raw-consent-revoked",
+        ),
+        pytest.param(
+            True,
+            True,
+            RetentionPolicy.DAYS_30,
+            True,
+            None,
+            id="raw-retention-expired",
+        ),
+        pytest.param(
+            True,
+            True,
+            RetentionPolicy.PERMANENT,
+            False,
+            "양쪽 점을 하나씩 짝지으면 오른쪽이 더 많아",
+            id="raw-requested-and-retained",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_report_evidence_never_returns_direct_note_wording(
+    tmp_path: object,
+    *,
+    include_raw: bool,
+    raw_storage_enabled: bool,
+    retention_policy: RetentionPolicy,
+    retention_expired: bool,
+    expected_turn_response: str | None,
+) -> None:
+    repository = await reporting_repository(tmp_path)
+    child_wording = "양쪽 점을 하나씩 짝지으면 오른쪽이 더 많아"
+    note_text = f"점의 수를 비교하는 방법에 대해 “{child_wording}”라고 배웠어."
+    conversation_id = await seed_completed_conversation(
+        repository,
+        learner_id=11,
+        response_text=child_wording,
+        raw_storage_enabled=raw_storage_enabled,
+        retention_policy=retention_policy,
+        raw_retention_until=utc_now() - timedelta(seconds=1) if retention_expired else None,
+    )
+    await seed_direct_note(
+        repository,
+        conversation_id=conversation_id,
+        learner_id=11,
+        text=note_text,
+    )
+    await repository.save_profile(
+        LearnerProfile(
+            learner_id=11,
+            skills={
+                "compare_quantity_in_context": SkillProfile(
+                    skill_id="compare_quantity_in_context",
+                    concept_mastery=0.75,
+                )
+            },
+        )
+    )
+
+    evidence = await repository.report_evidence(11, include_raw=include_raw)
+
+    assert evidence.notes == []
+    assert note_text not in evidence.model_dump_json()
+    assert evidence.conversations[0].turns[0].response == expected_turn_response
+    assert evidence.conversations[0].turns[0].response_category == "correct_full"
+    assert [skill.skill_id for skill in evidence.skills] == ["compare_quantity_in_context"]
+    assert (await repository.list_notes(11))[0].text == note_text
+    await repository.database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_evidence_is_read_only_and_does_not_query_notes(tmp_path: object) -> None:
+    repository = await reporting_repository(tmp_path)
+    child_wording = "두 줄을 하나씩 짝지어 보면 왼쪽이 더 적어"
+    conversation_id = await seed_completed_conversation(
+        repository,
+        learner_id=11,
+        response_text=child_wording,
+    )
+    await seed_direct_note(
+        repository,
+        conversation_id=conversation_id,
+        learner_id=11,
+        text=f"점의 수를 비교하는 방법에 대해 “{child_wording}”라고 배웠어.",
+    )
+    statements: list[str] = []
+
+    def record_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(repository.database.engine.sync_engine, "before_cursor_execute", record_statement)
+    try:
+        evidence = await repository.report_evidence(11, include_raw=True)
+    finally:
+        event.remove(
+            repository.database.engine.sync_engine,
+            "before_cursor_execute",
+            record_statement,
+        )
+
+    assert evidence.notes == []
+    assert statements
+    assert all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
+    assert all("FROM notes" not in statement for statement in statements)
     await repository.database.dispose()
 
 

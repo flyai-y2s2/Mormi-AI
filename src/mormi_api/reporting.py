@@ -253,5 +253,8 @@ async def build_report_evidence(
         learner_id=learner_id,
         conversations=evidence_conversations,
         skills=list(profile.skills.values()),
-        notes=await repository.list_notes(learner_id),
+        # A note may preserve exact child wording, but NoteUpdate does not carry
+        # its owning conversation.  Keep the v1 contract stable while withholding
+        # notes until their consent and retention provenance can be verified.
+        notes=[],
     )
