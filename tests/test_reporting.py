@@ -230,6 +230,17 @@ def test_summary_rejects_forbidden_language_even_when_it_is_evidence(statement: 
         validate_report_summary(request, summary_response(concept_text=statement))
 
 
+@pytest.mark.parametrize(
+    "statement",
+    ["약을 복용합니다.", "약물 치료를 받습니다.", "투약이 필요합니다.", "처방을 권장합니다."],
+)
+def test_summary_retains_contextual_medication_rejection(statement: str) -> None:
+    request = summary_request(facts=[fact("domain:money", statement)])
+
+    with pytest.raises(ValueError):
+        validate_report_summary(request, summary_response(concept_text=statement))
+
+
 def test_summary_rejects_invented_cause_or_interpretation() -> None:
     request = summary_request(facts=[fact("domain:money", "독립 수행률은 60%입니다.")])
 
@@ -241,6 +252,17 @@ def test_summary_rejects_invented_cause_or_interpretation() -> None:
 def test_summary_accepts_independently_grounded_five_narratives() -> None:
     request = five_narrative_request()
     response = five_narrative_response()
+
+    assert validate_report_summary(request, response) == response
+
+
+@pytest.mark.parametrize("statement", ["개념 수행(기초)은 60%입니다.", "약속을 지켰습니다."])
+def test_summary_accepts_exact_nonquote_or_nonmedical_evidence(statement: str) -> None:
+    request = summary_request(facts=[fact("concept:performance", statement)])
+    response = summary_response(
+        concept_text=statement,
+        evidence_refs=["concept:performance"],
+    )
 
     assert validate_report_summary(request, response) == response
 

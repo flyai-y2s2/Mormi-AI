@@ -40,7 +40,7 @@ _REPORT_QUOTE_PAIRS = {
 }
 _REPORT_QUOTE_CLOSERS = frozenset(_REPORT_QUOTE_PAIRS.values())
 _REPORT_UNSUPPORTED_QUOTE_LIKE = frozenset(
-    "‹›«»⟨⟩【】〔〕〖〗〘〙〚〛⦅⦆〝〞〟〃()[]{}<>（）［］｛｝"
+    "‹›«»⟨⟩【】〔〕〖〗〘〙〚〛⦅⦆〝〞〟〃{}<>（）［］｛｝"
 )
 # The only permitted multi-fact wording is this exact, ordered joiner.
 REPORT_FACT_SEPARATOR = " "
@@ -50,7 +50,6 @@ _FORBIDDEN_REPORT_VOCABULARY = (
     "경계선 지능",
     "치료",
     "처방",
-    "약",
     "약물",
     "복용",
     "복약",
@@ -91,6 +90,7 @@ _FORBIDDEN_REPORT_PATTERNS = (
         r"(?:친구|학생|아이|아동|또래|동년배|학급|반)(?:들)?\s*"
         r"(?:보다|에\s*비해|대비|과\s*비교)"
     ),
+    re.compile(r"약\s*(?:을|를|은|는)?\s*(?:복용|먹|투여|처방|치료)"),
 )
 
 
