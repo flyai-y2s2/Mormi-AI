@@ -699,6 +699,39 @@ class ReportEvidenceResponse(BaseModel):
     notes: list[NoteUpdate]
 
 
+class ReportFact(BaseModel):
+    evidence_id: str = Field(pattern=r"^[a-z]+:[A-Za-z0-9_.:-]+$")
+    category: Literal["concept", "explanation", "life", "improved", "observe"]
+    statement: str = Field(min_length=1, max_length=240)
+
+
+class ReportNarrative(BaseModel):
+    text: str = Field(min_length=1, max_length=160)
+    evidence_refs: list[str] = Field(min_length=1, max_length=5)
+
+
+class ReportSummaryRequest(BaseModel):
+    learner_label: str = Field(min_length=1, max_length=40)
+    facts: list[ReportFact] = Field(min_length=1, max_length=80)
+
+
+class ReportSummaryResponse(BaseModel):
+    concept_performance: ReportNarrative
+    explanation_change: ReportNarrative
+    life_transfer: ReportNarrative
+    improved_point: ReportNarrative
+    observe_point: ReportNarrative
+
+    def narratives(self) -> list[ReportNarrative]:
+        return [
+            self.concept_performance,
+            self.explanation_change,
+            self.life_transfer,
+            self.improved_point,
+            self.observe_point,
+        ]
+
+
 class ConflictDetail(BaseModel):
     code: Literal["stale_turn"] = "stale_turn"
     message: str

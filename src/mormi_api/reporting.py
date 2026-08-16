@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,8 @@ from .schemas import (
     HintLevel,
     ReportConversationEvidence,
     ReportEvidenceResponse,
+    ReportSummaryRequest,
+    ReportSummaryResponse,
     ReportTurnEvidence,
     RetentionPolicy,
     SceneType,
@@ -18,6 +21,47 @@ from .schemas import (
 
 if TYPE_CHECKING:
     from .repository import Repository
+
+
+_REPORT_NUMBER_TOKEN = re.compile(r"\d[\d,]*(?:%)?")
+_REPORT_QUOTE = re.compile(r"[‘'\"“]([^’'\"”]+)[’'\"”]")
+_FORBIDDEN_REPORT_LANGUAGE = re.compile(
+    r"진단|장애|경계선\s*지능|치료|또래보다|평균보다|상위|하위|백분위|"
+    r"ADHD|자폐|질환|정신\s*질환|심리\s*진단",
+    re.IGNORECASE,
+)
+
+
+def numeric_tokens(text: str) -> set[str]:
+    return {match.replace(",", "") for match in _REPORT_NUMBER_TOKEN.findall(text)}
+
+
+def _quoted_text(text: str) -> list[str]:
+    return [match.strip() for match in _REPORT_QUOTE.findall(text) if match.strip()]
+
+
+def reject_forbidden_report_language(text: str) -> None:
+    if _FORBIDDEN_REPORT_LANGUAGE.search(text):
+        raise ValueError("forbidden report language")
+
+
+def validate_report_summary(
+    request: ReportSummaryRequest,
+    response: ReportSummaryResponse,
+) -> ReportSummaryResponse:
+    """Accept only summary wording directly traceable to request facts."""
+
+    facts = {item.evidence_id: item.statement for item in request.facts}
+    for narrative in response.narratives():
+        if any(ref not in facts for ref in narrative.evidence_refs):
+            raise ValueError("unknown report evidence reference")
+        grounded = " ".join(facts[ref] for ref in narrative.evidence_refs)
+        if not numeric_tokens(narrative.text).issubset(numeric_tokens(grounded)):
+            raise ValueError("ungrounded report number")
+        if any(quote not in grounded for quote in _quoted_text(narrative.text)):
+            raise ValueError("ungrounded report quote")
+        reject_forbidden_report_language(narrative.text)
+    return response
 
 
 def _raw_response_is_available(state: SessionState, *, now: datetime) -> bool:

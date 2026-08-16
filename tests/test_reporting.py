@@ -6,12 +6,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mormi_api.db import ConversationRecord, Database, TurnRecord
+from mormi_api.llm import ModelUnavailableError
 from mormi_api.main import app
+from mormi_api.reporting import validate_report_summary
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
     CompletionOutcome,
     ExpressionLevel,
     HintLevel,
+    ReportFact,
+    ReportNarrative,
+    ReportSummaryRequest,
+    ReportSummaryResponse,
     RetentionPolicy,
     SceneType,
     SessionState,
@@ -20,6 +26,138 @@ from mormi_api.schemas import (
 )
 from mormi_api.security import TextCipher
 from mormi_api.settings import Settings
+
+
+def fact(evidence_id: str, statement: str, *, category: str = "concept") -> ReportFact:
+    return ReportFact(evidence_id=evidence_id, category=category, statement=statement)
+
+
+def summary_request(*, facts: list[ReportFact]) -> ReportSummaryRequest:
+    return ReportSummaryRequest(learner_label="학습자", facts=facts)
+
+
+def summary_response(
+    *,
+    concept_text: str,
+    evidence_refs: list[str] | None = None,
+) -> ReportSummaryResponse:
+    narrative = ReportNarrative(
+        text=concept_text,
+        evidence_refs=evidence_refs or ["domain:money"],
+    )
+    return ReportSummaryResponse(
+        concept_performance=narrative,
+        explanation_change=narrative,
+        life_transfer=narrative,
+        improved_point=narrative,
+        observe_point=narrative,
+    )
+
+
+def test_summary_rejects_unknown_evidence_and_numbers() -> None:
+    request = summary_request(facts=[fact("domain:money", "최근 독립 수행률은 60%입니다.")])
+    response = summary_response(
+        concept_text="최근 독립 수행률은 90%입니다.",
+        evidence_refs=["domain:missing"],
+    )
+
+    with pytest.raises(ValueError):
+        validate_report_summary(request, response)
+    with pytest.raises(ValueError):
+        validate_report_summary(
+            request,
+            summary_response(concept_text="최근 독립 수행률은 90%입니다."),
+        )
+
+
+def test_summary_rejects_diagnosis_and_peer_comparison() -> None:
+    request = summary_request(facts=[fact("domain:money", "최근 상태는 관찰 중입니다.")])
+
+    for text in ("경계선 지능이 의심됩니다.", "또래보다 뒤처집니다."):
+        with pytest.raises(ValueError):
+            validate_report_summary(request, summary_response(concept_text=text))
+
+
+def test_summary_rejects_quote_not_present_in_referenced_fact() -> None:
+    request = summary_request(facts=[fact("domain:money", "최근 상태는 관찰 중입니다.")])
+
+    with pytest.raises(ValueError):
+        validate_report_summary(
+            request,
+            summary_response(concept_text="‘독립 수행’이라고 말할 수 있습니다."),
+        )
+
+
+def test_summary_route_returns_sanitized_validation_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UngroundedGateway:
+        async def summarize_report(self, body: ReportSummaryRequest) -> ReportSummaryResponse:
+            return summary_response(concept_text="아이의 비밀 90% 결과입니다.")
+
+    monkeypatch.setattr(
+        app.state,
+        "settings",
+        Settings(service_api_key="shared-secret"),
+        raising=False,
+    )
+    monkeypatch.setattr(app.state, "gateway", UngroundedGateway(), raising=False)
+
+    response = TestClient(app).post(
+        "/v1/internal/report-summaries",
+        headers={"X-Mormi-Service-Key": "shared-secret"},
+        json={
+            "learner_label": "학습자",
+            "facts": [
+                {
+                    "evidence_id": "domain:money",
+                    "category": "concept",
+                    "statement": "최근 독립 수행률은 60%입니다.",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"code": "report_summary_ungrounded", "issues": []}
+    }
+
+
+def test_summary_route_returns_sanitized_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnavailableGateway:
+        async def summarize_report(self, body: ReportSummaryRequest) -> ReportSummaryResponse:
+            raise ModelUnavailableError("model_connection_failed")
+
+    monkeypatch.setattr(
+        app.state,
+        "settings",
+        Settings(service_api_key="shared-secret"),
+        raising=False,
+    )
+    monkeypatch.setattr(app.state, "gateway", UnavailableGateway(), raising=False)
+
+    response = TestClient(app).post(
+        "/v1/internal/report-summaries",
+        headers={"X-Mormi-Service-Key": "shared-secret"},
+        json={
+            "learner_label": "학습자",
+            "facts": [
+                {
+                    "evidence_id": "domain:money",
+                    "category": "concept",
+                    "statement": "최근 독립 수행률은 60%입니다.",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {"code": "model_connection_failed", "issues": []}
+    }
 
 
 async def reporting_repository(tmp_path: object) -> Repository:

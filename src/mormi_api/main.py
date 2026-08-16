@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from .db import Database
 from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
+from .reporting import validate_report_summary
 from .repository import (
     ConversationNotFoundError,
     Repository,
@@ -28,6 +29,8 @@ from .schemas import (
     HealthResponse,
     PracticeResult,
     ReportEvidenceResponse,
+    ReportSummaryRequest,
+    ReportSummaryResponse,
     SessionCreate,
     SessionEnvelope,
     SkillProfilesResponse,
@@ -484,6 +487,33 @@ async def get_report_evidence(
     repo: Repo,
 ) -> ReportEvidenceResponse:
     return await repo.report_evidence(learner_id, include_raw=include_raw)
+
+
+@app.post(
+    "/v1/internal/report-summaries",
+    response_model=ReportSummaryResponse,
+    tags=["internal reporting"],
+)
+async def create_report_summary(
+    body: ReportSummaryRequest,
+    _: InternalReportingAuth,
+    request: Request,
+) -> ReportSummaryResponse:
+    gateway: ClaudeGateway = request.app.state.gateway
+    try:
+        return validate_report_summary(body, await gateway.summarize_report(body))
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "report_summary_ungrounded", "issues": []},
+        ) from error
+    except (ModelUnavailableError, ModelOutputError) as error:
+        code = _model_error_code(error)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        ) from error
 
 
 @app.get(
