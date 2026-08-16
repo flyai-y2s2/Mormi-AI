@@ -665,6 +665,40 @@ class StarNotesResponse(BaseModel):
     notes: list[NoteUpdate]
 
 
+class ReportTurnEvidence(BaseModel):
+    turn_id: str
+    task_id: str
+    response: str | None = None
+    response_type: str | None = None
+    response_category: str | None = None
+    expression_level: ExpressionLevel
+    hint_level: HintLevel
+    pedagogy: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class ReportConversationEvidence(BaseModel):
+    conversation_id: str
+    learning_session_id: str | None
+    scene: SceneType
+    scenario_id: str
+    status: SessionStatus
+    completion_outcome: CompletionOutcome | None
+    teach_reward_eligible: bool
+    verified_slots: dict[str, str | int | float | bool]
+    task_max_hint: HintLevel
+    turns: list[ReportTurnEvidence]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportEvidenceResponse(BaseModel):
+    learner_id: int
+    conversations: list[ReportConversationEvidence]
+    skills: list[SkillProfile]
+    notes: list[NoteUpdate]
+
+
 class ConflictDetail(BaseModel):
     code: Literal["stale_turn"] = "stale_turn"
     message: str

@@ -27,6 +27,7 @@ from .schemas import (
     ConflictResponse,
     HealthResponse,
     PracticeResult,
+    ReportEvidenceResponse,
     SessionCreate,
     SessionEnvelope,
     SkillProfilesResponse,
@@ -452,6 +453,20 @@ async def get_learner_profiles(
 )
 async def get_star_notes(learner_id: int, _: Auth, repo: Repo) -> StarNotesResponse:
     return StarNotesResponse(learner_id=learner_id, notes=await repo.list_notes(learner_id))
+
+
+@app.get(
+    "/v1/internal/learners/{learner_id}/report-evidence",
+    response_model=ReportEvidenceResponse,
+    tags=["internal reporting"],
+)
+async def get_report_evidence(
+    learner_id: int,
+    include_raw: bool,
+    _: Auth,
+    repo: Repo,
+) -> ReportEvidenceResponse:
+    return await repo.report_evidence(learner_id, include_raw=include_raw)
 
 
 @app.get(
