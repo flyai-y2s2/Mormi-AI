@@ -256,7 +256,14 @@ def test_summary_accepts_independently_grounded_five_narratives() -> None:
     assert validate_report_summary(request, response) == response
 
 
-@pytest.mark.parametrize("statement", ["개념 수행(기초)은 60%입니다.", "약속을 지켰습니다."])
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "개념 수행(기초)은 60%입니다.",
+        "개념 수행[기초]은 60%입니다.",
+        "약속을 지켰습니다.",
+    ],
+)
 def test_summary_accepts_exact_nonquote_or_nonmedical_evidence(statement: str) -> None:
     request = summary_request(facts=[fact("concept:performance", statement)])
     response = summary_response(
