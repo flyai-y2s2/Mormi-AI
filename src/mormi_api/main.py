@@ -103,7 +103,24 @@ def require_service_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service key")
 
 
+def require_internal_reporting_service_key(
+    request: Request,
+    key: Annotated[str | None, Header(alias="X-Mormi-Service-Key")] = None,
+) -> None:
+    current: Settings = request.app.state.settings
+    if not current.service_api_key:
+        code = "service_key_not_configured"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        )
+    if key != current.service_api_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service key")
+
+
 Auth = Annotated[None, Depends(require_service_key)]
+InternalReportingAuth = Annotated[None, Depends(require_internal_reporting_service_key)]
 Service = Annotated[ConversationService, Depends(service)]
 Repo = Annotated[Repository, Depends(repository)]
 
@@ -463,7 +480,7 @@ async def get_star_notes(learner_id: int, _: Auth, repo: Repo) -> StarNotesRespo
 async def get_report_evidence(
     learner_id: int,
     include_raw: bool,
-    _: Auth,
+    _: InternalReportingAuth,
     repo: Repo,
 ) -> ReportEvidenceResponse:
     return await repo.report_evidence(learner_id, include_raw=include_raw)

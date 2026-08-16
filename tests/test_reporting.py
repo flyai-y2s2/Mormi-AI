@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,6 +12,7 @@ from mormi_api.schemas import (
     CompletionOutcome,
     ExpressionLevel,
     HintLevel,
+    RetentionPolicy,
     SceneType,
     SessionState,
     SessionStatus,
@@ -30,6 +33,9 @@ async def seed_completed_conversation(
     *,
     learner_id: int,
     response_text: str,
+    raw_storage_enabled: bool = True,
+    retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT,
+    raw_retention_until: datetime | None = None,
 ) -> str:
     conversation_id = f"conversation_{learner_id}"
     now = utc_now()
@@ -46,6 +52,9 @@ async def seed_completed_conversation(
         teach_reward_eligible=True,
         verified_slots={"fewer": "left"},
         task_max_hint=HintLevel.H1,
+        raw_storage_enabled=raw_storage_enabled,
+        retention_policy=retention_policy,
+        raw_retention_until=raw_retention_until,
         created_at=now,
         updated_at=now,
     )
@@ -120,6 +129,49 @@ async def test_report_evidence_omits_raw_text_when_not_allowed(tmp_path: object)
 
 
 @pytest.mark.asyncio
+async def test_report_evidence_omits_expired_raw_text_without_mutating_the_record(
+    tmp_path: object,
+) -> None:
+    repository = await reporting_repository(tmp_path)
+    await seed_completed_conversation(
+        repository,
+        learner_id=11,
+        response_text="두 개가 더 적어요",
+        retention_policy=RetentionPolicy.DAYS_30,
+        raw_retention_until=utc_now() - timedelta(seconds=1),
+    )
+
+    evidence = await repository.report_evidence(11, include_raw=True)
+
+    assert evidence.conversations[0].turns[0].response is None
+    async with repository.database.sessions() as db:
+        stored = await db.get(TurnRecord, 1)
+        assert stored is not None
+        assert stored.response_raw_encrypted is not None
+    await repository.database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_evidence_omits_raw_text_when_stored_state_has_no_consent(
+    tmp_path: object,
+) -> None:
+    repository = await reporting_repository(tmp_path)
+    await seed_completed_conversation(
+        repository,
+        learner_id=11,
+        response_text="두 개가 더 적어요",
+        raw_storage_enabled=False,
+        retention_policy=RetentionPolicy.NO_RAW,
+    )
+
+    evidence = await repository.report_evidence(11, include_raw=True)
+
+    assert evidence.conversations[0].turns[0].response is None
+    assert evidence.conversations[0].turns[0].response_category == "correct_full"
+    await repository.database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_report_evidence_route_requires_the_shared_key_and_isolates_the_learner(
     tmp_path: object,
     monkeypatch: pytest.MonkeyPatch,
@@ -151,4 +203,23 @@ async def test_report_evidence_route_requires_the_shared_key_and_isolates_the_le
     assert accepted.status_code == 200
     assert accepted.json()["learner_id"] == 11
     assert [row["conversation_id"] for row in accepted.json()["conversations"]] == [first]
+    await repository.database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_evidence_route_fails_closed_when_the_service_key_is_not_configured(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = await reporting_repository(tmp_path)
+    monkeypatch.setattr(app.state, "settings", Settings(service_api_key=None), raising=False)
+    monkeypatch.setattr(app.state, "repository", repository, raising=False)
+
+    response = TestClient(app).get(
+        "/v1/internal/learners/11/report-evidence?include_raw=false",
+        headers={"X-Mormi-Service-Key": "shared-secret"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "service_key_not_configured", "issues": []}}
     await repository.database.dispose()
