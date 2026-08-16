@@ -36,81 +36,23 @@ _REPORT_QUOTE_PAIRS = {
     "『": "』",
     "「": "」",
     "《": "》",
+    "〈": "〉",
 }
 _REPORT_QUOTE_CLOSERS = frozenset(_REPORT_QUOTE_PAIRS.values())
-_REPORT_KOREAN_TOKEN = re.compile(r"[가-힣]+|[A-Za-z]+")
-_REPORT_PARTICLE_SUFFIXES = tuple(
-    sorted(
-        (
-            "으로부터",
-            "에게서",
-            "에서는",
-            "입니다",
-            "됩니다",
-            "합니다",
-            "있습니다",
-            "없습니다",
-            "보입니다",
-            "됩니다",
-            "으로",
-            "에게",
-            "에서",
-            "부터",
-            "까지",
-            "보다",
-            "처럼",
-            "으로",
-            "은",
-            "는",
-            "이",
-            "가",
-            "을",
-            "를",
-            "에",
-            "의",
-            "와",
-            "과",
-            "도",
-            "만",
-            "로",
-        ),
-        key=len,
-        reverse=True,
-    )
+_REPORT_UNSUPPORTED_QUOTE_LIKE = frozenset(
+    "‹›«»⟨⟩【】〔〕〖〗〘〙〚〛⦅⦆〝〞〟〃()[]{}<>（）［］｛｝"
 )
-_REPORT_ALLOWED_TOKENS = frozenset(
-    {
-        "최근",
-        "현재",
-        "이번",
-        "다음",
-        "활동",
-        "보고",
-        "요약하면",
-        "전반적으로",
-        "그리고",
-        "또한",
-        "다만",
-        "따라서",
-        "해당",
-        "부분",
-        "내용",
-        "결과",
-        "입니다",
-        "됩니다",
-        "합니다",
-        "있습니다",
-        "없습니다",
-        "보입니다",
-    }
-)
+# The only permitted multi-fact wording is this exact, ordered joiner.
+REPORT_FACT_SEPARATOR = " "
 _FORBIDDEN_REPORT_VOCABULARY = (
     "진단",
     "장애",
     "경계선 지능",
     "치료",
     "처방",
+    "약",
     "약물",
+    "복용",
     "복약",
     "투약",
     "의료",
@@ -145,6 +87,10 @@ _FORBIDDEN_REPORT_PATTERNS = (
     ),
     re.compile(r"(?:또래|동년배|반\s*친구|학급|반)\s*(?:평균\s*)?(?:보다|대비|과\s*비교)"),
     re.compile(r"(?:학급|반)\s*평균"),
+    re.compile(
+        r"(?:친구|학생|아이|아동|또래|동년배|학급|반)(?:들)?\s*"
+        r"(?:보다|에\s*비해|대비|과\s*비교)"
+    ),
 )
 
 
@@ -171,6 +117,8 @@ def _quoted_text(text: str) -> list[str]:
     quotes: list[str] = []
     symmetric_quotes = {quote for quote, closer in _REPORT_QUOTE_PAIRS.items() if quote == closer}
     for index, character in enumerate(text):
+        if character in _REPORT_UNSUPPORTED_QUOTE_LIKE:
+            raise ValueError("unsupported report quote punctuation")
         if character in symmetric_quotes:
             if stack and stack[-1][0] == character:
                 _, start = stack.pop()
@@ -191,21 +139,6 @@ def _quoted_text(text: str) -> list[str]:
     if stack:
         raise ValueError("unbalanced report quote")
     return quotes
-
-
-def _normalized_report_token(token: str) -> str:
-    for suffix in _REPORT_PARTICLE_SUFFIXES:
-        if len(token) > len(suffix) and token.endswith(suffix):
-            return token[: -len(suffix)]
-    return token
-
-
-def _report_lexical_tokens(text: str) -> set[str]:
-    return {
-        normalized
-        for token in _REPORT_KOREAN_TOKEN.findall(text.lower())
-        if (normalized := _normalized_report_token(token)) not in _REPORT_ALLOWED_TOKENS
-    }
 
 
 def reject_forbidden_report_language(text: str) -> None:
@@ -229,8 +162,13 @@ def validate_report_summary(
         if any(quote not in grounded for quote in _quoted_text(narrative.text)):
             raise ValueError("ungrounded report quote")
         reject_forbidden_report_language(narrative.text)
-        grounded_tokens = _report_lexical_tokens(grounded)
-        if not _report_lexical_tokens(narrative.text).issubset(grounded_tokens):
+        referenced_statements = [facts[ref] for ref in narrative.evidence_refs]
+        concatenated_statements = REPORT_FACT_SEPARATOR.join(referenced_statements)
+        is_exactly_grounded = (
+            narrative.text in referenced_statements
+            or narrative.text == concatenated_statements
+        )
+        if not is_exactly_grounded:
             raise ValueError("ungrounded report language")
     return response
 

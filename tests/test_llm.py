@@ -108,6 +108,8 @@ async def test_summarize_report_uses_strict_speaker_structured_output() -> None:
     assert request["model"] == gateway.settings.speaker_model
     assert request["temperature"] == 0
     assert request["max_tokens"] == 700
+    assert "문구를 그대로" in request["system"]
+    assert "한 칸 공백" in request["system"]
     schema = request["output_config"]["format"]["schema"]
     assert request["output_config"]["format"]["type"] == "json_schema"
     assert all(item.get("additionalProperties") is False for item in object_schemas(schema))

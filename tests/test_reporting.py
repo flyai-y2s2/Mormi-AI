@@ -134,7 +134,14 @@ def test_summary_rejects_quote_not_present_in_referenced_fact() -> None:
 
 @pytest.mark.parametrize(
     "quote",
-    [("‘", "’"), ("\"", "\""), ("『", "』"), ("「", "」"), ("《", "》")],
+    [
+        ("‘", "’"),
+        ("\"", "\""),
+        ("『", "』"),
+        ("「", "」"),
+        ("《", "》"),
+        ("〈", "〉"),
+    ],
 )
 def test_summary_rejects_unrecognized_or_unbalanced_quote_delimiters(
     quote: tuple[str, str],
@@ -157,6 +164,21 @@ def test_summary_rejects_unrecognized_or_unbalanced_quote_delimiters(
             request,
             summary_response(concept_text=f"최근 상태는 관찰 중입니다.{closing}"),
         )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "【최근 상태는 관찰 중입니다.】",
+        "⟨최근 상태는 관찰 중입니다.⟩",
+        "〈최근 상태는 관찰 중입니다.",
+    ],
+)
+def test_summary_rejects_unsupported_or_unmatched_quote_like_punctuation(text: str) -> None:
+    request = summary_request(facts=[fact("domain:money", "최근 상태는 관찰 중입니다.")])
+
+    with pytest.raises(ValueError):
+        validate_report_summary(request, summary_response(concept_text=text))
 
 
 @pytest.mark.parametrize(
@@ -200,6 +222,14 @@ def test_summary_rejects_peer_ranking_and_medical_language(text: str) -> None:
         validate_report_summary(request, summary_response(concept_text=text))
 
 
+@pytest.mark.parametrize("statement", ["친구보다 잘합니다.", "약을 복용합니다."])
+def test_summary_rejects_forbidden_language_even_when_it_is_evidence(statement: str) -> None:
+    request = summary_request(facts=[fact("domain:money", statement)])
+
+    with pytest.raises(ValueError):
+        validate_report_summary(request, summary_response(concept_text=statement))
+
+
 def test_summary_rejects_invented_cause_or_interpretation() -> None:
     request = summary_request(facts=[fact("domain:money", "독립 수행률은 60%입니다.")])
 
@@ -215,12 +245,50 @@ def test_summary_accepts_independently_grounded_five_narratives() -> None:
     assert validate_report_summary(request, response) == response
 
 
-def test_summary_accepts_small_reporting_word_allowlist() -> None:
+def test_summary_rejects_reporting_word_paraphrase() -> None:
     request = summary_request(facts=[fact("concept:performance", "개념 수행은 60%입니다.")])
 
     response = summary_response(
         concept_text="최근 개념 수행은 60%입니다.",
         evidence_refs=["concept:performance"],
+    )
+
+    with pytest.raises(ValueError):
+        validate_report_summary(request, response)
+
+
+def test_summary_rejects_relation_swapped_from_referenced_fact() -> None:
+    request = summary_request(
+        facts=[
+            fact(
+                "concept:independence",
+                "문제 해결은 혼자 했습니다. 설명은 도움을 받아 했습니다.",
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError):
+        validate_report_summary(
+            request,
+            summary_response(
+                concept_text="도움을 받아 문제 해결을 했습니다.",
+                evidence_refs=["concept:independence"],
+            ),
+        )
+
+
+def test_summary_accepts_exact_ordered_concatenation_of_referenced_facts() -> None:
+    first = "문제 해결은 혼자 했습니다."
+    second = "설명은 도움을 받아 했습니다."
+    request = summary_request(
+        facts=[
+            fact("concept:independence", first),
+            fact("explanation:support", second, category="explanation"),
+        ]
+    )
+    response = summary_response(
+        concept_text=f"{first} {second}",
+        evidence_refs=["concept:independence", "explanation:support"],
     )
 
     assert validate_report_summary(request, response) == response
