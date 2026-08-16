@@ -86,7 +86,7 @@ X-Mormi-Service-Key: <service-key>
 `expected_content_version`을 보내면 호출자가 기대한 버전과 다를 때 `409`를 반환합니다.
 
 ```http
-GET /v1/content/dictionary-cards/number-count?expected_content_version=1
+GET /v1/content/dictionary-cards/number-count?expected_content_version=2
 X-Mormi-Service-Key: <service-key>
 ```
 
@@ -100,35 +100,40 @@ X-Mormi-Service-Key: <service-key>
 
 ```json
 {
-  "catalog_version": 1,
+  "catalog_version": 2,
   "reference": {
     "card_id": "dictionary.home.number-count",
     "curriculum_session_id": "number-count",
     "schema_version": 1,
-    "content_version": 1,
+    "content_version": 2,
     "content_hash": "<sha256>"
   },
   "card": {
     "card_id": "dictionary.home.number-count",
     "curriculum_session_id": "number-count",
     "schema_version": 1,
-    "content_version": 1,
+    "content_version": 2,
     "locale": "ko-KR",
     "title": "수를 빠뜨리지 않고 세기",
     "learning_goal": "눈에 보이는 대상을 빠뜨리거나 겹치지 않고 센다.",
     "concept": {
-      "lines": ["대상마다 수를 한 번씩 말하면 모두 몇 개인지 알 수 있어."]
+      "lines": ["개수를 셀 때는 ‘1개, 2개, 3개’처럼 하나씩 세어."]
     },
     "example": {
-      "lines": ["점 3개를 하나, 둘, 셋 하고 세면 모두 3개야."],
+      "lines": ["색칠된 칸을 하나씩 세면 ‘1개, 2개, 3개’, 모두 3개야."],
       "facts": {"count": 3},
       "equation": null
     },
     "visual": {
-      "type": "object_count",
-      "data": {"count": 3, "mark_each": true},
+      "type": "count_sequence",
+      "data": {
+        "count": 3,
+        "sequence_counts": [1, 2, 3],
+        "layout": "left_to_right",
+        "counted_object": "filled_cell"
+      },
       "fact_refs": ["count"],
-      "alt_text": "점 3개를 하나씩 세는 그림"
+      "alt_text": "색칠된 칸을 1개, 2개, 3개로 차례로 세는 세 장의 그림"
     },
     "method_policy": "target_method",
     "source_refs": ["2022 개정 초등 수학: 수와 연산"],
@@ -140,6 +145,10 @@ X-Mormi-Service-Key: <service-key>
   }
 }
 ```
+
+아동 화면에 기본적으로 표시하는 본문은 `title`, `concept`, `example`, `visual`입니다.
+`learning_goal`, `method_policy`, `source_refs`, `review`는 계약 검증·운영·검수용
+메타데이터이며 아동용 사전 본문으로 그대로 노출하지 않습니다.
 
 - 등록되지 않은 커리큘럼 ID: `404 dictionary_card_not_found`
 - 현재 콘텐츠 버전 불일치: `409 dictionary_version_mismatch`

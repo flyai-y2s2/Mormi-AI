@@ -68,6 +68,42 @@ def test_every_card_has_grounded_visual_and_a_human_review_block() -> None:
     assert "도움카드와 역할·문구가 분리" in report
 
 
+def test_counting_dictionary_uses_a_progressive_one_two_three_visual() -> None:
+    card = get_dictionary_card("number-count")
+
+    assert card.visual.type == "count_sequence"
+    assert card.visual.data["sequence_counts"] == [1, 2, 3]
+    assert card.visual.data["layout"] == "left_to_right"
+    assert "1개, 2개, 3개" in card.concept.lines[0]
+    assert "1개, 2개, 3개" in card.example.lines[0]
+
+
+def test_requested_dictionary_copy_uses_child_readable_standard_terms() -> None:
+    comparison = get_dictionary_card("number-compare")
+    make_ten = get_dictionary_card("number-make-ten")
+    place_value = get_dictionary_card("number-place-value")
+    money_count = get_dictionary_card("money-count")
+
+    assert "왼쪽과 오른쪽 점의 개수" in comparison.concept.lines[0]
+    assert "채워져 있는 칸" in make_ten.concept.lines[0]
+    assert "비어 있는 칸" in make_ten.concept.lines[0]
+    assert place_value.title == "십의 자리와 일의 자리"
+    assert "전체 금액" in money_count.concept.lines[0]
+
+
+def test_reviewed_dictionary_avoids_nonstandard_place_value_and_clock_copy() -> None:
+    place_value = get_dictionary_card("number-place-value")
+    assert "3십" not in " ".join(
+        [*place_value.concept.lines, *place_value.example.lines, place_value.visual.alt_text]
+    )
+    assert "십의 자리 숫자 3은 30" in place_value.concept.lines[0]
+
+    half_hour = get_dictionary_card("clock-basic")
+    quarter_hour = get_dictionary_card("clock-quarter")
+    assert "3과 4 사이" in half_hour.example.lines[0]
+    assert "1을 조금 지나" in quarter_hour.example.lines[0]
+
+
 def test_card_rejects_an_equation_or_visual_that_disagrees_with_facts() -> None:
     raw = DICTIONARY_CATALOG.cards[2].model_dump(mode="json")
     raw["visual"]["data"]["total"] = 510

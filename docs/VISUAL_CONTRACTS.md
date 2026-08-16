@@ -224,6 +224,28 @@ H3 공동 수행 전용입니다. `input.kind=joint`와 함께 사용하며 도�
 `help_card.visual_*`과 별도 계약입니다. 임의의 첫 반복문제 그림을 재사용하지 않고,
 카드의 구체적 예시를 그대로 설명할 수 있는 전용 표상을 사용합니다.
 
+수 세기 카드는 한 장의 완성 그림만 보여 주지 않고, 수가 하나씩 늘어나는 순서를
+왼쪽에서 오른쪽으로 보여 줍니다.
+
+```json
+{
+  "type": "count_sequence",
+  "data": {
+    "count": 3,
+    "sequence_counts": [1, 2, 3],
+    "layout": "left_to_right",
+    "counted_object": "filled_cell"
+  },
+  "fact_refs": ["count"],
+  "alt_text": "색칠된 칸을 1개, 2개, 3개로 차례로 세는 세 장의 그림"
+}
+```
+
+`sequence_counts`는 반드시 `1`부터 `count`까지 빠짐없이 증가해야 합니다. FE는
+세 값을 각각 독립된 패널로 렌더링하고 `1개`, `2개`, `3개`처럼 개수 라벨을 함께
+표시합니다. 특정 달걀 이미지는 디자인 자산일 뿐이며, AI 계약은 점·달걀 등 대상이
+바뀌어도 같은 순차 세기 구조를 유지합니다.
+
 ```json
 {
   "type": "money_sum",

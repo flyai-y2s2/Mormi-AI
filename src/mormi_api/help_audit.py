@@ -76,6 +76,8 @@ OFFLINE_HELP_AUDIT_SYSTEM = """
 - H1→H2→H3로 갈수록 실제 지원 정보가 증가해야 한다.
 - 화면이나 검수된 사실에 없는 수·대상·관계를 만들어내면 안 된다.
 - open_methods에서는 도움카드의 한 방법을 유일한 정답처럼 강요하면 안 된다.
+- accepted_methods는 정답 표현의 예시이다.
+  목록 밖의 동치 설명을 오답 처리하는 화이트리스트가 아니다.
 - target_method에서도 문구 암기가 아니라 명시된 수학 행동을 지원해야 한다.
 - 짧다는 이유만으로 통과시키지 말고, 아동이 카드만 보고 다음 행동을 알 수 있는지 본다.
 
@@ -189,7 +191,10 @@ def render_human_review(items: Iterable[HelpReviewItem]) -> str:
                 f"- 첫 질문: {item.first_question}",
                 f"- 기능: {', '.join(item.help_skills)}",
                 f"- 풀이 정책: {item.method_policy}",
-                f"- 허용 방법: {' / '.join(item.accepted_methods)}",
+                (
+                    "- 검수된 정답 설명 예시(목록 밖의 동치 표현도 의미로 판정): "
+                    f"{' / '.join(item.accepted_methods)}"
+                ),
                 f"- 화면: `{json.dumps(item.visual, ensure_ascii=False, separators=(',', ':'))}`",
                 "",
                 "| 단계 | 역할 | 공개 수준 | 지원 수단 | 아이에게 보이는 문장 | 행동 |",

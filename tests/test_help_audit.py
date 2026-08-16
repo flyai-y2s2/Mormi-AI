@@ -34,7 +34,34 @@ def test_review_items_expose_full_contract_for_offline_ai_and_humans() -> None:
     assert "질문·화면·H1·H2·H3" in report
     assert report.count("## home:") == 36
     assert "풀이 정책" in report
+    assert "목록 밖의 동치 표현도 의미로 판정" in report
     assert "H3와 L0 공동 수행" in report
+
+
+def test_counting_and_place_value_help_copy_is_child_actionable() -> None:
+    items = {item.review_id: item for item in build_help_review_items()}
+    counting = items["home:number-count"].help_plan
+    place_value = items["home:number-place-value"].help_plan
+
+    assert "색칠된 칸" in counting["H1"]["body"]
+    assert "1개, 2개, 3개" in counting["H2"]["body"]
+    assert "모두 3개" in counting["H3"]["body"]
+    assert all(
+        "3십" not in step["body"]
+        for step in place_value.values()
+    )
+    assert "십의 자리 숫자 3" in place_value["H1"]["body"]
+
+
+def test_weight_help_copy_names_only_the_skill_shown_on_screen() -> None:
+    items = {item.review_id: item for item in build_help_review_items()}
+    weight = items["home:measure-weight-capacity"]
+
+    assert weight.title == "무게를 비교해요"
+    assert "1,000" in weight.help_plan["H2"]["body"]
+    assert "들이" not in " ".join(
+        step["body"] for step in weight.help_plan.values()
+    )
 
 
 def test_task_registration_rejects_unreviewed_fact_references() -> None:

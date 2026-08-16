@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+from .copy_quality import validate_child_facing_math_copy
 from .schemas import (
     CafeMenuItem,
     CafeSessionContext,
@@ -772,6 +773,7 @@ class HomeTeachingSpec(BaseModel):
         ]
         if any(_VAGUE_OR_UNREVIEWED_COPY.search(text) for text in child_facing_copy):
             raise ValueError("child-facing copy contains a vague or unreviewed phrase")
+        validate_child_facing_math_copy(child_facing_copy)
         mormi_questions = [
             l4_prompt,
             *([self.entry_prompt] if self.entry_prompt else []),

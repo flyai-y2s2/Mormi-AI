@@ -1324,6 +1324,7 @@
           "type": {
             "type": "string",
             "enum": [
+              "count_sequence",
               "object_count",
               "quantity_compare",
               "money_sum",

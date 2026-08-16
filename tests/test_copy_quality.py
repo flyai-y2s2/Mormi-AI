@@ -15,6 +15,7 @@ from mormi_api.content import (
     queue_task,
     reviewed_help_card,
 )
+from mormi_api.copy_quality import validate_child_facing_math_copy
 from mormi_api.schemas import ExpressionLevel, HintLevel, SafetyCategory
 from mormi_api.security import deterministic_safety, safety_redirect
 
@@ -53,6 +54,26 @@ def test_home_catalog_has_one_live_explicit_help_plan_per_item() -> None:
         assert "help_lines" not in raw, raw["id"]
         assert set(raw["help_plan"]) == {"H1", "H2", "H3"}, raw["id"]
         assert raw["help_skills"], raw["id"]
+
+
+@pytest.mark.parametrize(
+    "copy",
+    [
+        "3십과 낱개 4개를 살펴보자.",
+        "본 점마다 한 번씩 수를 말해 보자.",
+        "10칸에서 찬 칸을 세어 보자.",
+        "같은 수를 이어 더해 보자.",
+        "앞의 곱에 3을 더해 보자.",
+        "십 하나를 낱개 10개로 바꾸자.",
+        "일이 모자라면 받아내림해.",
+        "두 무리의 수를 비교해 보자.",
+        "십과 일의 자리를 살펴보자.",
+        "일의 자리를 12로 만든 뒤 5를 빼자.",
+    ],
+)
+def test_child_math_copy_rejects_known_nonstandard_or_opaque_phrases(copy: str) -> None:
+    with pytest.raises(ValueError):
+        validate_child_facing_math_copy([copy])
 
 
 def test_every_home_help_plan_increases_support_and_closes_with_current_answer() -> None:

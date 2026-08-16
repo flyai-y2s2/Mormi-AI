@@ -8,8 +8,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .copy_quality import validate_child_facing_math_copy
+
 DictionaryMethodPolicy = Literal["open_methods", "target_method"]
 DictionaryVisualType = Literal[
+    "count_sequence",
     "object_count",
     "quantity_compare",
     "money_sum",
@@ -57,6 +60,7 @@ class DictionaryTextBlock(StrictModel):
                 raise ValueError("dictionary lines must fit within 50 characters")
             if _DEICTIC_COPY.search(line):
                 raise ValueError("dictionary lines must be understandable without prior context")
+            validate_child_facing_math_copy([line])
             compact = re.sub(r"\s+", "", line)
             if compact in normalized:
                 raise ValueError("dictionary lines must not repeat the same sentence")
@@ -117,6 +121,20 @@ class DictionaryVisual(StrictModel):
     fact_refs: list[str] = Field(min_length=1)
     alt_text: str = Field(min_length=1, max_length=80)
 
+    @model_validator(mode="after")
+    def validate_type_contract(self) -> DictionaryVisual:
+        validate_child_facing_math_copy([self.alt_text])
+        if self.type == "count_sequence":
+            count = self.data.get("count")
+            sequence = self.data.get("sequence_counts")
+            if not isinstance(count, int) or count < 1:
+                raise ValueError("count_sequence visual needs a positive count")
+            if sequence != list(range(1, count + 1)):
+                raise ValueError("count_sequence visual must show every count from 1 to count")
+            if self.data.get("layout") != "left_to_right":
+                raise ValueError("count_sequence visual must state its left-to-right order")
+        return self
+
 
 class DictionaryReview(StrictModel):
     status: Literal["approved"]
@@ -141,6 +159,7 @@ class DictionaryCard(StrictModel):
 
     @model_validator(mode="after")
     def validate_grounded_standalone_card(self) -> DictionaryCard:
+        validate_child_facing_math_copy([self.title, self.learning_goal])
         missing_visual_facts = set(self.visual.fact_refs) - set(self.example.facts)
         if missing_visual_facts:
             raise ValueError(
