@@ -10,6 +10,7 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from .content import StepDefinition, TaskDefinition, get_task
+from .dictionary_models import dictionary_reference
 from .llm import (
     ClaudeGateway,
     extract_numeric_values,
@@ -1108,6 +1109,11 @@ class ConversationEngine:
                 else None
             ),
             pedagogy=pedagogy,
+            dictionary_ref=(
+                dictionary_reference(state.dictionary_snapshots[task.id])
+                if task.id in state.dictionary_snapshots
+                else None
+            ),
         )
 
     @staticmethod

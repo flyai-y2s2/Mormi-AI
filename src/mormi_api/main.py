@@ -14,6 +14,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from .db import Database
+from .dictionary_catalog import (
+    DictionaryCardNotFoundError,
+    DictionaryVersionMismatchError,
+    dictionary_card_envelope,
+    get_dictionary_card,
+    validate_dictionary_catalog,
+)
+from .dictionary_models import DictionaryCardEnvelope
 from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
 from .repository import (
@@ -39,6 +47,9 @@ from .settings import Settings, get_settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Trusted reference content is a startup contract, not a best-effort
+    # runtime fallback. Invalid, stale or incomplete catalogs cannot be served.
+    validate_dictionary_catalog()
     settings = get_settings()
     database = Database(settings.database_url)
     await database.create_schema()
@@ -253,6 +264,71 @@ async def save_practice_result(
     conversation: Service,
 ) -> PracticeResult:
     return await conversation.save_practice(body)
+
+
+@app.get(
+    "/v1/content/dictionary-cards/{curriculum_session_id}",
+    response_model=DictionaryCardEnvelope,
+    responses={
+        404: {"description": "No reviewed dictionary card is registered."},
+        409: {"description": "The caller expected another content version."},
+    },
+    tags=["dictionary content"],
+)
+async def read_dictionary_card(
+    curriculum_session_id: str,
+    _: Auth,
+    expected_content_version: int | None = None,
+) -> DictionaryCardEnvelope:
+    """Read one approved catalog card without invoking an LLM."""
+
+    try:
+        card = get_dictionary_card(
+            curriculum_session_id,
+            expected_content_version=expected_content_version,
+        )
+    except DictionaryCardNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "dictionary_card_not_found"},
+        ) from error
+    except DictionaryVersionMismatchError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "dictionary_version_mismatch",
+                "expected_content_version": error.expected,
+                "current_content_version": error.actual,
+            },
+        ) from error
+    return dictionary_card_envelope(card)
+
+
+@app.get(
+    "/v1/conversations/{conversation_id}/dictionary-card",
+    response_model=DictionaryCardEnvelope,
+    responses={
+        404: {"description": "Conversation not found."},
+        409: {"description": "The legacy conversation has no pinned card."},
+    },
+    tags=["dictionary content"],
+)
+async def read_conversation_dictionary_card(
+    conversation_id: str,
+    _: Auth,
+    conversation: Service,
+) -> DictionaryCardEnvelope:
+    """Read the exact card snapshot pinned to the conversation's active task."""
+
+    try:
+        return await conversation.dictionary_card(conversation_id)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found") from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "dictionary_snapshot_unavailable"},
+        ) from error
 
 
 @app.post(

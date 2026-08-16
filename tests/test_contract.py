@@ -24,6 +24,8 @@ def test_openapi_exposes_frontend_agreed_paths() -> None:
     assert "/v1/conversations/{conversation_id}" in paths
     assert "/v1/learners/{learner_id}/skill-profiles" in paths
     assert "/v1/learners/{learner_id}/star-notes" in paths
+    assert "/v1/content/dictionary-cards/{curriculum_session_id}" in paths
+    assert "/v1/conversations/{conversation_id}/dictionary-card" in paths
 
     child_response = schema["components"]["schemas"]["ChildResponse"]
     assert child_response["properties"]["response_id"]["format"] == "uuid"
@@ -38,6 +40,7 @@ def test_openapi_exposes_frontend_agreed_paths() -> None:
     assert "child_menu_id" not in cafe_context["properties"]
     assert "paid_amount" not in cafe_context["properties"]
     assert "completion" in schema["components"]["schemas"]["TurnContract"]["properties"]
+    assert "dictionary_ref" in schema["components"]["schemas"]["TurnContract"]["properties"]
     conflict = paths["/v1/conversations/{conversation_id}/responses"]["post"]["responses"]["409"]
     assert conflict["content"]["application/json"]["schema"]["$ref"].endswith("/ConflictResponse")
 

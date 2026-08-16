@@ -136,6 +136,152 @@
         }
       }
     },
+    "/v1/content/dictionary-cards/{curriculum_session_id}": {
+      "get": {
+        "tags": [
+          "dictionary content"
+        ],
+        "summary": "Read Dictionary Card",
+        "description": "Read one approved catalog card without invoking an LLM.",
+        "operationId": "read_dictionary_card_v1_content_dictionary_cards__curriculum_session_id__get",
+        "parameters": [
+          {
+            "name": "curriculum_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Curriculum Session Id"
+            }
+          },
+          {
+            "name": "expected_content_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Content Version"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictionaryCardEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No reviewed dictionary card is registered."
+          },
+          "409": {
+            "description": "The caller expected another content version."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversation_id}/dictionary-card": {
+      "get": {
+        "tags": [
+          "dictionary content"
+        ],
+        "summary": "Read Conversation Dictionary Card",
+        "description": "Read the exact card snapshot pinned to the conversation's active task.",
+        "operationId": "read_conversation_dictionary_card_v1_conversations__conversation_id__dictionary_card_get",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DictionaryCardEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Conversation not found."
+          },
+          "409": {
+            "description": "The legacy conversation has no pinned card."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/conversations": {
       "post": {
         "tags": [
@@ -887,6 +1033,354 @@
           "detail"
         ],
         "title": "ConflictResponse"
+      },
+      "DictionaryCard": {
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "pattern": "^dictionary\\.(?:home|cafe)\\.[a-z0-9-]+$",
+            "title": "Card Id"
+          },
+          "curriculum_session_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+            "title": "Curriculum Session Id"
+          },
+          "schema_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Schema Version"
+          },
+          "content_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Content Version"
+          },
+          "locale": {
+            "type": "string",
+            "const": "ko-KR",
+            "title": "Locale",
+            "default": "ko-KR"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 2,
+            "title": "Title"
+          },
+          "learning_goal": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 5,
+            "title": "Learning Goal"
+          },
+          "concept": {
+            "$ref": "#/components/schemas/DictionaryTextBlock"
+          },
+          "example": {
+            "$ref": "#/components/schemas/DictionaryExample"
+          },
+          "visual": {
+            "$ref": "#/components/schemas/DictionaryVisual"
+          },
+          "method_policy": {
+            "type": "string",
+            "enum": [
+              "open_methods",
+              "target_method"
+            ],
+            "title": "Method Policy"
+          },
+          "source_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Source Refs"
+          },
+          "review": {
+            "$ref": "#/components/schemas/DictionaryReview"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "card_id",
+          "curriculum_session_id",
+          "schema_version",
+          "content_version",
+          "title",
+          "learning_goal",
+          "concept",
+          "example",
+          "visual",
+          "method_policy",
+          "source_refs",
+          "review"
+        ],
+        "title": "DictionaryCard"
+      },
+      "DictionaryCardEnvelope": {
+        "properties": {
+          "catalog_version": {
+            "type": "integer",
+            "title": "Catalog Version"
+          },
+          "reference": {
+            "$ref": "#/components/schemas/DictionaryReference"
+          },
+          "card": {
+            "$ref": "#/components/schemas/DictionaryCard"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "catalog_version",
+          "reference",
+          "card"
+        ],
+        "title": "DictionaryCardEnvelope"
+      },
+      "DictionaryEquation": {
+        "properties": {
+          "operator": {
+            "type": "string",
+            "enum": [
+              "add",
+              "subtract",
+              "multiply",
+              "divide"
+            ],
+            "title": "Operator"
+          },
+          "operands": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Operands"
+          },
+          "result": {
+            "type": "integer",
+            "title": "Result"
+          },
+          "expression": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 3,
+            "title": "Expression"
+          },
+          "operand_fact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Operand Fact Refs"
+          },
+          "result_fact_ref": {
+            "type": "string",
+            "title": "Result Fact Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operator",
+          "operands",
+          "result",
+          "expression",
+          "operand_fact_refs",
+          "result_fact_ref"
+        ],
+        "title": "DictionaryEquation"
+      },
+      "DictionaryExample": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 1,
+            "title": "Lines"
+          },
+          "facts": {
+            "additionalProperties": true,
+            "type": "object",
+            "minProperties": 1,
+            "title": "Facts"
+          },
+          "equation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DictionaryEquation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "lines",
+          "facts"
+        ],
+        "title": "DictionaryExample"
+      },
+      "DictionaryReference": {
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "title": "Card Id"
+          },
+          "curriculum_session_id": {
+            "type": "string",
+            "title": "Curriculum Session Id"
+          },
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version"
+          },
+          "content_version": {
+            "type": "integer",
+            "title": "Content Version"
+          },
+          "content_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Hash"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "card_id",
+          "curriculum_session_id",
+          "schema_version",
+          "content_version",
+          "content_hash"
+        ],
+        "title": "DictionaryReference"
+      },
+      "DictionaryReview": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "approved",
+            "title": "Status"
+          },
+          "approved_by": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "Approved By"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date",
+            "title": "Approved At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "approved_by",
+          "approved_at"
+        ],
+        "title": "DictionaryReview"
+      },
+      "DictionaryTextBlock": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 1,
+            "title": "Lines"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "lines"
+        ],
+        "title": "DictionaryTextBlock"
+      },
+      "DictionaryVisual": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "count_sequence",
+              "object_count",
+              "quantity_compare",
+              "money_sum",
+              "ten_frame",
+              "place_value",
+              "object_operation",
+              "equation",
+              "equal_groups",
+              "pattern_sequence",
+              "clock_face",
+              "time_line",
+              "calendar",
+              "measurement_compare",
+              "ruler",
+              "shape_model",
+              "position_model",
+              "category_model",
+              "bar_chart",
+              "chance_bag",
+              "queue_compare",
+              "budget_menu",
+              "menu_sum",
+              "change"
+            ],
+            "title": "Type"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "minProperties": 1,
+            "title": "Data"
+          },
+          "fact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Fact Refs"
+          },
+          "alt_text": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Alt Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "data",
+          "fact_refs",
+          "alt_text"
+        ],
+        "title": "DictionaryVisual"
       },
       "ExpressionLevel": {
         "type": "string",
@@ -1764,6 +2258,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/PedagogySnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dictionary_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DictionaryReference"
               },
               {
                 "type": "null"

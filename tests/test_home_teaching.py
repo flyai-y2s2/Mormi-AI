@@ -73,10 +73,32 @@ CURRENT_FRONTEND_HOME_SESSION_IDS = {
     "data-chance",
 }
 
+CONTENT_VERSION_8_HOME_SESSION_IDS = {
+    "number-count",
+    "number-compare",
+    "money-count",
+    "number-make-ten",
+    "number-place-value",
+    "add-pictures",
+    "money-price",
+    "sub-borrow",
+    "multiply-addition",
+    "multiply-tables",
+    "clock-basic",
+    "clock-quarter",
+    "time-calendar",
+    "measure-weight-capacity",
+    "geometry-compose",
+    "data-chance",
+}
+
 
 def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert set(HOME_TEACHING_CATALOG) == CURRENT_FRONTEND_HOME_SESSION_IDS
-    assert all(spec.content_version == 7 for spec in HOME_TEACHING_CATALOG.values())
+    assert {
+        spec.id for spec in HOME_TEACHING_CATALOG.values() if spec.content_version == 8
+    } == CONTENT_VERSION_8_HOME_SESSION_IDS
+    assert all(spec.content_version in {7, 8} for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
     assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.entry_mode != "wrong_guess" for spec in HOME_TEACHING_CATALOG.values())

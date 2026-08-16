@@ -12,6 +12,7 @@
 - 카페의 줄 서기, 예산 메뉴 선택, 메뉴값 덧셈, 거스름돈 진행
 - 발화사다리 `L4~L0`와 힌트사다리 `H0~H3`를 독립적으로 조절
 - 도움 카드 자동 공개
+- 도움 카드와 분리된 검수·버전 고정 궁금해사전 40개 제공
 - 발화 이해 LLM, 결정형 오케스트레이터, 모르미 화자 LLM 분리
 - 모든 화자 대사의 결정형 검증과 위험 턴의 조건부 의미 검증
 - 검증된 대사만 전송하는 SSE 진행·대사 스트리밍
@@ -27,6 +28,7 @@
 - 아이 발화 이해와 사실 슬롯·누락 슬롯·안전 유형 분류
 - 결정형 발화사다리·힌트사다리 및 세션 진행
 - 도움 카드와 시각자료 계약 생성
+- 궁금해사전의 개념·예시·전용 시각자료 카탈로그와 버전 스냅샷 제공
 - 모르미 대사 생성과 출력 안전 검증
 - 별노트의 원문 근거·맥락 보충·귀속 및 학습 프로필 변경값 계산
 - 대화 중 활성 상태와 암호화 턴 기록
@@ -55,6 +57,12 @@
 - **통제는 코드, 언어는 LLM**: LLM이 정답, 진도, L/H 전환, 힌트, 별노트 귀속을 결정하지 않습니다.
 - **두 축을 분리**: 표현이 어렵다면 `L`만 낮추고, 개념이 어렵다면 `H`만 높입니다.
 - **힌트의 주체는 도움 카드**: 모르미는 카드를 함께 보자고 요청할 뿐, 스스로 정답을 가르치지 않습니다.
+- **세 콘텐츠의 역할 분리**: 궁금해사전은 믿고 참고하는 개념 자료, 도움 카드는 현재
+  문제를 푸는 단계별 발판, 별노트는 아이가 실제로 알려 준 근거의 기록입니다.
+  서로의 문구를 복사해 만들지 않습니다.
+- **사전은 런타임 생성 금지**: 궁금해사전은 LLM이 대화 중 만들지 않습니다. 검수된
+  버전 카탈로그를 대화 시작 시 스냅샷으로 고정하고, 이후 배포가 있어도 진행 중인
+  대화에는 같은 카드가 보입니다.
 - **도움카드 공통 계약**: 모든 콘텐츠는 `H1=주의`, `H2=구체적 행동·표상`,
   `H3=공동 수행·정답 마무리`를 선언하며, 단계가 올라갈수록 지원이 실제로 증가해야 합니다.
   수식·강조·탭 조작·순서 배열 중 학습 기능에 맞는 수단을 쓰며 이미지만을 강제하지 않습니다.
@@ -122,6 +130,8 @@ pip install -r requirements.txt
 | POST | `/v1/conversations/{conversation_id}/responses` | 발화·선택·조작 응답 제출 |
 | POST | `/v1/conversations/{conversation_id}/responses/stream` | SSE 진행 상태와 검증된 다음 턴 스트리밍 |
 | GET | `/v1/conversations/{conversation_id}` | 최신 상태와 턴 복구 |
+| GET | `/v1/content/dictionary-cards/{curriculum_session_id}` | 현재 승인된 궁금해사전 카드 조회 |
+| GET | `/v1/conversations/{conversation_id}/dictionary-card` | 대화에 고정된 궁금해사전 카드 조회 |
 | GET | `/v1/learners/{learner_id}/skill-profiles` | 학습자별 L/H 근거 조회 |
 | GET | `/v1/learners/{learner_id}/star-notes` | 별노트 조회 |
 | GET | `/v1/conversations/{conversation_id}/transcript` | 보호된 원문 질문·응답 기록 조회 |
@@ -149,6 +159,14 @@ pip install -r requirements.txt
 반드시 필요합니다. `practice_summary`는 시작 요청에 함께 보내거나, 같은
 `practice_result_id`로 미리 저장한 결과를 복구할 수 있습니다. 같은 결과 ID를
 재전송하면 최초 저장된 반복 결과가 유지됩니다.
+
+궁금해사전은 집 커리큘럼 36개와 현재 카페 4개에 각각 한 장씩 등록되어 있습니다.
+각 카드는 도움 문구와 별개인 `concept`, 구체적인 `example`, 그 예시에 근거한 전용
+`visual`, `source_refs`, 승인 정보와 콘텐츠 버전을 가집니다. 대화 시작 시 카드 본문과
+해시가 세션에 고정되며, 각 `TurnContract.dictionary_ref`는 화면이 사용할 카드의
+ID·버전·해시를 알려 줍니다. 프론트가 힌트 문구를 조합해 사전 내용을 만들지 않습니다.
+아동 화면에는 `title`·`concept`·`example`·`visual`만 사전 본문으로 표시하고,
+`learning_goal`·출처·승인 정보는 운영 및 검수용 메타데이터로 유지합니다.
 
 거스름돈 단계는 현재 FE 계약을 따릅니다. 모르미가 고른 메뉴 하나에 10,000원을
 내며, 아이는 `10,000 − 모르미 메뉴 가격`을 계산합니다.
@@ -191,6 +209,13 @@ pip install -r requirements.txt
     "input": {"kind": "text", "target_slots": ["right_count"]},
     "visual": {"type": "cafe_queues", "data": {}},
     "help_card": null,
+    "dictionary_ref": {
+      "card_id": "dictionary.cafe.cafe-queue",
+      "curriculum_session_id": "cafe_queue",
+      "schema_version": 1,
+      "content_version": 1,
+      "content_hash": "<sha256>"
+    },
     "note_update": null,
     "status": "active",
     "state_version": 2
@@ -267,6 +292,22 @@ PYTHONPATH=src .venv/bin/python scripts/audit_help_cards.py \
 새 스테이지가 `SCENARIOS`에 등록되면 사람·AI 검수 목록에도 자동으로 포함됩니다.
 H1~H3 누락, 미등록 사실 참조, 학습 기능과 맞지 않는 지원 수단, H3에서 완료할 수 없는
 필수 슬롯은 빌드 전에 실패합니다.
+
+궁금해사전도 같은 세 겹의 출시 전 검수를 거칩니다. 결정형 검사는 40개 활성 과제
+전수 대응, 승인·출처·버전 해시, 문장 독립성, 산술·시각 사실 일치, 도움카드 문구 복사,
+고아·누락 카드와 `3십` 같은 비표준 자릿값 표현을 검사합니다. 순차 수 세기 그림은
+`1`부터 목표 개수까지 빠짐없이 증가하지 않으면 카탈로그 로딩이 실패합니다.
+
+```bash
+# 개념·예시·시각자료·연결 과제를 함께 보는 사람 검수표
+PYTHONPATH=src .venv/bin/python scripts/audit_dictionary_cards.py \
+  --report /tmp/mormi-dictionary-review.md
+
+# 선택 실행: 이해 가능성·수학 정확성·풀이 강요·도움카드 중복 의미 검수
+PYTHONPATH=src .venv/bin/python scripts/audit_dictionary_cards.py \
+  --ai --report /tmp/mormi-dictionary-review.md \
+  --json /tmp/mormi-dictionary-ai-audit.json
+```
 
 상세 설계와 API 계약은 `docs/`를 참고하세요.
 

@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .content import create_scenario_data, get_scenario, get_task
+from .dictionary_catalog import (
+    DICTIONARY_CATALOG,
+    dictionary_card_envelope,
+    get_dictionary_card_by_id,
+)
+from .dictionary_models import DictionaryCardEnvelope
 from .engine import (
     ConversationEngine,
     EngineProgress,
@@ -129,6 +135,13 @@ class ConversationService:
             scenario_id=request.scenario_id,
             task_ids=scenario.task_ids,
             scenario_data=scenario_data,
+            dictionary_catalog_version=DICTIONARY_CATALOG.catalog_version,
+            dictionary_snapshots={
+                task_id: get_dictionary_card_by_id(
+                    get_task(task_id, scenario_data).dictionary_card_id
+                ).model_copy(deep=True)
+                for task_id in scenario.task_ids
+            },
             task_start_levels=task_start_levels,
             expression_level=start_level,
             task_start_level=start_level,
@@ -245,6 +258,21 @@ class ConversationService:
         state = await self.repository.get_state(conversation_id)
         turn = await self.repository.active_turn(state)
         return SessionEnvelope(conversation_id=conversation_id, turn=turn)
+
+    async def dictionary_card(self, conversation_id: str) -> DictionaryCardEnvelope:
+        """Return the reviewed card snapshot pinned when the conversation began."""
+
+        state = await self.repository.get_state(conversation_id)
+        try:
+            card = state.dictionary_snapshots[state.current_task_id]
+        except KeyError as error:
+            # A legacy conversation may predate dictionary snapshots. Refuse
+            # today's card rather than changing trusted content mid-session.
+            raise ValueError("conversation has no pinned dictionary snapshot") from error
+        return dictionary_card_envelope(
+            card,
+            catalog_version=state.dictionary_catalog_version,
+        )
 
 
 def response_matches_input(input_kind: InputKind, response_type: ResponseType) -> bool:
