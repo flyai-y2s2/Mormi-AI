@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from mormi_api.db import ConversationRecord, Database, TurnRecord
 from mormi_api.llm import ModelUnavailableError
@@ -41,16 +42,59 @@ def summary_response(
     concept_text: str,
     evidence_refs: list[str] | None = None,
 ) -> ReportSummaryResponse:
-    narrative = ReportNarrative(
-        text=concept_text,
-        evidence_refs=evidence_refs or ["domain:money"],
-    )
     return ReportSummaryResponse(
-        concept_performance=narrative,
-        explanation_change=narrative,
-        life_transfer=narrative,
-        improved_point=narrative,
-        observe_point=narrative,
+        concept_performance=ReportNarrative(
+            text=concept_text,
+            evidence_refs=evidence_refs or ["domain:money"],
+        ),
+        explanation_change=ReportNarrative(
+            text=concept_text,
+            evidence_refs=evidence_refs or ["domain:money"],
+        ),
+        life_transfer=ReportNarrative(
+            text=concept_text,
+            evidence_refs=evidence_refs or ["domain:money"],
+        ),
+        improved_point=ReportNarrative(
+            text=concept_text,
+            evidence_refs=evidence_refs or ["domain:money"],
+        ),
+        observe_point=ReportNarrative(
+            text=concept_text,
+            evidence_refs=evidence_refs or ["domain:money"],
+        ),
+    )
+
+
+def five_narrative_response() -> ReportSummaryResponse:
+    return ReportSummaryResponse(
+        concept_performance=ReportNarrative(
+            text="개념 수행은 60%입니다.", evidence_refs=["concept:performance"]
+        ),
+        explanation_change=ReportNarrative(
+            text="설명은 차근차근 세기입니다.", evidence_refs=["explanation:counting"]
+        ),
+        life_transfer=ReportNarrative(
+            text="생활 장면에서 3개를 골랐습니다.", evidence_refs=["life:selection"]
+        ),
+        improved_point=ReportNarrative(
+            text="도움 요청 뒤 혼자 답했습니다.", evidence_refs=["improved:independent"]
+        ),
+        observe_point=ReportNarrative(
+            text="다음 활동도 관찰합니다.", evidence_refs=["observe:next"]
+        ),
+    )
+
+
+def five_narrative_request() -> ReportSummaryRequest:
+    return summary_request(
+        facts=[
+            fact("concept:performance", "개념 수행은 60%입니다."),
+            fact("explanation:counting", "설명은 차근차근 세기입니다.", category="explanation"),
+            fact("life:selection", "생활 장면에서 3개를 골랐습니다.", category="life"),
+            fact("improved:independent", "도움 요청 뒤 혼자 답했습니다.", category="improved"),
+            fact("observe:next", "다음 활동도 관찰합니다.", category="observe"),
+        ]
     )
 
 
@@ -85,6 +129,110 @@ def test_summary_rejects_quote_not_present_in_referenced_fact() -> None:
         validate_report_summary(
             request,
             summary_response(concept_text="‘독립 수행’이라고 말할 수 있습니다."),
+        )
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [("‘", "’"), ("\"", "\""), ("『", "』"), ("「", "」"), ("《", "》")],
+)
+def test_summary_rejects_unrecognized_or_unbalanced_quote_delimiters(
+    quote: tuple[str, str],
+) -> None:
+    request = summary_request(facts=[fact("domain:money", "최근 상태는 관찰 중입니다.")])
+    opening, closing = quote
+
+    with pytest.raises(ValueError):
+        validate_report_summary(
+            request,
+            summary_response(concept_text=f"{opening}독립 수행{closing}이라고 말할 수 있습니다."),
+        )
+    with pytest.raises(ValueError):
+        validate_report_summary(
+            request,
+            summary_response(concept_text=f"{opening}최근 상태는 관찰 중입니다."),
+        )
+    with pytest.raises(ValueError):
+        validate_report_summary(
+            request,
+            summary_response(concept_text=f"최근 상태는 관찰 중입니다.{closing}"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("fact_statement", "summary_text"),
+    [
+        ("최근 금액은 5천 원입니다.", "최근 금액은 5만 원입니다."),
+        ("최근 성공률은 60%입니다.", "최근 성공률은 60입니다."),
+        ("최근 선택은 3개입니다.", "최근 선택은 3명입니다."),
+    ],
+)
+def test_summary_rejects_changed_numeric_magnitude_percent_or_unit(
+    fact_statement: str,
+    summary_text: str,
+) -> None:
+    request = summary_request(facts=[fact("domain:money", fact_statement)])
+
+    with pytest.raises(ValueError):
+        validate_report_summary(
+            request,
+            summary_response(concept_text=summary_text),
+        )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "반 친구보다 느립니다.",
+        "동년배보다 뒤처집니다.",
+        "학급 평균보다 낮습니다.",
+        "반 평균보다 빠릅니다.",
+        "상위권입니다.",
+        "진단이 필요합니다.",
+        "약물 처방을 추천합니다.",
+        "심리 치료를 권장합니다.",
+    ],
+)
+def test_summary_rejects_peer_ranking_and_medical_language(text: str) -> None:
+    request = summary_request(facts=[fact("domain:money", "최근 상태는 관찰 중입니다.")])
+
+    with pytest.raises(ValueError):
+        validate_report_summary(request, summary_response(concept_text=text))
+
+
+def test_summary_rejects_invented_cause_or_interpretation() -> None:
+    request = summary_request(facts=[fact("domain:money", "독립 수행률은 60%입니다.")])
+
+    for text in ("독립 수행률은 연습 덕분에 60%입니다.", "독립 수행률은 이해가 좋아서 60%입니다."):
+        with pytest.raises(ValueError):
+            validate_report_summary(request, summary_response(concept_text=text))
+
+
+def test_summary_accepts_independently_grounded_five_narratives() -> None:
+    request = five_narrative_request()
+    response = five_narrative_response()
+
+    assert validate_report_summary(request, response) == response
+
+
+def test_summary_accepts_small_reporting_word_allowlist() -> None:
+    request = summary_request(facts=[fact("concept:performance", "개념 수행은 60%입니다.")])
+
+    response = summary_response(
+        concept_text="최근 개념 수행은 60%입니다.",
+        evidence_refs=["concept:performance"],
+    )
+
+    assert validate_report_summary(request, response) == response
+
+
+def test_summary_request_rejects_duplicate_evidence_ids() -> None:
+    with pytest.raises(ValidationError):
+        summary_request(
+            facts=[
+                fact("concept:performance", "개념 수행은 60%입니다."),
+                fact("concept:performance", "다른 사실입니다."),
+            ]
         )
 
 

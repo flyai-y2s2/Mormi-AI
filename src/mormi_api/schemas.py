@@ -714,6 +714,13 @@ class ReportSummaryRequest(BaseModel):
     learner_label: str = Field(min_length=1, max_length=40)
     facts: list[ReportFact] = Field(min_length=1, max_length=80)
 
+    @model_validator(mode="after")
+    def evidence_ids_must_be_unique(self) -> ReportSummaryRequest:
+        evidence_ids = [fact.evidence_id for fact in self.facts]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("report evidence ids must be unique")
+        return self
+
 
 class ReportSummaryResponse(BaseModel):
     concept_performance: ReportNarrative
