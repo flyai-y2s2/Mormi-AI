@@ -9,6 +9,7 @@ description = "LangGraph-based conversation API for Mormi's real-life math teach
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
+  "alembic>=1.16,<2",
   "aiosqlite>=0.21,<1",
   "anthropic>=0.121,<1",
   "cryptography>=45,<47",

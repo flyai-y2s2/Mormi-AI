@@ -227,6 +227,7 @@ class ConversationService:
                 next_turn=next_turn,
                 previous_question=active_turn.mormi.text,
                 note=next_turn.note_update,
+                runtime=result.runtime,
             )
         except DuplicateResponseError:
             prior = await self.repository.response_exists(conversation_id, response_id)

@@ -58,6 +58,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         database,
         TextCipher(settings.raw_data_encryption_key),
         idempotency_retention_days=settings.idempotency_retention_days,
+        classifier_model=settings.classifier_model,
+        speaker_model=settings.speaker_model,
     )
     await repository.migrate_existing_storage_to_permanent()
     await repository.purge_expired_raw_data()

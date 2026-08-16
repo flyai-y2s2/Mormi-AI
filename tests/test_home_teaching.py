@@ -5,7 +5,16 @@ from conftest import FakeGateway
 from sqlalchemy import select
 
 from mormi_api.content import HOME_TEACHING_CATALOG, HomeTeachingSpec, home_teaching_task
-from mormi_api.db import ConversationRecord, Database, TurnRecord
+from mormi_api.db import (
+    ConversationRecord,
+    Database,
+    DialogueClaimRecord,
+    DialogueTaskOutcomeRecord,
+    DialogueTurnObservationRecord,
+    NoteEvidenceLinkRecord,
+    OutboxEventRecord,
+    TurnRecord,
+)
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
@@ -456,6 +465,36 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert completed.turn.status.value == "completed"
     assert completed.turn.note_update is not None
     assert rule_span in completed.turn.note_update.text
+    async with database.sessions() as db:
+        observation = (
+            await db.execute(select(DialogueTurnObservationRecord))
+        ).scalar_one()
+        claims = list((await db.execute(select(DialogueClaimRecord))).scalars())
+        outcome = (
+            await db.execute(select(DialogueTaskOutcomeRecord))
+        ).scalar_one()
+        evidence_link = (
+            await db.execute(select(NoteEvidenceLinkRecord))
+        ).scalar_one()
+        outbox = (await db.execute(select(OutboxEventRecord))).scalar_one()
+
+    assert observation.response_category == "correct_full"
+    assert observation.concept_result == "correct_full"
+    assert observation.expression_before == "L4"
+    assert observation.hint_before == "H0"
+    assert observation.dialogue_act == "session_complete"
+    assert observation.record_origin == "live"
+    assert observation.analysis_json.get("claims") is None
+    assert observation.analysis_json.get("grounding_span") is None
+    assert {claim.slot_id for claim in claims} == {"answer", "rule"}
+    assert all(claim.validation_status == "verified" for claim in claims)
+    assert all(claim.evidence_span_encrypted for claim in claims)
+    assert outcome.completion_outcome == "taught"
+    assert outcome.evidence_observation_ids_json == [observation.observation_id]
+    assert outcome.note_id == completed.turn.note_update.note_id
+    assert evidence_link.observation_id == observation.observation_id
+    assert outbox.aggregate_id == observation.observation_id
+    assert outbox.payload_json["claims"][0].get("evidence_span") is None
     await database.dispose()
 
 
