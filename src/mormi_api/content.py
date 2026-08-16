@@ -288,6 +288,7 @@ def reviewed_help_card(
 
 class TaskDefinition(BaseModel):
     id: str
+    dictionary_card_id: str
     scene: SceneType
     stage_id: str
     skill_id: str
@@ -542,6 +543,7 @@ class HomeTeachingSpec(BaseModel):
     """Reviewed teaching content for one frontend curriculum session."""
 
     id: str
+    dictionary_card_id: str
     subject: str
     unit: str
     title: str
@@ -824,6 +826,7 @@ def menu_items_json(items: Sequence[CafeMenuItem]) -> list[dict[str, str | int |
 
 QUEUE_TASK = TaskDefinition(
     id="cafe_queue_3_vs_5",
+    dictionary_card_id="dictionary.cafe.cafe-queue",
     scene=SceneType.CAFE,
     stage_id="queue",
     skill_id="compare_quantity_in_context",
@@ -1126,6 +1129,11 @@ def calculation_task(
     place_action = "더해" if operation == "addition" else "빼"
     return TaskDefinition(
         id=task_id,
+        dictionary_card_id=(
+            "dictionary.cafe.cafe-menu-total"
+            if operation == "addition"
+            else "dictionary.cafe.cafe-change"
+        ),
         scene=scene,
         stage_id=stage_id or ("home_teach" if scene is SceneType.HOME_TEACH else "calculation"),
         skill_id=skill_id,
@@ -1614,6 +1622,11 @@ def menu_selection_task(
     )
     return TaskDefinition(
         id=task_id,
+        dictionary_card_id=(
+            "dictionary.cafe.cafe-budget-menu"
+            if budget is not None
+            else "dictionary.cafe.cafe-menu-total"
+        ),
         scene=SceneType.CAFE,
         stage_id=stage_id,
         skill_id="choose_within_budget" if budget is not None else "choose_menu_for_calculation",
@@ -1873,6 +1886,11 @@ def simple_calculation_task(
     )
     return TaskDefinition(
         id=task_id,
+        dictionary_card_id=(
+            "dictionary.cafe.cafe-menu-total"
+            if operation == "addition"
+            else "dictionary.cafe.cafe-change"
+        ),
         scene=SceneType.CAFE,
         stage_id=stage_id,
         skill_id="add_menu_prices" if operation == "addition" else "calculate_change",
@@ -2031,6 +2049,7 @@ def home_teaching_task(
 
     task = TaskDefinition(
         id=HOME_TEACH_TASK_ID,
+        dictionary_card_id=spec.dictionary_card_id,
         scene=SceneType.HOME_TEACH,
         stage_id="home_teach",
         skill_id=skill_id,

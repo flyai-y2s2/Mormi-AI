@@ -46,6 +46,8 @@ X-Mormi-Service-Key: <service-key>
 | POST | `/v1/conversations/{conversation_id}/responses` | 아이 응답 제출 및 다음 턴 생성 |
 | POST | `/v1/conversations/{conversation_id}/responses/stream` | SSE 진행 상태와 검증된 다음 턴 전송 |
 | GET | `/v1/conversations/{conversation_id}` | 최신 턴 복구 |
+| GET | `/v1/content/dictionary-cards/{curriculum_session_id}` | 현재 승인된 궁금해사전 카드 조회 |
+| GET | `/v1/conversations/{conversation_id}/dictionary-card` | 대화에 고정된 궁금해사전 카드 조회 |
 | GET | `/v1/learners/{learner_id}/skill-profiles` | 학습자별 시작 발화 단계 정보 조회 |
 | GET | `/v1/learners/{learner_id}/star-notes` | 별노트 조회 |
 | GET | `/v1/conversations/{conversation_id}/transcript` | 보호된 대화 기록 조회 |
@@ -72,6 +74,77 @@ X-Mormi-Service-Key: <service-key>
 응답 본문은 `GET /health`와 같고, `X-Mormi-Service-Key`를 함께 검사합니다.
 서버가 살아 있는지와 BE↔AI 공유 키가 맞는지를 한 번에 확인할 때 씁니다.
 키가 틀리면 `401`이므로, 배포 후 연동 점검은 `/health`가 아니라 이쪽을 호출하세요.
+
+### 궁금해사전 콘텐츠 조회
+
+궁금해사전은 도움카드 문구를 조합하거나 런타임 LLM으로 생성하지 않습니다. AI가
+소유한 승인·버전 고정 카탈로그를 조회합니다.
+
+#### `GET /v1/content/dictionary-cards/{curriculum_session_id}`
+
+현재 배포에서 승인된 카드 한 장을 조회합니다. 선택 쿼리
+`expected_content_version`을 보내면 호출자가 기대한 버전과 다를 때 `409`를 반환합니다.
+
+```http
+GET /v1/content/dictionary-cards/number-count?expected_content_version=1
+X-Mormi-Service-Key: <service-key>
+```
+
+#### `GET /v1/conversations/{conversation_id}/dictionary-card`
+
+대화 시작 시 해당 과제에 고정된 카드 스냅샷을 반환합니다. 카탈로그가 새로 배포되어도
+진행 중인 대화에는 이 카드가 유지됩니다. 이 조회는 L/H 단계, 검증 슬롯, 별노트,
+현재 턴을 변경하지 않습니다.
+
+두 API의 정상 응답 형식은 같습니다.
+
+```json
+{
+  "catalog_version": 1,
+  "reference": {
+    "card_id": "dictionary.home.number-count",
+    "curriculum_session_id": "number-count",
+    "schema_version": 1,
+    "content_version": 1,
+    "content_hash": "<sha256>"
+  },
+  "card": {
+    "card_id": "dictionary.home.number-count",
+    "curriculum_session_id": "number-count",
+    "schema_version": 1,
+    "content_version": 1,
+    "locale": "ko-KR",
+    "title": "수를 빠뜨리지 않고 세기",
+    "learning_goal": "눈에 보이는 대상을 빠뜨리거나 겹치지 않고 센다.",
+    "concept": {
+      "lines": ["대상마다 수를 한 번씩 말하면 모두 몇 개인지 알 수 있어."]
+    },
+    "example": {
+      "lines": ["점 3개를 하나, 둘, 셋 하고 세면 모두 3개야."],
+      "facts": {"count": 3},
+      "equation": null
+    },
+    "visual": {
+      "type": "object_count",
+      "data": {"count": 3, "mark_each": true},
+      "fact_refs": ["count"],
+      "alt_text": "점 3개를 하나씩 세는 그림"
+    },
+    "method_policy": "target_method",
+    "source_refs": ["2022 개정 초등 수학: 수와 연산"],
+    "review": {
+      "status": "approved",
+      "approved_by": "Mormi content team",
+      "approved_at": "2026-08-16"
+    }
+  }
+}
+```
+
+- 등록되지 않은 커리큘럼 ID: `404 dictionary_card_not_found`
+- 현재 콘텐츠 버전 불일치: `409 dictionary_version_mismatch`
+- 구버전 대화에 고정 카드가 없음: `409 dictionary_snapshot_unavailable`
+- 스키마·사실·산술·시각자료 계약이 잘못된 카탈로그: 서버 시작 및 CI 실패
 
 ## 4. 반복학습 결과 저장
 
@@ -454,6 +527,13 @@ type TurnContract = {
       visual_type?: string;
       visual_data: Record<string, unknown>;
     };
+    dictionary_ref: null | {
+      card_id: string;
+      curriculum_session_id: string;
+      schema_version: number;
+      content_version: number;
+      content_hash: string; // SHA-256
+    };
     note_update: null | {
       note_id: string;
       skill_id: string;
@@ -478,6 +558,8 @@ type TurnContract = {
 
 - `input.kind`에 해당하는 입력 UI 하나만 활성화합니다.
 - `help_card.auto_open=true`이면 도움 카드를 즉시 엽니다.
+- `dictionary_ref`는 사전 카드 본문이 아니라 카드의 고정 신원입니다. 화면이 사전을
+  열 때 대화별 조회 API로 같은 해시의 스냅샷을 받아 렌더링합니다.
 - `note_update`가 있을 때만 별노트를 추가합니다.
 - 정오, 오개념, L/H 전환, 별노트 귀속을 프론트가 다시 계산하지 않습니다.
 - `status=completed`이면 입력을 보내지 않고 완료 연출로 이동합니다.

@@ -1,6 +1,7 @@
 [
   {
     "id": "number-count",
+    "dictionary_card_id": "dictionary.home.number-count",
     "help_skills": [
       "counting"
     ],
@@ -81,6 +82,7 @@
   },
   {
     "id": "number-compare",
+    "dictionary_card_id": "dictionary.home.number-compare",
     "help_skills": [
       "counting",
       "comparison"
@@ -168,6 +170,7 @@
   },
   {
     "id": "money-count",
+    "dictionary_card_id": "dictionary.home.money-count",
     "help_skills": [
       "addition"
     ],
@@ -250,6 +253,7 @@
   },
   {
     "id": "number-make-ten",
+    "dictionary_card_id": "dictionary.home.number-make-ten",
     "help_skills": [
       "counting",
       "addition"
@@ -331,6 +335,7 @@
   },
   {
     "id": "number-place-value",
+    "dictionary_card_id": "dictionary.home.number-place-value",
     "help_skills": [
       "place_value",
       "addition"
@@ -423,6 +428,7 @@
   },
   {
     "id": "add-pictures",
+    "dictionary_card_id": "dictionary.home.add-pictures",
     "help_skills": [
       "counting",
       "addition"
@@ -505,6 +511,7 @@
   },
   {
     "id": "money-price",
+    "dictionary_card_id": "dictionary.home.money-price",
     "help_skills": [
       "addition"
     ],
@@ -591,6 +598,7 @@
   },
   {
     "id": "add-place",
+    "dictionary_card_id": "dictionary.home.add-place",
     "help_skills": [
       "place_value",
       "addition"
@@ -674,6 +682,7 @@
   },
   {
     "id": "add-make-ten",
+    "dictionary_card_id": "dictionary.home.add-make-ten",
     "help_skills": [
       "addition"
     ],
@@ -756,6 +765,7 @@
   },
   {
     "id": "sub-pictures",
+    "dictionary_card_id": "dictionary.home.sub-pictures",
     "help_skills": [
       "counting",
       "subtraction"
@@ -838,6 +848,7 @@
   },
   {
     "id": "money-budget",
+    "dictionary_card_id": "dictionary.home.money-budget",
     "help_skills": [
       "subtraction"
     ],
@@ -923,6 +934,7 @@
   },
   {
     "id": "sub-place",
+    "dictionary_card_id": "dictionary.home.sub-place",
     "help_skills": [
       "place_value",
       "subtraction"
@@ -1006,6 +1018,7 @@
   },
   {
     "id": "sub-borrow",
+    "dictionary_card_id": "dictionary.home.sub-borrow",
     "help_skills": [
       "place_value",
       "subtraction"
@@ -1089,6 +1102,7 @@
   },
   {
     "id": "multiply-groups",
+    "dictionary_card_id": "dictionary.home.multiply-groups",
     "help_skills": [
       "counting",
       "grouping"
@@ -1172,6 +1186,7 @@
   },
   {
     "id": "multiply-addition",
+    "dictionary_card_id": "dictionary.home.multiply-addition",
     "help_skills": [
       "addition",
       "grouping"
@@ -1255,6 +1270,7 @@
   },
   {
     "id": "money-mission",
+    "dictionary_card_id": "dictionary.home.money-mission",
     "help_skills": [
       "addition",
       "subtraction"
@@ -1343,6 +1359,7 @@
   },
   {
     "id": "multiply-easy-tables",
+    "dictionary_card_id": "dictionary.home.multiply-easy-tables",
     "help_skills": [
       "counting",
       "grouping"
@@ -1426,6 +1443,7 @@
   },
   {
     "id": "multiply-tables",
+    "dictionary_card_id": "dictionary.home.multiply-tables",
     "help_skills": [
       "addition",
       "grouping"
@@ -1509,6 +1527,7 @@
   },
   {
     "id": "divide-share",
+    "dictionary_card_id": "dictionary.home.divide-share",
     "help_skills": [
       "grouping"
     ],
@@ -1591,6 +1610,7 @@
   },
   {
     "id": "divide-group",
+    "dictionary_card_id": "dictionary.home.divide-group",
     "help_skills": [
       "grouping"
     ],
@@ -1673,6 +1693,7 @@
   },
   {
     "id": "pattern-repeat",
+    "dictionary_card_id": "dictionary.home.pattern-repeat",
     "help_skills": [
       "pattern"
     ],
@@ -1760,6 +1781,7 @@
   },
   {
     "id": "pattern-number",
+    "dictionary_card_id": "dictionary.home.pattern-number",
     "help_skills": [
       "comparison",
       "pattern"
@@ -1850,6 +1872,7 @@
   },
   {
     "id": "pattern-unknown",
+    "dictionary_card_id": "dictionary.home.pattern-unknown",
     "help_skills": [
       "subtraction",
       "pattern"
@@ -1936,6 +1959,7 @@
   },
   {
     "id": "clock-basic",
+    "dictionary_card_id": "dictionary.home.clock-basic",
     "help_skills": [
       "time"
     ],
@@ -2017,6 +2041,7 @@
   },
   {
     "id": "clock-quarter",
+    "dictionary_card_id": "dictionary.home.clock-quarter",
     "help_skills": [
       "counting",
       "time"
@@ -2099,6 +2124,7 @@
   },
   {
     "id": "time-duration",
+    "dictionary_card_id": "dictionary.home.time-duration",
     "help_skills": [
       "time"
     ],
@@ -2184,6 +2210,7 @@
   },
   {
     "id": "time-calendar",
+    "dictionary_card_id": "dictionary.home.time-calendar",
     "help_skills": [
       "counting",
       "time"
@@ -2266,6 +2293,7 @@
   },
   {
     "id": "measure-compare",
+    "dictionary_card_id": "dictionary.home.measure-compare",
     "help_skills": [
       "comparison",
       "measurement"
@@ -2350,6 +2378,7 @@
   },
   {
     "id": "measure-ruler",
+    "dictionary_card_id": "dictionary.home.measure-ruler",
     "help_skills": [
       "measurement"
     ],
@@ -2432,6 +2461,7 @@
   },
   {
     "id": "measure-weight-capacity",
+    "dictionary_card_id": "dictionary.home.measure-weight-capacity",
     "help_skills": [
       "comparison",
       "measurement"
@@ -2515,6 +2545,7 @@
   },
   {
     "id": "geometry-shapes",
+    "dictionary_card_id": "dictionary.home.geometry-shapes",
     "help_skills": [
       "counting",
       "geometry"
@@ -2599,6 +2630,7 @@
   },
   {
     "id": "geometry-compose",
+    "dictionary_card_id": "dictionary.home.geometry-compose",
     "help_skills": [
       "geometry"
     ],
@@ -2683,6 +2715,7 @@
   },
   {
     "id": "geometry-position",
+    "dictionary_card_id": "dictionary.home.geometry-position",
     "help_skills": [
       "geometry"
     ],
@@ -2767,6 +2800,7 @@
   },
   {
     "id": "data-classify",
+    "dictionary_card_id": "dictionary.home.data-classify",
     "help_skills": [
       "data"
     ],
@@ -2851,6 +2885,7 @@
   },
   {
     "id": "data-chart",
+    "dictionary_card_id": "dictionary.home.data-chart",
     "help_skills": [
       "comparison",
       "data"
@@ -2941,6 +2976,7 @@
   },
   {
     "id": "data-chance",
+    "dictionary_card_id": "dictionary.home.data-chance",
     "help_skills": [
       "comparison",
       "data"

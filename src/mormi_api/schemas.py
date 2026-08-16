@@ -7,6 +7,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from .dictionary_models import DictionaryCard, DictionaryReference
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -471,6 +473,9 @@ class TurnContract(BaseModel):
     state_version: int
     completion: CompletionContract | None = None
     pedagogy: PedagogySnapshot | None = None
+    # The card itself is pinned in SessionState. Turns expose only its stable
+    # identity so clients never derive dictionary copy from help-card text.
+    dictionary_ref: DictionaryReference | None = None
 
 
 class SessionState(BaseModel):
@@ -481,6 +486,10 @@ class SessionState(BaseModel):
     scenario_id: str
     task_ids: list[str]
     scenario_data: dict[str, Any] = Field(default_factory=dict)
+    dictionary_catalog_version: int | None = None
+    # Immutable-by-conversation snapshots keep reference material stable when
+    # the catalog is deployed while a child is still in the same lesson.
+    dictionary_snapshots: dict[str, DictionaryCard] = Field(default_factory=dict)
     task_start_levels: dict[str, ExpressionLevel] = Field(default_factory=dict)
     task_index: int = 0
     expression_level: ExpressionLevel

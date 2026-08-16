@@ -38,7 +38,13 @@ jobs:
         run: pip install '.[dev]'
 
       - name: Ruff
-        run: ruff check src tests
+        run: ruff check src tests scripts
+
+      - name: Mypy
+        run: mypy src scripts
+
+      - name: Dictionary content contracts
+        run: python scripts/audit_dictionary_cards.py --report /tmp/mormi-dictionary-review.md
 
       - name: Pytest
         run: pytest -q
