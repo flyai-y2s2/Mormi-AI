@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, delete, inspect, select
 
 from alembic import command
 from mormi_api.db import (
+    Base,
     ConversationRecord,
     Database,
     DialogueTurnObservationRecord,
@@ -16,6 +17,7 @@ from mormi_api.db import (
     TurnRecord,
 )
 from mormi_api.engine import ConversationEngine
+from mormi_api.migrations import apply_database_migrations
 from mormi_api.repository import Repository
 from mormi_api.schemas import ChildResponse, SessionCreate, utc_now
 from mormi_api.security import TextCipher
@@ -96,6 +98,26 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
         assert connection.execute(
             select(TurnRecord.turn_id)
         ).scalar_one() == "turn_legacy"
+    engine.dispose()
+
+
+def test_migration_stamps_complete_schema_created_by_app_startup(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "startup-created.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    apply_database_migrations(
+        f"sqlite+aiosqlite:///{database_path}",
+        Path(__file__).resolve().parents[1],
+    )
+
+    with engine.connect() as connection:
+        version = connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one()
+        assert version == "20260817_01"
     engine.dispose()
 
 
