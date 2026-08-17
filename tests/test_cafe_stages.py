@@ -5,8 +5,15 @@ from uuid import uuid4
 import pytest
 from conftest import FakeGateway
 from pydantic import ValidationError
+from sqlalchemy import select
 
-from mormi_api.db import Database
+from mormi_api.db import (
+    Database,
+    DialogueClaimRecord,
+    DialogueTaskOutcomeRecord,
+    DialogueTurnObservationRecord,
+    NoteEvidenceLinkRecord,
+)
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
@@ -243,6 +250,59 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
     notes = await repository.list_notes(1)
     assert len(notes) == 1
     assert "더해서" in notes[0].text
+    async with database.sessions() as db:
+        observations = list(
+            (
+                await db.execute(
+                    select(DialogueTurnObservationRecord).order_by(
+                        DialogueTurnObservationRecord.created_at.asc()
+                    )
+                )
+            ).scalars()
+        )
+        claims = list((await db.execute(select(DialogueClaimRecord))).scalars())
+        evidence_links = list(
+            (await db.execute(select(NoteEvidenceLinkRecord))).scalars()
+        )
+        outcomes = list(
+            (
+                await db.execute(
+                    select(DialogueTaskOutcomeRecord).order_by(
+                        DialogueTaskOutcomeRecord.task_index.asc()
+                    )
+                )
+            ).scalars()
+        )
+
+    # The first task is reset when the calculation task starts, but its final
+    # accepted choice must still be recorded as newly verified.
+    child_menu_claim = next(claim for claim in claims if claim.slot_id == "child_menu")
+    assert child_menu_claim.newly_verified is True
+    # The calculation note combines the operation and result supplied on two
+    # turns. Both turns must remain traceable instead of citing only the last.
+    calculation_observations = {
+        observation.observation_id: observation
+        for observation in observations
+        if observation.task_id == "cafe_total_calculation"
+    }
+    assert {
+        link.observation_id: link.source_slot_ids_json for link in evidence_links
+    } == {
+        observation_id: [
+            next(
+                claim.slot_id
+                for claim in claims
+                if claim.observation_id == observation_id and claim.newly_verified
+            )
+        ]
+        for observation_id in calculation_observations
+    }
+    assert [outcome.task_id for outcome in outcomes] == [
+        "cafe_total_menu_pick",
+        "cafe_total_calculation",
+    ]
+    assert outcomes[0].verified_slots_json == {"child_menu": "milk"}
+    assert outcomes[1].verified_slots_json == {"operation": "addition", "result": 5000}
     await database.dispose()
 
 

@@ -128,6 +128,50 @@ def test_migration_stamps_complete_schema_created_by_app_startup(
     engine.dispose()
 
 
+def test_migration_refuses_to_stamp_table_names_with_a_missing_column(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "malformed-startup-created.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE dialogue_claims")
+        connection.exec_driver_sql(
+            "CREATE TABLE dialogue_claims (id INTEGER PRIMARY KEY)"
+        )
+
+    with pytest.raises(RuntimeError, match="missing_column:observation_id"):
+        apply_database_migrations(
+            f"sqlite+aiosqlite:///{database_path}",
+            Path(__file__).resolve().parents[1],
+        )
+
+    assert "alembic_version" not in set(inspect(engine).get_table_names())
+    engine.dispose()
+
+
+def test_migration_refuses_head_version_with_a_missing_observation_table(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "head-but-partial.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    config = _alembic_config(sync_url)
+    command.stamp(config, "head")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE dialogue_claims")
+
+    with pytest.raises(RuntimeError, match="dialogue_claims:missing_table"):
+        apply_database_migrations(
+            f"sqlite+aiosqlite:///{database_path}",
+            Path(__file__).resolve().parents[1],
+        )
+
+    engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_historical_backfill_marks_missing_fields_without_reanalysis(
     tmp_path: Path,

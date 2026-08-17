@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import timedelta
 
 from sqlalchemy import or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .content import get_task
@@ -256,6 +257,7 @@ class Repository:
         previous_question: str,
         note: NoteUpdate | None,
         runtime: SpeakerRuntimeAudit,
+        accepted_claims: Mapping[str, object],
     ) -> None:
         async with self.database.sessions() as db:
             conversation_record = await db.get(
@@ -320,10 +322,14 @@ class Repository:
                 claim_records = self._claim_records(
                     observation.observation_id,
                     previous_state,
-                    next_state,
                     analysis,
+                    accepted_claims,
                 )
                 db.add_all(claim_records)
+                # Note provenance can span several child turns. Persist the
+                # current claims before querying the complete task evidence.
+                if claim_records:
+                    await db.flush(claim_records)
 
                 if note:
                     note_record = NoteRecord(
@@ -340,14 +346,11 @@ class Repository:
                     # The evidence link has two FK parents: the already
                     # flushed observation and this note.
                     await db.flush([note_record])
-                    db.add(
-                        NoteEvidenceLinkRecord(
-                            note_id=note.note_id,
-                            observation_id=observation.observation_id,
-                            source_slot_ids_json=sorted(
-                                set(next_state.verified_slots)
-                                - set(previous_state.verified_slots)
-                            ),
+                    db.add_all(
+                        await self._note_evidence_link_records(
+                            db,
+                            previous_state=previous_state,
+                            note=note,
                         )
                     )
 
@@ -356,7 +359,7 @@ class Repository:
                     previous_state=previous_state,
                     next_state=next_state,
                     observation=observation,
-                    analysis=analysis,
+                    claims=claim_records,
                     note=note,
                 )
                 if task_outcome:
@@ -368,6 +371,9 @@ class Repository:
                 await db.rollback()
                 if _is_duplicate_response_integrity_error(error):
                     raise DuplicateResponseError(response_id) from error
+                raise PersistenceError("turn_persistence_failed") from error
+            except SQLAlchemyError as error:
+                await db.rollback()
                 raise PersistenceError("turn_persistence_failed") from error
 
     def _observation_record(
@@ -457,28 +463,20 @@ class Repository:
         self,
         observation_id: str,
         previous_state: SessionState,
-        next_state: SessionState,
         analysis: UtteranceAnalysis,
+        accepted_claims: Mapping[str, object],
     ) -> list[DialogueClaimRecord]:
         task = get_task(previous_state.current_task_id, previous_state.scenario_data)
-        successful = analysis.response_category in {
-            ResponseCategory.CORRECT_FULL,
-            ResponseCategory.CORRECT_PARTIAL,
-            ResponseCategory.SELF_CORRECTION,
-        }
-        newly_verified = {
-            slot_id
-            for slot_id, value in next_state.verified_slots.items()
-            if previous_state.verified_slots.get(slot_id) != value
-        }
         records: list[DialogueClaimRecord] = []
         for claim in analysis.claims:
             slot = task.slots.get(claim.slot_id)
             accepted = bool(
-                successful
-                and slot is not None
-                and claim.factual
-                and slot.accepts(claim.value)
+                slot is not None
+                and claim.slot_id in accepted_claims
+                and accepted_claims[claim.slot_id] == claim.value
+            )
+            advanced_state = bool(
+                accepted and previous_state.verified_slots.get(claim.slot_id) != claim.value
             )
             records.append(
                 DialogueClaimRecord(
@@ -496,10 +494,61 @@ class Repository:
                         if previous_state.raw_storage_enabled and claim.evidence_span
                         else None
                     ),
-                    newly_verified=claim.slot_id in newly_verified,
+                    newly_verified=advanced_state,
                 )
             )
         return records
+
+    async def _note_evidence_link_records(
+        self,
+        db: AsyncSession,
+        *,
+        previous_state: SessionState,
+        note: NoteUpdate,
+    ) -> list[NoteEvidenceLinkRecord]:
+        """Link a note to every verified task turn that supplied its slots.
+
+        A note may combine an answer from one turn with a method from a later
+        turn. Linking only the completion turn loses that provenance and can
+        make a teacher-facing report cite the wrong child response.
+        """
+
+        task = get_task(previous_state.current_task_id, previous_state.scenario_data)
+        note_slots = set(task.effective_note_slots)
+        if not note_slots:
+            return []
+        statement = (
+            select(
+                DialogueClaimRecord.observation_id,
+                DialogueClaimRecord.slot_id,
+            )
+            .join(
+                DialogueTurnObservationRecord,
+                DialogueTurnObservationRecord.observation_id
+                == DialogueClaimRecord.observation_id,
+            )
+            .where(
+                DialogueTurnObservationRecord.conversation_id
+                == previous_state.conversation_id,
+                DialogueTurnObservationRecord.task_index == previous_state.task_index,
+                DialogueClaimRecord.validation_status == "verified",
+                DialogueClaimRecord.newly_verified.is_(True),
+                DialogueClaimRecord.slot_id.in_(note_slots),
+            )
+        )
+        slots_by_observation: dict[str, set[str]] = {}
+        for observation_id, slot_id in (await db.execute(statement)).all():
+            slots_by_observation.setdefault(observation_id, set()).add(slot_id)
+        if not slots_by_observation:
+            raise PersistenceError("note_evidence_missing")
+        return [
+            NoteEvidenceLinkRecord(
+                note_id=note.note_id,
+                observation_id=observation_id,
+                source_slot_ids_json=sorted(slot_ids),
+            )
+            for observation_id, slot_ids in sorted(slots_by_observation.items())
+        ]
 
     async def _task_outcome_record(
         self,
@@ -508,7 +557,7 @@ class Repository:
         previous_state: SessionState,
         next_state: SessionState,
         observation: DialogueTurnObservationRecord,
-        analysis: UtteranceAnalysis,
+        claims: list[DialogueClaimRecord],
         note: NoteUpdate | None,
     ) -> DialogueTaskOutcomeRecord | None:
         task_finished = (
@@ -558,16 +607,14 @@ class Repository:
         if next_state.task_index == previous_state.task_index:
             verified_slots.update(next_state.verified_slots)
         else:
-            task = get_task(previous_state.current_task_id, previous_state.scenario_data)
-            for claim in analysis.claims:
-                slot = task.slots.get(claim.slot_id)
-                if (
-                    slot
-                    and claim.factual
-                    and claim.value is not None
-                    and slot.accepts(claim.value)
-                ):
-                    verified_slots[claim.slot_id] = claim.value
+            # The next task starts with a fresh ``verified_slots`` mapping.
+            # Reconstruct only from claims that already passed the same
+            # deterministic acceptance gate used by persistence and outbox;
+            # raw classifier claims must never become report evidence merely
+            # because a task transition happened.
+            for claim in claims:
+                if claim.validation_status == "verified" and claim.value_json is not None:
+                    verified_slots[claim.slot_id] = claim.value_json
         return DialogueTaskOutcomeRecord(
             outcome_id=new_id("task_outcome"),
             conversation_id=previous_state.conversation_id,

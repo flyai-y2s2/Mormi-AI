@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import pytest
+from conftest import FakeGateway
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
-from mormi_api.db import Database, DialogueClaimRecord
-from mormi_api.repository import _is_duplicate_response_integrity_error
+from mormi_api.db import Database, DialogueClaimRecord, DialogueTurnObservationRecord
+from mormi_api.engine import ConversationEngine
+from mormi_api.repository import (
+    PersistenceError,
+    Repository,
+    _is_duplicate_response_integrity_error,
+)
+from mormi_api.schemas import ChildResponse, SessionCreate
+from mormi_api.security import TextCipher
+from mormi_api.service import ConversationService
 
 
 @pytest.mark.asyncio
@@ -60,3 +70,47 @@ def test_foreign_key_failure_is_not_misclassified_as_duplicate_response() -> Non
     )
 
     assert _is_duplicate_response_integrity_error(error) is False
+
+
+@pytest.mark.asyncio
+async def test_missing_observation_table_rolls_back_and_same_response_can_retry(
+    tmp_path: object,
+) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/missing-table.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_queue_demo",
+        )
+    )
+    async with database.engine.begin() as connection:
+        await connection.execute(text("DROP TABLE dialogue_turn_observations"))
+
+    response = ChildResponse(
+        turn_id=started.turn.turn_id,
+        response_id="d2652b3b-f168-41d3-99e7-d898f4f215af",
+        type="no_response",
+    )
+    with pytest.raises(PersistenceError, match="turn_persistence_failed"):
+        await service.respond(started.conversation_id, response)
+
+    # A failed observation write must not leave the source turn answered or
+    # consume its response id. Once the schema is repaired, the child's exact
+    # same submission is safe to retry and creates one observation.
+    await database.create_schema()
+    retried = await service.respond(started.conversation_id, response)
+    assert retried.turn.status.value == "active"
+    async with database.sessions() as db:
+        observation_count = await db.scalar(
+            select(func.count()).select_from(DialogueTurnObservationRecord)
+        )
+    assert observation_count == 1
+
+    await database.dispose()

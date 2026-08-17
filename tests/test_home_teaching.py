@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from conftest import FakeGateway
 from sqlalchemy import select
@@ -232,6 +234,74 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("curriculum_session_id", sorted(CURRENT_FRONTEND_HOME_SESSION_IDS))
+async def test_every_home_support_path_persists_repeated_help_requests(
+    curriculum_session_id: str,
+    tmp_path: object,
+) -> None:
+    """Every reviewed home task must survive repeated L/H support turns.
+
+    This exercises observation and outbox writes with SQLite foreign keys
+    enabled at every support level. L0 deliberately remains in joint mode when
+    the child keeps requesting help, so this test checks durability rather than
+    forcing an artificial completion.
+    """
+
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-support-path.db"
+    )
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+    envelope = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id=f"support_{curriculum_session_id}",
+            practice_result_id=f"practice_support_{curriculum_session_id}",
+            practice_summary={
+                "curriculum_session_id": curriculum_session_id,
+                "skill_id": curriculum_session_id,
+                "question_count": 1,
+                "first_try_correct_count": 0,
+                "wrong_attempt_count": 1,
+                "earned_reward": 0,
+                "attempts": [
+                    {
+                        "item_id": f"{curriculum_session_id}:support",
+                        "correct": False,
+                        "latency_ms": 1000,
+                    }
+                ],
+            },
+        )
+    )
+
+    for _ in range(8):
+        envelope = await service.respond(
+            envelope.conversation_id,
+            ChildResponse(
+                turn_id=envelope.turn.turn_id,
+                response_id=uuid4(),
+                type="no_response",
+            ),
+        )
+
+    async with database.sessions() as db:
+        observations = list(
+            (await db.execute(select(DialogueTurnObservationRecord))).scalars()
+        )
+        outbox_events = list((await db.execute(select(OutboxEventRecord))).scalars())
+    assert len(observations) == 8
+    assert len(outbox_events) == 8
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("curriculum_session_id", sorted(CURRENT_FRONTEND_HOME_SESSION_IDS))
 async def test_every_home_l4_answer_only_preserves_credit_and_asks_the_missing_idea(
     curriculum_session_id: str,
     tmp_path: object,
@@ -419,6 +489,91 @@ async def _start_money_count_conversation(
         )
     )
     return database, repository, service, started
+
+
+@pytest.mark.asyncio
+async def test_persistence_uses_engine_accepted_claims_not_raw_classifier_claims(
+    tmp_path: object,
+) -> None:
+    """A speaker-safe rejection must also remain rejected in analytics.
+
+    The classifier deliberately overclaims a comparison reason from a bare
+    conclusion. The engine accepts only the answer; persistence must not apply
+    a second, weaker validation rule that upgrades the reason for reports.
+    """
+
+    child_text = "오른쪽이 더 많아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span=child_text,
+            ),
+            SlotClaim(
+                slot_id="reason",
+                value="count_comparison",
+                factual=True,
+                evidence_span=child_text,
+            ),
+        ],
+        confidence=1,
+    )
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/accepted-claim-contract.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway([analysis])),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=32,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="accepted-claim-contract",
+            practice_result_id="accepted-claim-practice",
+            practice_summary={
+                "curriculum_session_id": "number-compare",
+                "skill_id": "number-compare",
+                "question_count": 1,
+                "first_try_correct_count": 1,
+            },
+        )
+    )
+
+    next_turn = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id=uuid4(),
+            type="text",
+            text=child_text,
+        ),
+    )
+    assert next_turn.turn.status.value == "active"
+    assert next_turn.turn.input.target_slots == ["reason"]
+
+    async with database.sessions() as db:
+        claims = {
+            claim.slot_id: claim
+            for claim in (await db.execute(select(DialogueClaimRecord))).scalars()
+        }
+        outbox = (await db.execute(select(OutboxEventRecord))).scalar_one()
+    assert claims["answer"].validation_status == "verified"
+    assert claims["answer"].value_json == "오른쪽"
+    assert claims["answer"].newly_verified is True
+    assert claims["reason"].validation_status == "rejected"
+    assert claims["reason"].value_json is None
+    assert claims["reason"].newly_verified is False
+    outbox_claims = {claim["slot_id"]: claim for claim in outbox.payload_json["claims"]}
+    assert outbox_claims["reason"]["validation_status"] == "rejected"
+    assert outbox_claims["reason"]["value"] is None
+    await database.dispose()
 
 
 @pytest.mark.asyncio

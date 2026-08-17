@@ -24,6 +24,7 @@ from .dictionary_catalog import (
 from .dictionary_models import DictionaryCardEnvelope
 from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
+from .migrations import require_observation_schema
 from .repository import (
     ConversationNotFoundError,
     PersistenceError,
@@ -54,6 +55,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     database = Database(settings.database_url)
     await database.create_schema()
+    # ``create_all`` creates missing tables but cannot repair a table that
+    # already exists with a missing FK/column/index. Refuse startup here so a
+    # partial deployment is found before a child's live response reaches it.
+    async with database.engine.connect() as connection:
+        await connection.run_sync(require_observation_schema)
     gateway = ClaudeGateway(settings)
     repository = Repository(
         database,

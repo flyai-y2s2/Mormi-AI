@@ -74,6 +74,7 @@ class EngineTurnResult:
     analysis: UtteranceAnalysis
     turn: TurnContract
     runtime: SpeakerRuntimeAudit
+    accepted_claims: dict[str, str | int | float | bool]
 
 
 class ConversationGraphState(TypedDict, total=False):
@@ -173,11 +174,13 @@ class ConversationEngine:
 
         if final_values is None or "turn" not in final_values:
             raise RuntimeError("Conversation graph produced no final turn")
+        decision = PedagogicalDecision.model_validate(final_values["decision"])
         yield EngineTurnResult(
             state=SessionState.model_validate(final_values["session"]),
             analysis=UtteranceAnalysis.model_validate(final_values["analysis"]),
             turn=TurnContract.model_validate(final_values["turn"]),
             runtime=SpeakerRuntimeAudit.model_validate(final_values["runtime"]),
+            accepted_claims=decision.accepted_claims,
         )
 
     def initial_turn(self, state: SessionState) -> TurnContract:
@@ -593,6 +596,7 @@ class ConversationEngine:
                     analysis,
                     response.text,
                     previous_question,
+                    accepted_claims=understood_claims,
                 )
             next_step = task.step_for(
                 next_state.expression_level,
@@ -627,6 +631,7 @@ class ConversationEngine:
                 analysis=analysis,
                 previous_question=previous_question,
                 newly_verified=newly_verified,
+                accepted_claims=understood_claims,
             )
 
         # A colloquial answer can be meaningfully related while still being
@@ -673,6 +678,7 @@ class ConversationEngine:
                 analysis=analysis,
                 previous_question=previous_question,
                 newly_verified=understood_claims,
+                accepted_claims=understood_claims,
             )
 
         category = analysis.response_category
@@ -799,6 +805,8 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
         child_text: str | None,
         previous_question: str,
+        *,
+        accepted_claims: Mapping[str, str | int | float | bool],
     ) -> PedagogicalDecision:
         note, direct = self._note_from_provenance(state, task)
         if task.note_policy != "none":
@@ -840,6 +848,7 @@ class ConversationEngine:
             return PedagogicalDecision(
                 state=state,
                 dialogue_act="task_transition",
+                accepted_claims=dict(accepted_claims),
                 required_question=next_step.prompt,
                 input=next_step.input,
                 visual=next_task.base_visual,
@@ -870,6 +879,7 @@ class ConversationEngine:
         return PedagogicalDecision(
             state=state,
             dialogue_act="session_complete",
+            accepted_claims=dict(accepted_claims),
             required_question=None,
             input=InputContract(kind=InputKind.NONE),
             visual=VisualContract(type="success", data={"task": task.id}),
@@ -902,6 +912,7 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
         previous_question: str,
         newly_verified: Mapping[str, object] | None = None,
+        accepted_claims: Mapping[str, str | int | float | bool] | None = None,
     ) -> PedagogicalDecision:
         if state.hint_level is HintLevel.H3:
             state.expression_level = ExpressionLevel.L0
@@ -925,6 +936,7 @@ class ConversationEngine:
         return PedagogicalDecision(
             state=state,
             dialogue_act=dialogue_act,
+            accepted_claims=dict(accepted_claims or {}),
             required_question=step.prompt,
             input=step.input,
             visual=visual,
