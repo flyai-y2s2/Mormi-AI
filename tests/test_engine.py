@@ -316,3 +316,53 @@ async def test_help_request_lowers_expression_and_opens_help_card() -> None:
     assert next_state.hint_level is HintLevel.H1
     assert turn.help_card is not None
     assert turn.help_card.auto_open is True
+
+
+@pytest.mark.asyncio
+async def test_related_vague_policy_is_shared_by_cafe_reason_questions() -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.RELATED_VAGUE,
+        difficulty_class=DifficultyClass.EXPRESSION,
+        grounding_span="그냥 골라봐",
+        confidence=1,
+    )
+    engine = ConversationEngine(
+        FakeGateway([analysis]),  # type: ignore[arg-type]
+        show_internal_pedagogy=True,
+    )
+    state = SessionState(
+        learner_id=1,
+        scene="cafe",
+        scenario_id="cafe_queue_demo",
+        task_ids=["cafe_queue"],
+        task_start_levels={"cafe_queue": ExpressionLevel.L4},
+        scenario_data={"left_count": 3, "right_count": 5},
+        expression_level=ExpressionLevel.L4,
+        task_start_level=ExpressionLevel.L4,
+        verified_slots={
+            "left_count": 3,
+            "right_count": 5,
+            "final_choice": "left",
+        },
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="72f3901d-f57a-461f-a932-2d16a11b4859",
+            type="text",
+            text="그냥 골라봐",
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert next_state.vague_clarifications == 1
+    assert turn.help_card is None
+    assert "그냥 골라봐" in turn.mormi.text
+    assert "조금만 더 알려줄래" in turn.mormi.text

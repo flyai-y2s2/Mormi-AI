@@ -960,6 +960,112 @@ async def test_no_response_is_a_help_request_and_opens_the_first_help_card() -> 
     assert turn.help_card.auto_open is True
     assert turn.input.kind is InputKind.TEXT
     assert turn.status.value == "active"
+    assert "도움 카드가 나왔어" in turn.mormi.text
+    assert "도움 카드가 열렸네" not in turn.mormi.text
+    assert initial.mormi.text not in turn.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_related_vague_reply_gets_one_clarification_before_help_opens() -> None:
+    """A vague on-topic phrase is not silently turned into a help request."""
+
+    vague = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.RELATED_VAGUE,
+        difficulty_class=DifficultyClass.EXPRESSION,
+        grounding_span="잘 세봐",
+        confidence=1,
+    )
+    engine = ConversationEngine(
+        FakeGateway([vague, vague]),  # type: ignore[arg-type]
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": 3},
+    )
+    turn = engine.initial_turn(state)
+    state.current_turn_id = turn.turn_id
+
+    first_state, first_analysis, first_turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=turn.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="잘 세봐",
+        ),
+        turn.mormi.text,
+    )
+
+    assert first_analysis.response_category is ResponseCategory.RELATED_VAGUE
+    assert first_state.expression_level is ExpressionLevel.L4
+    assert first_state.hint_level is HintLevel.H0
+    assert first_state.vague_clarifications == 1
+    assert first_turn.help_card is None
+    assert "잘 세봐" in first_turn.mormi.text
+    assert "조금만 더 알려줄래" in first_turn.mormi.text
+    assert turn.mormi.text not in first_turn.mormi.text
+
+    second_state, _, second_turn = await engine.run_turn(
+        first_state,
+        ChildResponse(
+            turn_id=first_turn.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="잘 세봐",
+        ),
+        first_turn.mormi.text,
+    )
+
+    assert second_state.expression_level.rank < ExpressionLevel.L4.rank
+    assert second_state.hint_level is HintLevel.H1
+    assert second_state.vague_clarifications == 0
+    assert second_turn.help_card is not None
+    assert "카드" in second_turn.mormi.text
+    assert first_turn.mormi.text not in second_turn.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_concept_conflict_uses_safe_grounding_without_evaluating_child() -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        difficulty_class=DifficultyClass.CONCEPT,
+        grounding_span="빈칸도 같이 세면 돼",
+        confidence=1,
+    )
+    engine = ConversationEngine(
+        FakeGateway([analysis]),  # type: ignore[arg-type]
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": 3},
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="빈칸도 같이 세면 돼",
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.hint_level is HintLevel.H1
+    assert turn.help_card is not None
+    assert "빈칸도 같이 세면 돼" in turn.mormi.text
+    assert "아직 헷갈려" in turn.mormi.text
+    assert "틀렸" not in turn.mormi.text
 
 
 @pytest.mark.asyncio
@@ -1006,9 +1112,8 @@ async def test_repeated_no_response_walks_every_ladder_step_without_changing_pro
         assert turn.pedagogy is not None
         assert turn.pedagogy.expression_level is level
         assert turn.pedagogy.hint_level is hint
-        task = get_task(state.current_task_id, state.scenario_data)
-        current_question = task.step_for(level, state.verified_slots).prompt
-        assert current_question in turn.mormi.text
+        assert "도움 카드가 열렸네" not in turn.mormi.text
+        assert turn.mormi.text != ""
 
     assert state.status.value == "active"
 

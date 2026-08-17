@@ -226,6 +226,60 @@ def test_speaker_cannot_repeat_the_previous_line_verbatim() -> None:
     )
 
 
+def test_support_turn_cannot_prepend_copy_to_the_same_previous_question() -> None:
+    context = SpeakerContext(
+        dialogue_act="accept_help_request",
+        must_reframe=True,
+        previous_question="어떻게 세는지 알려주면 안 될까?",
+        required_question="어떻게 세는지 알려주면 안 될까?",
+        required_slot_ids=["tracking"],
+        required_slot_descriptions={"tracking": "빠뜨리지 않고 세는 방법"},
+        verification_policy=SpeakerVerificationPolicy.SEMANTIC,
+        fallback_text="오, 도움 카드가 나왔어! 이걸 보고 다시 알려줄래?",
+    )
+    output = SpeakerOutput(
+        text="도움 카드가 나왔네. 어떻게 세는지 알려주면 안 될까?",
+        dialogue_act=context.dialogue_act,
+        asked_slot_ids=["tracking"],
+    )
+
+    assert validate_speaker_output(output, context, speaker_guard()) is None
+
+
+def test_support_turn_semantic_verifier_requires_meaningful_reframing() -> None:
+    context = SpeakerContext(
+        dialogue_act="clarify_vague_response",
+        must_reframe=True,
+        previous_question="어떻게 세는지 알려주면 안 될까?",
+        required_question="어떻게 세는지 알려주면 안 될까?",
+        required_slot_ids=["tracking"],
+        verification_policy=SpeakerVerificationPolicy.SEMANTIC,
+        fallback_text="어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?",
+    )
+    output = SpeakerOutput(
+        text="어떻게 하는 건지 모르겠어... 조금만 더 알려줄래?",
+        dialogue_act=context.dialogue_act,
+        asked_slot_ids=["tracking"],
+    )
+    guard = speaker_guard()
+    verification = SpeakerVerification(
+        approved=True,
+        dialogue_act_preserved=True,
+        required_focus_preserved=True,
+        only_allowed_math_used=True,
+        child_not_evaluated=True,
+        character_consistent=True,
+        detected_dialogue_act=context.dialogue_act,
+        detected_asked_slot_ids=["tracking"],
+        question_evidence_span="조금만 더 알려줄래?",
+        reason_code="approved",
+    )
+
+    assert validate_speaker_verification(verification, context, guard, output) is False
+    approved = verification.model_copy(update={"meaningfully_reframed": True})
+    assert validate_speaker_verification(approved, context, guard, output) is True
+
+
 def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() -> None:
     menu_items = (
         CafeMenuItem(id="tea", name="차", price=2_000),
@@ -332,6 +386,10 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         assert method_contract["reviewed_examples"] == task.accepted_methods
         assert method_contract["help_card_route_is_not_the_only_correct_method"] is (
             task.help_method_policy == "open_methods"
+        )
+        assert any(
+            "related_vague" in instruction
+            for instruction in payload["instructions"]
         )
 
 

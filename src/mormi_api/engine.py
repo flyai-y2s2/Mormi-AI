@@ -27,6 +27,7 @@ from .schemas import (
     EntryStance,
     ExpressionLevel,
     HelpCardContract,
+    HelpCardEvent,
     HintLevel,
     InputContract,
     InputKind,
@@ -50,6 +51,7 @@ from .schemas import (
     SpeakerRuntimeAudit,
     SpeakerVerification,
     SpeakerVerificationPolicy,
+    SupportTrigger,
     TurnContract,
     UtteranceAnalysis,
     VisualContract,
@@ -279,7 +281,6 @@ class ConversationEngine:
         context = decision.speaker_context
         if decision.dialogue_act in {
             "unsafe_redirect",
-            "show_help_card",
             "joint_mode",
             # These two turns are also rendered beside a star-note update.
             # Their reviewed fallback deliberately contains no mathematical
@@ -577,6 +578,7 @@ class ConversationEngine:
         if (entry_active or open_followup_active or targeted_followup_active) and newly_verified:
             next_state.entry_phase = EntryPhase.RESOLVED
         if newly_verified:
+            next_state.vague_clarifications = 0
             self._record_note_provenance(
                 next_state,
                 task,
@@ -682,6 +684,68 @@ class ConversationEngine:
             )
 
         category = analysis.response_category
+        if category is ResponseCategory.RELATED_VAGUE:
+            if entry_active or open_followup_active or targeted_followup_active:
+                next_state.entry_phase = EntryPhase.RESOLVED
+            next_state.expression_failures += 1
+            # The first on-topic but vague reply gets one conversational
+            # clarification at the same L/H level.  It is not a request for
+            # conceptual help and must not open a card by itself.
+            first_clarification = next_state.vague_clarifications == 0
+            next_state.vague_clarifications += 1
+            help_event = HelpCardEvent.NONE
+            if not first_clarification:
+                next_state.vague_clarifications = 0
+                self._lower_until_visible_contract_changes(
+                    next_state,
+                    task,
+                    interpreted_step,
+                )
+                previous_hint = next_state.hint_level
+                if next_state.expression_level is ExpressionLevel.L0:
+                    next_state.hint_level = HintLevel.H3
+                elif next_state.hint_level is HintLevel.H0:
+                    next_state.hint_level = HintLevel.H1
+                help_event = self._help_card_event(
+                    previous_hint,
+                    next_state.hint_level,
+                )
+                next_state.task_max_hint = max_hint(
+                    next_state.task_max_hint,
+                    next_state.hint_level,
+                )
+            step = task.step_for(
+                next_state.expression_level,
+                next_state.verified_slots,
+            )
+            grounding = self._safe_grounding_for_step(
+                task,
+                next_state,
+                step,
+                response.text,
+                analysis,
+            )
+            return self._decision_for_current_step(
+                next_state,
+                task,
+                dialogue_act=(
+                    "clarify_vague_response"
+                    if first_clarification
+                    else "support_vague_response"
+                ),
+                fallback=self._support_transition_fallback(
+                    SupportTrigger.RELATED_VAGUE,
+                    help_event,
+                    grounding,
+                ),
+                child_text=response.text,
+                analysis=analysis,
+                previous_question=previous_question,
+                support_trigger=SupportTrigger.RELATED_VAGUE,
+                help_card_event=help_event,
+                must_reframe=True,
+            )
+
         if category in {
             ResponseCategory.EXPRESSION_BLOCK,
             ResponseCategory.NO_RESPONSE,
@@ -689,6 +753,7 @@ class ConversationEngine:
             if entry_active or open_followup_active or targeted_followup_active:
                 next_state.entry_phase = EntryPhase.RESOLVED
             next_state.expression_failures += 1
+            next_state.vague_clarifications = 0
             next_state.expression_level = next_state.expression_level.lower()
             return self._decision_for_current_step(
                 next_state,
@@ -698,13 +763,17 @@ class ConversationEngine:
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
+                support_trigger=SupportTrigger.EXPRESSION_BLOCK,
+                must_reframe=True,
             )
 
         if category is ResponseCategory.HELP_REQUEST:
             if entry_active or open_followup_active or targeted_followup_active:
                 next_state.entry_phase = EntryPhase.RESOLVED
             next_state.expression_failures += 1
+            next_state.vague_clarifications = 0
             next_state.expression_level = next_state.expression_level.lower()
+            previous_hint = next_state.hint_level
             if next_state.hint_level is HintLevel.H0:
                 next_state.hint_level = HintLevel.H1
             elif next_state.hint_level is HintLevel.H1:
@@ -719,20 +788,21 @@ class ConversationEngine:
             if joint_mode:
                 next_state.hint_level = HintLevel.H3
                 next_state.task_max_hint = HintLevel.H3
+            help_event = self._help_card_event(previous_hint, next_state.hint_level)
             decision = self._decision_for_current_step(
                 next_state,
                 task,
                 dialogue_act="joint_mode" if joint_mode else "accept_help_request",
-                fallback=self._preface_question(
-                    "도움 카드가 열렸네.",
-                    task.step_for(
-                        next_state.expression_level,
-                        next_state.verified_slots,
-                    ).prompt,
+                fallback=self._support_transition_fallback(
+                    SupportTrigger.EXPLICIT_HELP_REQUEST,
+                    help_event,
                 ),
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
+                support_trigger=SupportTrigger.EXPLICIT_HELP_REQUEST,
+                help_card_event=help_event,
+                must_reframe=not joint_mode,
             )
             # A help request changes the amount of support, never the problem
             # the child is looking at.  Hint visuals remain available inside
@@ -747,6 +817,8 @@ class ConversationEngine:
             if entry_active or open_followup_active or targeted_followup_active:
                 next_state.entry_phase = EntryPhase.RESOLVED
             next_state.concept_failures += 1
+            next_state.vague_clarifications = 0
+            previous_hint = next_state.hint_level
             next_state.task_max_hint = max_hint(
                 next_state.task_max_hint, next_state.hint_level.increase()
             )
@@ -760,20 +832,40 @@ class ConversationEngine:
                 next_state.expression_level = ExpressionLevel.L0
                 next_state.hint_level = HintLevel.H3
                 next_state.task_max_hint = HintLevel.H3
+            help_event = self._help_card_event(previous_hint, next_state.hint_level)
+            step = task.step_for(
+                next_state.expression_level,
+                next_state.verified_slots,
+            )
+            grounding = self._safe_grounding_for_step(
+                task,
+                next_state,
+                step,
+                response.text,
+                analysis,
+            )
+            support_trigger = (
+                SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT
+                if next_state.concept_failures > 1
+                else SupportTrigger.CONCEPTUAL_CONFLICT
+            )
             return self._decision_for_current_step(
                 next_state,
                 task,
                 dialogue_act="joint_mode"
                 if next_state.hint_level is HintLevel.H3
                 else "show_help_card",
-                fallback=(
-                    "도움 카드 순서대로 나와 같이 해볼까?"
-                    if next_state.hint_level is HintLevel.H3
-                    else "도움 카드가 열렸네. 같이 살펴볼까?"
+                fallback=self._support_transition_fallback(
+                    support_trigger,
+                    help_event,
+                    grounding,
                 ),
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
+                support_trigger=support_trigger,
+                help_card_event=help_event,
+                must_reframe=next_state.hint_level is not HintLevel.H3,
             )
 
         if category is ResponseCategory.RECOGNITION_OR_INPUT_ERROR:
@@ -829,6 +921,7 @@ class ConversationEngine:
             state.verified_slots = {}
             state.expression_failures = 0
             state.concept_failures = 0
+            state.vague_clarifications = 0
             state.child_note_evidence = {}
             state.supported_note_slots = []
             next_task = get_task(state.current_task_id, state.scenario_data)
@@ -913,6 +1006,9 @@ class ConversationEngine:
         previous_question: str,
         newly_verified: Mapping[str, object] | None = None,
         accepted_claims: Mapping[str, str | int | float | bool] | None = None,
+        support_trigger: SupportTrigger = SupportTrigger.NONE,
+        help_card_event: HelpCardEvent = HelpCardEvent.NONE,
+        must_reframe: bool = False,
     ) -> PedagogicalDecision:
         if state.hint_level is HintLevel.H3:
             state.expression_level = ExpressionLevel.L0
@@ -928,11 +1024,28 @@ class ConversationEngine:
         verified_facts = {
             slot: task.slots[slot].fact_sentence for slot in (newly_verified or {})
         }
-        if dialogue_act == "show_help_card":
-            fallback = self._preface_question("도움 카드가 열렸네.", step.prompt)
-        elif dialogue_act == "joint_mode":
-            fallback = self._preface_question("도움 카드 순서대로 보자.", step.prompt)
-        fallback = self._ensure_required_question(fallback, step.prompt)
+        # Support branches provide a complete, reason-specific fallback.
+        # Never overwrite it with a generic prefix + the previous catalog
+        # question; that was the source of robotic semantic repetition.
+        context = self._speaker_context(
+            task=task,
+            state=state,
+            dialogue_act=dialogue_act,
+            previous_question=previous_question,
+            required_question=step.prompt,
+            verified_facts=verified_facts,
+            analysis=analysis,
+            child_text=child_text,
+            fallback=self._fit_50(fallback),
+            support_trigger=support_trigger,
+            help_card_event=help_card_event,
+            must_reframe=must_reframe,
+        )
+        if (
+            not must_reframe
+            or context.verification_policy is SpeakerVerificationPolicy.DETERMINISTIC
+        ):
+            context.fallback_text = self._ensure_required_question(fallback, step.prompt)
         return PedagogicalDecision(
             state=state,
             dialogue_act=dialogue_act,
@@ -942,17 +1055,7 @@ class ConversationEngine:
             visual=visual,
             help_card=help_card,
             mood="thinking" if help_card else "listening",
-            speaker_context=self._speaker_context(
-                task=task,
-                state=state,
-                dialogue_act=dialogue_act,
-                previous_question=previous_question,
-                required_question=step.prompt,
-                verified_facts=verified_facts,
-                analysis=analysis,
-                child_text=child_text,
-                fallback=self._fit_50(fallback),
-            ),
+            speaker_context=context,
         )
 
     def _speaker_context(
@@ -967,6 +1070,9 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
         child_text: str | None,
         fallback: str,
+        support_trigger: SupportTrigger = SupportTrigger.NONE,
+        help_card_event: HelpCardEvent = HelpCardEvent.NONE,
+        must_reframe: bool = False,
     ) -> SpeakerContext:
         active_step = task.active_step(
             state.expression_level,
@@ -1011,6 +1117,9 @@ class ConversationEngine:
         )
         return SpeakerContext(
             dialogue_act=dialogue_act,
+            support_trigger=support_trigger,
+            help_card_event=help_card_event,
+            must_reframe=must_reframe,
             previous_question=previous_question,
             required_question=required_question,
             verified_facts=dict(verified_facts),
@@ -1076,7 +1185,12 @@ class ConversationEngine:
         semantic_dialogue_acts = {
             "acknowledge_partial",
             "acknowledge_unstructured_partial",
+            "accept_help_request",
+            "clarify_vague_response",
             "entry_rejection_followup",
+            "reduce_expression_load",
+            "show_help_card",
+            "support_vague_response",
         }
         if (
             has_child_grounding
@@ -1104,6 +1218,30 @@ class ConversationEngine:
         if not extract_numeric_values(span).issubset(allowed_numbers):
             return None
         return span
+
+    @classmethod
+    def _safe_grounding_for_step(
+        cls,
+        task: TaskDefinition,
+        state: SessionState,
+        step: StepDefinition,
+        child_text: str | None,
+        analysis: UtteranceAnalysis,
+    ) -> str | None:
+        fact_sentences = [
+            task.slots[slot].fact_sentence
+            for slot in state.verified_slots
+            if slot in task.slots
+        ]
+        visible_facts = [str(value) for value in task.visible_facts.values()]
+        allowed_numbers = extract_numeric_values(
+            " ".join([step.prompt, *fact_sentences, *visible_facts])
+        )
+        return cls._safe_grounding_span(
+            child_text,
+            analysis,
+            allowed_numbers=allowed_numbers,
+        )
 
     @staticmethod
     def _speaker_guard(
@@ -1305,6 +1443,60 @@ class ConversationEngine:
             visual_type=hint.visual_type,
             visual_data=hint.visual_data,
         )
+
+    @staticmethod
+    def _help_card_event(before: HintLevel, after: HintLevel) -> HelpCardEvent:
+        if after is HintLevel.H3:
+            return HelpCardEvent.JOINT
+        if before is HintLevel.H0 and after is not HintLevel.H0:
+            return HelpCardEvent.OPENED
+        if before is not after:
+            return HelpCardEvent.STRENGTHENED
+        return HelpCardEvent.NONE
+
+    @classmethod
+    def _support_transition_fallback(
+        cls,
+        trigger: SupportTrigger,
+        event: HelpCardEvent,
+        grounding: str | None = None,
+    ) -> str:
+        """Build a coherent reviewed line for each support reason."""
+
+        if event is HelpCardEvent.JOINT:
+            return "이제 도움 카드대로 나랑 같이 해보자."
+        if trigger is SupportTrigger.RELATED_VAGUE:
+            if event is HelpCardEvent.NONE:
+                if grounding:
+                    return cls._fit_50(
+                        f"그런데 ‘{grounding}’가 어떻게 하는 건지 모르겠어... "
+                        "조금만 더 알려줄래?"
+                    )
+                return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
+            if grounding:
+                return cls._fit_50(
+                    f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?"
+                )
+            return "카드에 도움이 나왔어. 이걸 보고 조금 더 알려줄래?"
+        if trigger is SupportTrigger.EXPLICIT_HELP_REQUEST:
+            if event is HelpCardEvent.OPENED:
+                return "오, 도움 카드가 나왔어! 이걸 보고 다시 알려줄래?"
+            if event is HelpCardEvent.STRENGTHENED:
+                return "카드에 다른 도움도 나왔어. 이걸로 다시 알려줄래?"
+            return "이걸 보고 나한테 다시 알려줄래?"
+        if trigger in {
+            SupportTrigger.CONCEPTUAL_CONFLICT,
+            SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT,
+        }:
+            if grounding:
+                return cls._fit_50(
+                    f"‘{grounding}’라는 거야? 나는 아직 헷갈려... "
+                    "카드를 보고 다시 알려줄래?"
+                )
+            if event is HelpCardEvent.STRENGTHENED:
+                return "나는 아직 헷갈려... 카드에 나온 다른 도움도 같이 볼까?"
+            return "나는 아직 헷갈려... 도움 카드를 보고 다시 알려줄래?"
+        return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
 
     @staticmethod
     def _visual_for(task: TaskDefinition, level: HintLevel) -> VisualContract:
