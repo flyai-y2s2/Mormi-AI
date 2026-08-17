@@ -384,8 +384,8 @@ class ClaudeGateway:
                 ),
                 (
                     "'차근차근 세어 봐'처럼 문제와 관련 있지만 아직 구체적이지 않은 표현은 "
-                    "grounding_span으로 보존할 수 있다. 그 자체를 완성된 method claim으로 "
-                    "부풀리지는 않는다."
+                    "related_vague로 분류하고 grounding_span으로 보존한다. 그 자체를 "
+                    "완성된 method claim이나 help_request로 부풀리지는 않는다."
                 ),
                 (
                     "grounding_span 속 수량·결론은 factual claim의 evidence_span으로도 "
@@ -437,6 +437,11 @@ grounding_span도 아이 원문에서 글자 그대로 복사하며, 자연스�
   stance와 근거 있는 슬롯을 모두 각각 추출한다.
 - wrong guess에 동의한 말은 오개념 동조이며 정답 claim으로 만들지 않는다.
 - unrelated_response는 현재 질문과 의미상 연결이 전혀 없는 말에만 쓴다.
+- related_vague는 질문 주제에는 맞지만 필요한 행동·관계·이유가 너무 추상적이라
+  claim을 만들 수 없는 말이다. 예: 방법을 물었을 때 '잘 해 봐', '차근차근',
+  '그냥 하면 돼'. 안전한 원문 구절을 grounding_span에 그대로 보존한다.
+- help_request는 '모르겠어', '도와줘'처럼 아이가 어려움이나 도움 필요를 직접
+  표현한 경우에만 쓴다. 관련 있지만 막연한 조언은 help_request가 아니다.
 - 아이가 자기 말로 일부 방법을 보여 주면 불완전해도 correct_partial이다.
 - 교과서 문장과 어휘가 다르다는 이유로 unrelated_response를 선택하지 않는다.
 - semantic_role=observation은 화면이나 생활 장면에서 직접 확인한 사실이다.
@@ -469,6 +474,13 @@ SPEAKER_SYSTEM = """
 
 의미 계약:
 - dialogue_act는 입력 값을 그대로 반환한다.
+- support_trigger는 왜 지원이 바뀌었는지, help_card_event는 카드가 실제로
+  열림·강화·공동 수행으로 바뀌었는지를 뜻한다. 카드가 바뀐 경우에만 언급한다.
+- related_vague이면 child_expression의 뜻을 자연스럽게 한 번 더 묻는다.
+- explicit_help_request이면 아이를 탓하지 않고 새로 나온 도움을 함께 보자고 한다.
+- conceptual_conflict이면 아이를 틀렸다고 평가하지 않고 모르미가 아직 헷갈린다고 한다.
+- must_reframe=true이면 직전 질문 앞에 말만 덧붙이지 말고, 새 지원과 아이 말에
+  이어지는 하나의 새로운 문장으로 바꾼다.
 - required_slot_ids에 해당하는 한 가지 초점만 묻고 asked_slot_ids에도 같은 값을 넣는다.
 - required_slot_descriptions와 question_intent의 의미를 바꾸거나 다른 질문을 추가하지 않는다.
 - verification_policy가 deterministic이면 required_question을 문구 그대로 포함한다.
@@ -506,6 +518,8 @@ SPEAKER_VERIFIER_SYSTEM = """
 - 아이를 맞다/틀리다 평가하거나 교사처럼 답을 입증시키지 않는다.
 - 모르미는 실제로 헷갈려 도움을 청하는 서툰 동생으로 들린다.
 - 아이 표현을 썼다면 candidate_output.used_child_expression_spans의 정확한 구절만 쓴다.
+- must_reframe=true이면 직전 질문에 접두어만 붙인 대사를 승인하지 않는다.
+  새 지원 방식이나 아이 표현을 반영해 의미 있게 다시 물어야 한다.
 
 근거 필드는 반드시 후보 원문에서 글자 그대로 복사한다.
 - detected_dialogue_act에는 후보가 실제 수행한 행동을 적는다.
@@ -653,6 +667,8 @@ def validate_speaker_output(
         normalized_previous = re.sub(r"\s+", "", context.previous_question)
         if normalized_text == normalized_previous:
             return None
+        if context.must_reframe and normalized_previous in normalized_text:
+            return None
     numbers = extract_numeric_values(text)
     allowed = {number.replace(",", "") for number in context.allowed_numbers}
     if any(number not in allowed for number in numbers):
@@ -716,6 +732,7 @@ def validate_speaker_verification(
         and verification.only_allowed_math_used
         and verification.child_not_evaluated
         and verification.character_consistent
+        and (not context.must_reframe or verification.meaningfully_reframed)
         and verification.detected_dialogue_act == context.dialogue_act
         and set(verification.detected_asked_slot_ids) == set(context.required_slot_ids)
         and question_span_valid

@@ -86,6 +86,10 @@ class ResponseType(StrEnum):
 class ResponseCategory(StrEnum):
     CORRECT_FULL = "correct_full"
     CORRECT_PARTIAL = "correct_partial"
+    # The response is on-topic but too underspecified to support a factual
+    # claim (for example, "잘 세봐" when a counting method was requested).
+    # It is neither a help request nor evidence of a misconception.
+    RELATED_VAGUE = "related_vague"
     EXPRESSION_BLOCK = "expression_block"
     CONCEPTUAL_ERROR = "conceptual_error"
     CONCEPTUAL_BLOCK = "conceptual_block"
@@ -94,6 +98,22 @@ class ResponseCategory(StrEnum):
     UNRELATED_RESPONSE = "unrelated_response"
     HELP_REQUEST = "help_request"
     SELF_CORRECTION = "self_correction"
+
+
+class SupportTrigger(StrEnum):
+    NONE = "none"
+    RELATED_VAGUE = "related_vague"
+    EXPLICIT_HELP_REQUEST = "explicit_help_request"
+    EXPRESSION_BLOCK = "expression_block"
+    CONCEPTUAL_CONFLICT = "conceptual_conflict"
+    REPEATED_CONCEPTUAL_CONFLICT = "repeated_conceptual_conflict"
+
+
+class HelpCardEvent(StrEnum):
+    NONE = "none"
+    OPENED = "opened"
+    STRENGTHENED = "strengthened"
+    JOINT = "joint"
 
 
 class EntryStance(StrEnum):
@@ -506,6 +526,10 @@ class SessionState(BaseModel):
     state_version: int = 1
     expression_failures: int = 0
     concept_failures: int = 0
+    # One clarification is allowed for a safe, related-but-vague response.
+    # A repeated vague response must change the visible support contract so
+    # the child can never be trapped in the same free-text question.
+    vague_clarifications: int = 0
     unrelated_count: int = 0
     task_start_level: ExpressionLevel | None = None
     task_max_hint: HintLevel = HintLevel.H0
@@ -556,6 +580,11 @@ class SpeakerGuardContract(BaseModel):
 
 class SpeakerContext(BaseModel):
     dialogue_act: str
+    support_trigger: SupportTrigger = SupportTrigger.NONE
+    help_card_event: HelpCardEvent = HelpCardEvent.NONE
+    # When true, adding a generic preface to the previous question is not a
+    # valid response. The speaker must acknowledge the transition and reframe.
+    must_reframe: bool = False
     previous_question: str | None = None
     required_question: str | None = None
     # Slot id -> reviewed fact sentence.  Missing-slot answers are never sent
@@ -607,6 +636,7 @@ class SpeakerVerification(BaseModel):
     only_allowed_math_used: bool = False
     child_not_evaluated: bool = False
     character_consistent: bool = False
+    meaningfully_reframed: bool = False
     detected_dialogue_act: str = ""
     detected_asked_slot_ids: list[str] = Field(default_factory=list)
     question_evidence_span: str = ""
