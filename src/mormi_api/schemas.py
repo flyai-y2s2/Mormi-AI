@@ -148,6 +148,26 @@ class DifficultyClass(StrEnum):
     UNKNOWN = "unknown"
 
 
+class TaskRelation(StrEnum):
+    """How a safe utterance relates to the current learning conversation."""
+
+    CURRENT_TASK = "current_task"
+    META_ABOUT_MORMI = "meta_about_mormi"
+    OFF_TOPIC = "off_topic"
+    UNKNOWN = "unknown"
+
+
+class InteractionIntent(StrEnum):
+    """Social intent kept separate from mathematical correctness."""
+
+    NONE = "none"
+    AUTHENTICITY_CHALLENGE = "authenticity_challenge"
+    PLAYFUL_TEASE = "playful_tease"
+    FRUSTRATION = "frustration"
+    REFUSAL = "refusal"
+    OTHER_SAFE_SOCIAL = "other_safe_social"
+
+
 class SafetyCategory(StrEnum):
     NORMAL = "normal"
     UNKNOWN = "unknown"
@@ -354,8 +374,7 @@ class SessionCreate(BaseModel):
             budget = self.cafe_context.budget
             assert budget is not None
             if not any(
-                item.id != self.cafe_context.mormi_menu_id
-                and mormi_price + item.price <= budget
+                item.id != self.cafe_context.mormi_menu_id and mormi_price + item.price <= budget
                 for item in self.cafe_context.menu_items
             ):
                 raise ValueError("budget must allow at least one child menu")
@@ -397,6 +416,10 @@ class UtteranceAnalysis(BaseModel):
     safety_category: SafetyCategory = SafetyCategory.UNKNOWN
     response_category: ResponseCategory = ResponseCategory.RECOGNITION_OR_INPUT_ERROR
     difficulty_class: DifficultyClass = DifficultyClass.UNKNOWN
+    # These fields describe the conversational job of a safe utterance.  They
+    # never verify a mathematical claim or change a ladder by themselves.
+    task_relation: TaskRelation = TaskRelation.UNKNOWN
+    interaction_intent: InteractionIntent = InteractionIntent.NONE
     entry_stance: EntryStance = EntryStance.NOT_APPLICABLE
     claims: list[SlotClaim] = Field(default_factory=list)
     misconception_tag: str | None = None
@@ -405,6 +428,9 @@ class UtteranceAnalysis(BaseModel):
     # for a natural acknowledgement or clarification.  The orchestrator checks
     # that it really occurs in the raw response before a speaker can quote it.
     grounding_span: str = ""
+    # A separate exact substring for a safe social bridge.  Keeping this out
+    # of grounding_span prevents a meta remark from becoming learning proof.
+    social_grounding_span: str = ""
     note_candidate: str = ""
     confidence: float = Field(default=0, ge=0, le=1)
 
@@ -580,6 +606,9 @@ class SpeakerGuardContract(BaseModel):
 
 class SpeakerContext(BaseModel):
     dialogue_act: str
+    task_relation: TaskRelation = TaskRelation.UNKNOWN
+    interaction_intent: InteractionIntent = InteractionIntent.NONE
+    interaction_repeat_count: int = 0
     support_trigger: SupportTrigger = SupportTrigger.NONE
     help_card_event: HelpCardEvent = HelpCardEvent.NONE
     # When true, adding a generic preface to the previous question is not a
@@ -596,9 +625,7 @@ class SpeakerContext(BaseModel):
     child_expression_mode: Literal["none", "quote_safe"] = "none"
     child_expression: str | None = None
     allowed_numbers: list[str] = Field(default_factory=list)
-    verification_policy: SpeakerVerificationPolicy = (
-        SpeakerVerificationPolicy.DETERMINISTIC
-    )
+    verification_policy: SpeakerVerificationPolicy = SpeakerVerificationPolicy.DETERMINISTIC
     fallback_text: str
 
 
@@ -637,6 +664,8 @@ class SpeakerVerification(BaseModel):
     child_not_evaluated: bool = False
     character_consistent: bool = False
     meaningfully_reframed: bool = False
+    interaction_intent_acknowledged: bool = False
+    task_returned_without_reward: bool = False
     detected_dialogue_act: str = ""
     detected_asked_slot_ids: list[str] = Field(default_factory=list)
     question_evidence_span: str = ""

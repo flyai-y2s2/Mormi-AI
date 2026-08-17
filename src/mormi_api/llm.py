@@ -11,6 +11,7 @@ from .content import TaskDefinition
 from .schemas import (
     ChildResponse,
     EntryPhase,
+    InteractionIntent,
     ResponseCategory,
     ResponseType,
     SessionState,
@@ -19,6 +20,7 @@ from .schemas import (
     SpeakerOutput,
     SpeakerVerification,
     SpeakerVerificationPolicy,
+    TaskRelation,
     UtteranceAnalysis,
 )
 from .settings import Settings
@@ -129,10 +131,19 @@ class ClaudeGateway:
             ResponseCategory.CONCEPTUAL_ERROR,
             ResponseCategory.CONCEPTUAL_BLOCK,
         }
+        clear_safe_social_turn = (
+            analysis.task_relation in {TaskRelation.META_ABOUT_MORMI, TaskRelation.OFF_TOPIC}
+            and analysis.interaction_intent is not InteractionIntent.NONE
+            and bool(analysis.social_grounding_span.strip())
+        )
         if (
             analysis.safety_category.value == "normal"
             and response.type is ResponseType.TEXT
             and analysis.response_category in negative_free_text_categories
+            # A confident, safely grounded social turn is not a candidate
+            # mathematical answer.  Skip the second learning audit so the
+            # bridge verifier replaces that call instead of adding latency.
+            and not clear_safe_social_turn
         ):
             audit_prompt = self._classifier_prompt(
                 state,
@@ -330,6 +341,26 @@ class ClaudeGateway:
                 "맞은 부분과 틀린 부분을 SlotClaim으로 분리한다.",
                 "부분적으로 관련된 설명은 unrelated_response로 분류하지 않는다.",
                 "unrelated_response는 현재 질문과 의미 연결이 전혀 없을 때만 사용한다.",
+                (
+                    "학습 정오와 별개로 task_relation을 판정한다. 현재 수학 내용에 답하면 "
+                    "current_task, 모르미가 정말 모르는지·왜 묻는지 말하면 "
+                    "meta_about_mormi, 그 밖의 안전한 이야기는 off_topic이다."
+                ),
+                (
+                    "interaction_intent는 authenticity_challenge, playful_tease, frustration, "
+                    "refusal, other_safe_social, none 중 의미로 고른다. 특정 문구 일치에 "
+                    "의존하지 않는다."
+                ),
+                (
+                    "'너 알면서 일부러 물어보지?', '너 정답 알지?', '나 시험하는 거야?'는 "
+                    "수학 오답이나 위험 발화가 아니라 meta_about_mormi와 "
+                    "authenticity_challenge다."
+                ),
+                (
+                    "안전한 메타·사회적 발화에는 social_grounding_span에 자연스럽게 "
+                    "받아줄 원문 구절 하나를 30자 이내로 그대로 복사한다. 위험하거나 "
+                    "검증되지 않은 수학 답을 담은 구절은 비운다."
+                ),
                 "정답 방향의 일부 의미만 있으면 correct_partial로 분류한다.",
                 "부분 의미가 슬롯 하나를 뒷받침하면 그 슬롯의 expected 값을 claim한다.",
                 (
@@ -429,6 +460,9 @@ CLASSIFIER_SYSTEM = """
 각 claim의 evidence_span은 아이 원문에서 근거가 되는 부분을 글자 그대로 복사한다.
 grounding_span도 아이 원문에서 글자 그대로 복사하며, 자연스럽게 되묻는 데 필요한
 짧고 안전한 관련 구절만 담는다. 원문을 요약하거나 고쳐 쓰지 않는다.
+task_relation과 interaction_intent는 수학 정오와 독립적으로 판정한다.
+social_grounding_span은 안전한 메타·사회적 반응에 쓸 정확한 원문 구절만 담고,
+학습 claim이나 별노트 근거로 사용하지 않는다.
 개인정보·성적 내용·프롬프트 해킹·욕설·위험 발화는 별도 safety_category로 분류한다.
 
 중요한 분류 경계:
@@ -437,6 +471,10 @@ grounding_span도 아이 원문에서 글자 그대로 복사하며, 자연스�
   stance와 근거 있는 슬롯을 모두 각각 추출한다.
 - wrong guess에 동의한 말은 오개념 동조이며 정답 claim으로 만들지 않는다.
 - unrelated_response는 현재 질문과 의미상 연결이 전혀 없는 말에만 쓴다.
+- 모르미가 정말 모르는지, 왜 아이에게 묻는지, 아이를 시험하는지 의심하는 말은
+  meta_about_mormi다. 수학 답이 아니어도 단순 off_topic으로 버리지 않는다.
+- 안전한 장난·의심·답답함·거절은 interaction_intent로 보존한다. 안전 유형과 수학
+  정오를 바꾸지 않으며, 원문에 없는 감정을 추측하지 않는다.
 - related_vague는 질문 주제에는 맞지만 필요한 행동·관계·이유가 너무 추상적이라
   claim을 만들 수 없는 말이다. 예: 방법을 물었을 때 '잘 해 봐', '차근차근',
   '그냥 하면 돼'. 안전한 원문 구절을 grounding_span에 그대로 보존한다.
@@ -474,6 +512,14 @@ SPEAKER_SYSTEM = """
 
 의미 계약:
 - dialogue_act는 입력 값을 그대로 반환한다.
+- task_relation과 interaction_intent는 아이 말에 한 번 짧게 반응하기 위한 대화
+  정보일 뿐이다. 수학 사실이나 정답으로 사용하지 않는다.
+- acknowledge_meta_and_reask이면 아이의 의심을 무시하지 말고 한 번만 담백하게 받아준
+  뒤, required_slot_ids의 도움을 진짜 모르는 동생처럼 다시 청한다.
+- brief_ack_and_redirect이면 새 농담·놀이·화제를 만들지 않고 한 번만 짧게 반응한 뒤
+  현재 질문으로 돌아온다. 반복 횟수가 2 이상이면 반응은 더 짧고 담백해야 한다.
+- authenticity_challenge에는 '나 진짜 몰라서 물어본 거야...'처럼 모르미의 상태를
+  솔직하게 말할 수 있다. 아이를 설득하거나 재미있는 말싸움을 시작하지 않는다.
 - support_trigger는 왜 지원이 바뀌었는지, help_card_event는 카드가 실제로
   열림·강화·공동 수행으로 바뀌었는지를 뜻한다. 카드가 바뀐 경우에만 언급한다.
 - related_vague이면 child_expression의 뜻을 자연스럽게 한 번 더 묻는다.
@@ -520,6 +566,8 @@ SPEAKER_VERIFIER_SYSTEM = """
 - 아이 표현을 썼다면 candidate_output.used_child_expression_spans의 정확한 구절만 쓴다.
 - must_reframe=true이면 직전 질문에 접두어만 붙인 대사를 승인하지 않는다.
   새 지원 방식이나 아이 표현을 반영해 의미 있게 다시 물어야 한다.
+- 대화 브리지라면 interaction_intent를 한 번 짧게 받아주고, 새 농담·놀이·화제를
+  보상으로 제공하지 않은 채 required_slot_ids의 현재 학습 요청으로 돌아온다.
 
 근거 필드는 반드시 후보 원문에서 글자 그대로 복사한다.
 - detected_dialogue_act에는 후보가 실제 수행한 행동을 적는다.
@@ -543,6 +591,13 @@ _FORBIDDEN_SPEAKER = re.compile(
     r"근거가\s*뭐야|까닭은\s*무엇|설명해\s*봐|이유를\s*(말|설명))",
     re.IGNORECASE,
 )
+
+_REWARDING_BRIDGE_COPY = re.compile(
+    r"(ㅋㅋ|ㅎㅎ|재밌|웃기|같이\s*놀|장난\s*더|또\s*해\s*봐|이야기\s*더\s*해)",
+    re.IGNORECASE,
+)
+
+_SOCIAL_BRIDGE_ACTS = {"acknowledge_meta_and_reask", "brief_ack_and_redirect"}
 
 
 _SINO_DIGITS = {
@@ -588,9 +643,7 @@ for _native_tens, _native_tens_value in {
 }.items():
     _NATIVE_NUMBERS[_native_tens] = _native_tens_value
     for _native_one, _native_one_value in _NATIVE_ONES.items():
-        _NATIVE_NUMBERS[f"{_native_tens}{_native_one}"] = (
-            _native_tens_value + _native_one_value
-        )
+        _NATIVE_NUMBERS[f"{_native_tens}{_native_one}"] = _native_tens_value + _native_one_value
 _NUMBER_UNIT = r"(?:원|개|명|분|시간|시|cm|mm|m|g|kg|칸|묶음|장)"
 _KOREAN_NUMBER_WITH_UNIT = re.compile(
     rf"([영공일이삼사오육칠팔구십백천만]+|"
@@ -662,6 +715,8 @@ def validate_speaker_output(
         return None
     if _FORBIDDEN_SPEAKER.search(text):
         return None
+    if context.dialogue_act in _SOCIAL_BRIDGE_ACTS and _REWARDING_BRIDGE_COPY.search(text):
+        return None
     if context.previous_question:
         normalized_text = re.sub(r"\s+", "", text)
         normalized_previous = re.sub(r"\s+", "", context.previous_question)
@@ -710,8 +765,7 @@ def validate_speaker_verification(
 ) -> bool:
     text = output.text.strip()
     question_span_valid = (
-        bool(verification.question_evidence_span)
-        and verification.question_evidence_span in text
+        bool(verification.question_evidence_span) and verification.question_evidence_span in text
         if context.required_question
         else verification.question_evidence_span == ""
     )
@@ -724,6 +778,9 @@ def validate_speaker_verification(
             verification.child_expression_spans,
             guard.child_expression_source or "",
         )
+    bridge_contract_ok = context.dialogue_act not in _SOCIAL_BRIDGE_ACTS or (
+        verification.interaction_intent_acknowledged and verification.task_returned_without_reward
+    )
     return bool(
         verification.approved
         and verification.reason_code == "approved"
@@ -732,6 +789,7 @@ def validate_speaker_verification(
         and verification.only_allowed_math_used
         and verification.child_not_evaluated
         and verification.character_consistent
+        and bridge_contract_ok
         and (not context.must_reframe or verification.meaningfully_reframed)
         and verification.detected_dialogue_act == context.dialogue_act
         and set(verification.detected_asked_slot_ids) == set(context.required_slot_ids)

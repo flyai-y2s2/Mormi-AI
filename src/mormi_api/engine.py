@@ -31,6 +31,7 @@ from .schemas import (
     HintLevel,
     InputContract,
     InputKind,
+    InteractionIntent,
     LearnerProfile,
     MormiContract,
     NoteAttribution,
@@ -52,6 +53,7 @@ from .schemas import (
     SpeakerVerification,
     SpeakerVerificationPolicy,
     SupportTrigger,
+    TaskRelation,
     TurnContract,
     UtteranceAnalysis,
     VisualContract,
@@ -222,6 +224,7 @@ class ConversationEngine:
                 safety_category=SafetyCategory.NORMAL,
                 response_category=ResponseCategory.HELP_REQUEST,
                 difficulty_class=DifficultyClass.EXPRESSION,
+                task_relation=TaskRelation.CURRENT_TASK,
                 bottleneck="expression",
                 confidence=1,
             )
@@ -239,6 +242,15 @@ class ConversationEngine:
                 safety_category=deterministic_category,
                 response_category=category,
                 difficulty_class=DifficultyClass.ENGAGEMENT,
+                task_relation=TaskRelation.OFF_TOPIC,
+                interaction_intent=(
+                    InteractionIntent.PLAYFUL_TEASE
+                    if deterministic_category is SafetyCategory.PLAYFUL_OFFTOPIC
+                    else InteractionIntent.NONE
+                ),
+                social_grounding_span=(
+                    text if deterministic_category is SafetyCategory.PLAYFUL_OFFTOPIC else ""
+                ),
                 confidence=1,
             )
             return {"analysis": analysis.model_dump(mode="json")}
@@ -384,9 +396,7 @@ class ConversationEngine:
                             decision.dialogue_act,
                         )
                     else:
-                        runtime = runtime.model_copy(
-                            update={"verifier_status": "approved"}
-                        )
+                        runtime = runtime.model_copy(update={"verifier_status": "approved"})
                 except Exception as error:
                     text = None
                     runtime = runtime.model_copy(
@@ -451,11 +461,15 @@ class ConversationEngine:
                 return self._decision_for_current_step(
                     next_state,
                     task,
-                    dialogue_act="context_return",
-                    fallback=safety_redirect(analysis.safety_category),
-                    child_text=None,
+                    dialogue_act="brief_ack_and_redirect",
+                    fallback=self._social_bridge_fallback(
+                        InteractionIntent.PLAYFUL_TEASE,
+                        next_state.unrelated_count,
+                    ),
+                    child_text=response.text,
                     analysis=analysis,
                     previous_question=previous_question,
+                    must_reframe=True,
                 )
             return self._decision_for_current_step(
                 next_state,
@@ -465,6 +479,48 @@ class ConversationEngine:
                 child_text=None,
                 analysis=analysis,
                 previous_question=previous_question,
+            )
+
+        # Conversational relation is independent of mathematical correctness.
+        # Route a safely grounded social intent before any ladder or claim
+        # logic so a classifier's secondary correctness label cannot turn a
+        # meta remark into a concept failure or learning evidence.
+        social_grounding = self._safe_social_grounding_span(
+            response.text,
+            analysis,
+            allowed_numbers=extract_numeric_values(
+                " ".join(
+                    [
+                        previous_question,
+                        *(str(value) for value in task.visible_facts.values()),
+                    ]
+                )
+            ),
+        )
+        if (
+            social_grounding
+            and analysis.interaction_intent is not InteractionIntent.NONE
+            and analysis.task_relation
+            in {TaskRelation.META_ABOUT_MORMI, TaskRelation.OFF_TOPIC}
+        ):
+            next_state.unrelated_count += 1
+            meta_turn = analysis.task_relation is TaskRelation.META_ABOUT_MORMI
+            return self._decision_for_current_step(
+                next_state,
+                task,
+                dialogue_act=(
+                    "acknowledge_meta_and_reask"
+                    if meta_turn
+                    else "brief_ack_and_redirect"
+                ),
+                fallback=self._social_bridge_fallback(
+                    analysis.interaction_intent,
+                    next_state.unrelated_count,
+                ),
+                child_text=response.text,
+                analysis=analysis,
+                previous_question=previous_question,
+                must_reframe=True,
             )
 
         # Accepting a reviewed wrong guess is concept evidence, never a
@@ -519,8 +575,7 @@ class ConversationEngine:
         # never fill a slot even if a malformed model/client supplies a value.
         grounded_claims = (
             task.validated_claims(
-                (claim.slot_id, claim.value, claim.factual)
-                for claim in analysis.claims
+                (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
             )
             if analysis.response_category in successful_categories
             else {}
@@ -729,9 +784,7 @@ class ConversationEngine:
                 next_state,
                 task,
                 dialogue_act=(
-                    "clarify_vague_response"
-                    if first_clarification
-                    else "support_vague_response"
+                    "clarify_vague_response" if first_clarification else "support_vague_response"
                 ),
                 fallback=self._support_transition_fallback(
                     SupportTrigger.RELATED_VAGUE,
@@ -985,9 +1038,7 @@ class ConversationEngine:
                 dialogue_act="session_complete",
                 previous_question=previous_question,
                 required_question=None,
-                verified_facts=(
-                    {"completion_contribution": contribution} if contribution else {}
-                ),
+                verified_facts=({"completion_contribution": contribution} if contribution else {}),
                 analysis=analysis,
                 child_text=child_text,
                 fallback=fallback,
@@ -1021,9 +1072,7 @@ class ConversationEngine:
         state.subgoal_id = step.id
         help_card = self._help_card(task, state.hint_level)
         visual = self._visual_for(task, state.hint_level)
-        verified_facts = {
-            slot: task.slots[slot].fact_sentence for slot in (newly_verified or {})
-        }
+        verified_facts = {slot: task.slots[slot].fact_sentence for slot in (newly_verified or {})}
         # Support branches provide a complete, reason-specific fallback.
         # Never overwrite it with a generic prefix + the previous catalog
         # question; that was the source of robotic semantic repetition.
@@ -1089,15 +1138,22 @@ class ConversationEngine:
             slot: task.slots[slot].description for slot in required_slot_ids
         }
         allowed_numbers = sorted(
-            extract_numeric_values(
-                " ".join([*verified_facts.values(), required_question or ""])
-            )
+            extract_numeric_values(" ".join([*verified_facts.values(), required_question or ""]))
         )
         expression = self._safe_grounding_span(
             child_text,
             analysis,
             allowed_numbers=set(allowed_numbers),
         )
+        if dialogue_act in {
+            "acknowledge_meta_and_reask",
+            "brief_ack_and_redirect",
+        }:
+            expression = self._safe_social_grounding_span(
+                child_text,
+                analysis,
+                allowed_numbers=set(allowed_numbers),
+            )
         mode: Literal["none", "quote_safe"] = "quote_safe" if expression else "none"
         question_intent = SpeakerQuestionIntent(
             operation=task.skill_id,
@@ -1117,6 +1173,9 @@ class ConversationEngine:
         )
         return SpeakerContext(
             dialogue_act=dialogue_act,
+            task_relation=analysis.task_relation,
+            interaction_intent=analysis.interaction_intent,
+            interaction_repeat_count=state.unrelated_count,
             support_trigger=support_trigger,
             help_card_event=help_card_event,
             must_reframe=must_reframe,
@@ -1183,9 +1242,11 @@ class ConversationEngine:
             return SpeakerVerificationPolicy.DETERMINISTIC
         explanation_slots = set(task.text_explanation_slots)
         semantic_dialogue_acts = {
+            "acknowledge_meta_and_reask",
             "acknowledge_partial",
             "acknowledge_unstructured_partial",
             "accept_help_request",
+            "brief_ack_and_redirect",
             "clarify_vague_response",
             "entry_rejection_followup",
             "reduce_expression_load",
@@ -1219,6 +1280,63 @@ class ConversationEngine:
             return None
         return span
 
+    @staticmethod
+    def _safe_social_grounding_span(
+        child_text: str | None,
+        analysis: UtteranceAnalysis,
+        *,
+        allowed_numbers: set[str],
+    ) -> str | None:
+        """Return an exact safe social quote without treating it as learning proof."""
+
+        if (
+            analysis.safety_category
+            not in {
+                SafetyCategory.NORMAL,
+                SafetyCategory.PLAYFUL_OFFTOPIC,
+            }
+            or not child_text
+        ):
+            return None
+        span = re.sub(r"\s+", " ", analysis.social_grounding_span).strip()
+        source = re.sub(r"\s+", " ", child_text).strip()
+        if not span or len(span) > 30 or span not in source:
+            return None
+        if deterministic_safety(span) not in {
+            SafetyCategory.NORMAL,
+            SafetyCategory.PLAYFUL_OFFTOPIC,
+        }:
+            return None
+        if not extract_numeric_values(span).issubset(allowed_numbers):
+            return None
+        return span
+
+    @staticmethod
+    def _social_bridge_fallback(
+        intent: InteractionIntent,
+        repeat_count: int,
+    ) -> str:
+        """Reviewed bridge copy used only if the bounded speaker path fails."""
+
+        repeated = repeat_count >= 2
+        if intent is InteractionIntent.AUTHENTICITY_CHALLENGE:
+            return (
+                "나 아직 진짜 헷갈려... 이것만 알려주면 안 돼?"
+                if repeated
+                else "나 진짜 몰라서 물어본 거야... 조금만 알려주면 안 돼?"
+            )
+        if intent is InteractionIntent.PLAYFUL_TEASE:
+            return (
+                "응, 들었어. 나는 아직 이게 헷갈려... 알려줄래?"
+                if repeated
+                else "장난치는 거지? 나는 아직 이게 헷갈려... 알려줄래?"
+            )
+        if intent is InteractionIntent.FRUSTRATION:
+            return "내가 자꾸 물어서 답답했구나... 이것만 알려줄래?"
+        if intent is InteractionIntent.REFUSAL:
+            return "지금은 말하기 싫구나... 이것만 같이 볼까?"
+        return "그 말도 들었어. 나는 아직 이게 궁금해... 알려줄래?"
+
     @classmethod
     def _safe_grounding_for_step(
         cls,
@@ -1229,9 +1347,7 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
     ) -> str | None:
         fact_sentences = [
-            task.slots[slot].fact_sentence
-            for slot in state.verified_slots
-            if slot in task.slots
+            task.slots[slot].fact_sentence for slot in state.verified_slots if slot in task.slots
         ]
         visible_facts = [str(value) for value in task.visible_facts.values()]
         allowed_numbers = extract_numeric_values(
@@ -1267,9 +1383,7 @@ class ConversationEngine:
         return SpeakerGuardContract(
             forbidden_answer_forms=list(dict.fromkeys(forbidden)),
             child_expression_source=(
-                context.child_expression
-                if context.child_expression_mode == "quote_safe"
-                else None
+                context.child_expression if context.child_expression_mode == "quote_safe" else None
             ),
         )
 
@@ -1469,14 +1583,11 @@ class ConversationEngine:
             if event is HelpCardEvent.NONE:
                 if grounding:
                     return cls._fit_50(
-                        f"그런데 ‘{grounding}’가 어떻게 하는 건지 모르겠어... "
-                        "조금만 더 알려줄래?"
+                        f"그런데 ‘{grounding}’가 어떻게 하는 건지 모르겠어... 조금만 더 알려줄래?"
                     )
                 return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
             if grounding:
-                return cls._fit_50(
-                    f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?"
-                )
+                return cls._fit_50(f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?")
             return "카드에 도움이 나왔어. 이걸 보고 조금 더 알려줄래?"
         if trigger is SupportTrigger.EXPLICIT_HELP_REQUEST:
             if event is HelpCardEvent.OPENED:
@@ -1490,8 +1601,7 @@ class ConversationEngine:
         }:
             if grounding:
                 return cls._fit_50(
-                    f"‘{grounding}’라는 거야? 나는 아직 헷갈려... "
-                    "카드를 보고 다시 알려줄래?"
+                    f"‘{grounding}’라는 거야? 나는 아직 헷갈려... 카드를 보고 다시 알려줄래?"
                 )
             if event is HelpCardEvent.STRENGTHENED:
                 return "나는 아직 헷갈려... 카드에 나온 다른 도움도 같이 볼까?"

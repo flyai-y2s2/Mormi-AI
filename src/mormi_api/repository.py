@@ -393,12 +393,15 @@ class Repository:
             if isinstance(input_payload, dict)
             else "not_collected"
         )
-        current_stage = str(
-            current_turn.turn_contract.get("stage_id", "not_collected")
-        )
+        current_stage = str(current_turn.turn_contract.get("stage_id", "not_collected"))
         safe_analysis = analysis.model_dump(
             mode="json",
-            exclude={"claims", "grounding_span", "note_candidate"},
+            exclude={
+                "claims",
+                "grounding_span",
+                "social_grounding_span",
+                "note_candidate",
+            },
         )
         help_card = next_turn.help_card
         return DialogueTurnObservationRecord(
@@ -449,8 +452,9 @@ class Repository:
                 "dialogue_policy": previous_state.dialogue_policy_version,
                 "dictionary_catalog": previous_state.dictionary_catalog_version,
                 "content": (
-                    previous_state.dictionary_snapshots[previous_state.current_task_id]
-                    .content_version
+                    previous_state.dictionary_snapshots[
+                        previous_state.current_task_id
+                    ].content_version
                     if previous_state.current_task_id in previous_state.dictionary_snapshots
                     else "not_collected"
                 ),
@@ -524,12 +528,10 @@ class Repository:
             )
             .join(
                 DialogueTurnObservationRecord,
-                DialogueTurnObservationRecord.observation_id
-                == DialogueClaimRecord.observation_id,
+                DialogueTurnObservationRecord.observation_id == DialogueClaimRecord.observation_id,
             )
             .where(
-                DialogueTurnObservationRecord.conversation_id
-                == previous_state.conversation_id,
+                DialogueTurnObservationRecord.conversation_id == previous_state.conversation_id,
                 DialogueTurnObservationRecord.task_index == previous_state.task_index,
                 DialogueClaimRecord.validation_status == "verified",
                 DialogueClaimRecord.newly_verified.is_(True),
@@ -566,20 +568,20 @@ class Repository:
         )
         if not task_finished:
             return None
-        statement = select(DialogueTurnObservationRecord).where(
-            DialogueTurnObservationRecord.conversation_id
-            == previous_state.conversation_id,
-            DialogueTurnObservationRecord.task_index == previous_state.task_index,
-        ).order_by(DialogueTurnObservationRecord.created_at.asc())
+        statement = (
+            select(DialogueTurnObservationRecord)
+            .where(
+                DialogueTurnObservationRecord.conversation_id == previous_state.conversation_id,
+                DialogueTurnObservationRecord.task_index == previous_state.task_index,
+            )
+            .order_by(DialogueTurnObservationRecord.created_at.asc())
+        )
         prior = list((await db.execute(statement)).scalars())
         evidence_ids = [record.observation_id for record in prior]
         if observation.observation_id not in evidence_ids:
             evidence_ids.append(observation.observation_id)
         evidence_records = list(prior)
-        if all(
-            record.observation_id != observation.observation_id
-            for record in evidence_records
-        ):
+        if all(record.observation_id != observation.observation_id for record in evidence_records):
             evidence_records.append(observation)
         bottlenecks = [
             {
@@ -592,9 +594,7 @@ class Repository:
         ]
         if note is not None:
             completion_outcome = (
-                "taught"
-                if note.attribution is NoteAttribution.CHILD
-                else "supported"
+                "taught" if note.attribution is NoteAttribution.CHILD else "supported"
             )
         elif next_state.completion_outcome is not None:
             completion_outcome = next_state.completion_outcome.value
@@ -772,11 +772,7 @@ class Repository:
                 ).scalars()
             )
             existing_ids = set(
-                (
-                    await db.execute(
-                        select(DialogueTurnObservationRecord.source_turn_id)
-                    )
-                ).scalars()
+                (await db.execute(select(DialogueTurnObservationRecord.source_turn_id))).scalars()
             )
             for record in answered:
                 if record.turn_id in existing_ids:
@@ -788,9 +784,7 @@ class Repository:
                 if record.result_turn_id:
                     result = (
                         await db.execute(
-                            select(TurnRecord).where(
-                                TurnRecord.turn_id == record.result_turn_id
-                            )
+                            select(TurnRecord).where(TurnRecord.turn_id == record.result_turn_id)
                         )
                     ).scalar_one_or_none()
                 current_contract = dict(record.turn_contract)
@@ -842,12 +836,8 @@ class Repository:
                     transition_reason="not_collected",
                     dialogue_act="not_collected",
                     help_card_shown=help_card is not None,
-                    help_card_level=(
-                        str(help_card.get("level")) if help_card else None
-                    ),
-                    help_card_auto_open=bool(
-                        help_card and help_card.get("auto_open", False)
-                    ),
+                    help_card_level=(str(help_card.get("level")) if help_card else None),
+                    help_card_auto_open=bool(help_card and help_card.get("auto_open", False)),
                     speaker_source="not_collected",
                     verifier_status="not_collected",
                     fallback_reason=None,
@@ -942,8 +932,7 @@ class Repository:
         evidence = state.child_note_evidence
         if evidence:
             payload["child_note_evidence"] = {
-                slot_id: self.cipher.encrypt(text)
-                for slot_id, text in evidence.items()
+                slot_id: self.cipher.encrypt(text) for slot_id, text in evidence.items()
             }
             payload[self._STATE_EVIDENCE_ENCRYPTED] = True
         return payload
@@ -956,8 +945,7 @@ class Repository:
         evidence = data.get("child_note_evidence")
         if encrypted and isinstance(evidence, dict):
             data["child_note_evidence"] = {
-                str(slot_id): self.cipher.decrypt(str(value))
-                for slot_id, value in evidence.items()
+                str(slot_id): self.cipher.decrypt(str(value)) for slot_id, value in evidence.items()
             }
         return SessionState.model_validate(data)
 

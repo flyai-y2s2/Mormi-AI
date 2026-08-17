@@ -44,6 +44,8 @@ class FakeGateway:
             child_not_evaluated=True,
             character_consistent=True,
             meaningfully_reframed=True,
+            interaction_intent_acknowledged=True,
+            task_returned_without_reward=True,
             detected_dialogue_act=context.dialogue_act,
             detected_asked_slot_ids=context.required_slot_ids,
             question_evidence_span=context.required_question or "",

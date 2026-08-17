@@ -23,6 +23,7 @@ from mormi_api.schemas import (
     ExpressionLevel,
     HintLevel,
     InputKind,
+    InteractionIntent,
     LearnerProfile,
     ResponseCategory,
     ResponseType,
@@ -32,6 +33,7 @@ from mormi_api.schemas import (
     SessionState,
     SkillProfile,
     SlotClaim,
+    TaskRelation,
     UtteranceAnalysis,
 )
 from mormi_api.security import TextCipher
@@ -869,6 +871,112 @@ async def test_unrelated_recovery_repeats_the_actionable_current_question() -> N
     assert turn.mormi.text.endswith(initial.mormi.text)
     assert "아까 질문으로 돌아갈까" not in turn.mormi.text
     assert turn.input == initial.input
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scene", [SceneType.HOME_TEACH, SceneType.CAFE])
+@pytest.mark.parametrize(
+    "reported_category",
+    [ResponseCategory.UNRELATED_RESPONSE, ResponseCategory.CONCEPTUAL_ERROR],
+)
+async def test_meta_challenge_gets_one_bounded_bridge_without_learning_mutation(
+    scene: SceneType,
+    reported_category: ResponseCategory,
+) -> None:
+    """A safe challenge is acknowledged, but never becomes learning evidence."""
+
+    child_text = "너 알면서 일부러 물어보지?"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=reported_category,
+        difficulty_class=DifficultyClass.ENGAGEMENT,
+        task_relation=TaskRelation.META_ABOUT_MORMI,
+        interaction_intent=InteractionIntent.AUTHENTICITY_CHALLENGE,
+        social_grounding_span=child_text,
+        confidence=0.96,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    if scene is SceneType.HOME_TEACH:
+        state = home_state(
+            "number-count",
+            expression_level=ExpressionLevel.L4,
+            hint_level=HintLevel.H0,
+        )
+    else:
+        state = SessionState(
+            learner_id=1,
+            scene=SceneType.CAFE,
+            scenario_id="cafe_queue",
+            task_ids=[QUEUE_TASK_ID],
+            task_start_levels={QUEUE_TASK_ID: ExpressionLevel.L4},
+            scenario_data={"left_count": 3, "right_count": 5},
+            expression_level=ExpressionLevel.L4,
+            task_start_level=ExpressionLevel.L4,
+            hint_level=HintLevel.H0,
+        )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+    original_slots = dict(state.verified_slots)
+    original_subgoal = state.subgoal_id
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.task_relation is TaskRelation.META_ABOUT_MORMI
+    assert next_state.unrelated_count == 1
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert next_state.subgoal_id == original_subgoal
+    assert next_state.verified_slots == original_slots
+    assert turn.input == initial.input
+    assert turn.visual == initial.visual
+    assert turn.note_update is None
+    assert turn.completion is None
+    assert "진짜 몰라서" in turn.mormi.text
+    assert turn.mormi.text != initial.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_deterministic_playful_text_returns_neutrally_without_progress() -> None:
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="메롱",
+        ),
+        initial.mormi.text,
+    )
+
+    assert analysis.safety_category is SafetyCategory.PLAYFUL_OFFTOPIC
+    assert analysis.interaction_intent is InteractionIntent.PLAYFUL_TEASE
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert next_state.verified_slots == {}
+    assert turn.input == initial.input
+    assert "장난치는 거지" in turn.mormi.text
+    assert turn.note_update is None
 
 
 def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None:

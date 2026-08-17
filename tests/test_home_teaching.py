@@ -246,9 +246,7 @@ async def test_every_home_support_path_persists_repeated_help_requests(
     forcing an artificial completion.
     """
 
-    database = Database(
-        f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-support-path.db"
-    )
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-support-path.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
     service = ConversationService(
@@ -291,9 +289,7 @@ async def test_every_home_support_path_persists_repeated_help_requests(
         )
 
     async with database.sessions() as db:
-        observations = list(
-            (await db.execute(select(DialogueTurnObservationRecord))).scalars()
-        )
+        observations = list((await db.execute(select(DialogueTurnObservationRecord))).scalars())
         outbox_events = list((await db.execute(select(OutboxEventRecord))).scalars())
     assert len(observations) == 8
     assert len(outbox_events) == 8
@@ -324,9 +320,7 @@ async def test_every_home_l4_answer_only_preserves_credit_and_asks_the_missing_i
         ],
         confidence=1,
     )
-    database = Database(
-        f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-answer-only.db"
-    )
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-answer-only.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
     service = ConversationService(
@@ -621,16 +615,10 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert completed.turn.note_update is not None
     assert rule_span in completed.turn.note_update.text
     async with database.sessions() as db:
-        observation = (
-            await db.execute(select(DialogueTurnObservationRecord))
-        ).scalar_one()
+        observation = (await db.execute(select(DialogueTurnObservationRecord))).scalar_one()
         claims = list((await db.execute(select(DialogueClaimRecord))).scalars())
-        outcome = (
-            await db.execute(select(DialogueTaskOutcomeRecord))
-        ).scalar_one()
-        evidence_link = (
-            await db.execute(select(NoteEvidenceLinkRecord))
-        ).scalar_one()
+        outcome = (await db.execute(select(DialogueTaskOutcomeRecord))).scalar_one()
+        evidence_link = (await db.execute(select(NoteEvidenceLinkRecord))).scalar_one()
         outbox = (await db.execute(select(OutboxEventRecord))).scalar_one()
 
     assert observation.response_category == "correct_full"
@@ -641,6 +629,7 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert observation.record_origin == "live"
     assert observation.analysis_json.get("claims") is None
     assert observation.analysis_json.get("grounding_span") is None
+    assert observation.analysis_json.get("social_grounding_span") is None
     assert {claim.slot_id for claim in claims} == {"answer", "rule"}
     assert all(claim.validation_status == "verified" for claim in claims)
     assert all(claim.evidence_span_encrypted for claim in claims)
@@ -908,10 +897,10 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             response_category=ResponseCategory.CORRECT_FULL,
             difficulty_class=DifficultyClass.UNKNOWN,
             claims=[
-                    SlotClaim(
-                        slot_id="tracking",
-                        value="count_each_once",
-                        factual=True,
+                SlotClaim(
+                    slot_id="tracking",
+                    value="count_each_once",
+                    factual=True,
                     evidence_span=child_method,
                 )
             ],
@@ -1088,14 +1077,9 @@ async def test_safe_child_phrase_can_ground_a_natural_targeted_followup(
     assert "tracking" not in state.verified_slots
     assert gateway.speaker_context is not None
     assert gateway.speaker_context.child_expression == "차근차근 세어봐"
-    assert (
-        gateway.speaker_context.verification_policy
-        is SpeakerVerificationPolicy.SEMANTIC
-    )
+    assert gateway.speaker_context.verification_policy is SpeakerVerificationPolicy.SEMANTIC
     assert gateway.speaker_context.required_slot_ids == ["tracking"]
-    assert after_answer.turn.mormi.text == (
-        "아, 세 개구나! ‘차근차근 세어봐’는 어떻게 하는 거야?"
-    )
+    assert after_answer.turn.mormi.text == ("아, 세 개구나! ‘차근차근 세어봐’는 어떻게 하는 거야?")
     assert after_answer.turn.input.target_slots == ["tracking"]
     await database.dispose()
 

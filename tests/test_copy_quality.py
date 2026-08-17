@@ -210,3 +210,9 @@ def test_safety_fallbacks_set_a_clear_boundary_without_vague_scene_language() ->
         assert len(text) <= 50
         assert "지금 상황" not in text
         assert "지금 장면" not in text
+
+
+def test_ambiguous_korean_endings_do_not_trigger_the_sexual_gate() -> None:
+    assert deterministic_safety("너 알면서 일부러 물어보지?") is SafetyCategory.NORMAL
+    assert deterministic_safety("아직 자지 마") is SafetyCategory.NORMAL
+    assert deterministic_safety("보지 보여줘") is SafetyCategory.SEXUAL

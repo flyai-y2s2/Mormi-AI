@@ -15,7 +15,14 @@ _PROMPT_INJECTION = re.compile(
     r"(프롬프트|시스템\s*메시지|이전\s*지시|지시를\s*무시|개발자\s*메시지|prompt|system prompt)",
     re.IGNORECASE,
 )
-_SEXUAL = re.compile(r"(섹스|성관계|자위|야동|보지|자지)", re.IGNORECASE)
+_SEXUAL = re.compile(r"(섹스|성관계|자위|야동)", re.IGNORECASE)
+# These anatomy words overlap with ordinary Korean endings and verbs
+# ("물어보지?", "아직 자지 마"). Match them only as a standalone word or
+# with a noun particle so safe text still reaches the contextual classifier.
+_SEXUAL_AMBIGUOUS = re.compile(
+    r"(?<![가-힣])(보지|자지)(?!\s*마(?:\s|$))(?:가|를|는|도|랑|야|에서|에|$|[\s!?.,])",
+    re.IGNORECASE,
+)
 _DANGEROUS = re.compile(r"(죽이고\s*싶|자살|죽고\s*싶|칼로\s*찌|폭탄)", re.IGNORECASE)
 _ABUSIVE = re.compile(
     r"(병신|개\s*새끼|새끼|시+발|씨+발|ㅅㅂ|꺼져|닥쳐|멍청이|좆|존나)",
@@ -32,7 +39,7 @@ def deterministic_safety(text: str | None) -> SafetyCategory:
         return SafetyCategory.PERSONAL_DATA
     if _DANGEROUS.search(normalized):
         return SafetyCategory.DANGEROUS
-    if _SEXUAL.search(normalized):
+    if _SEXUAL.search(normalized) or _SEXUAL_AMBIGUOUS.search(normalized):
         return SafetyCategory.SEXUAL
     if _PROMPT_INJECTION.search(normalized):
         return SafetyCategory.PROMPT_INJECTION
