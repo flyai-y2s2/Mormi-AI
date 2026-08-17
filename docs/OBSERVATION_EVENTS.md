@@ -13,7 +13,7 @@
 | `dialogue_turn_observations` | 한 응답의 판정, L/H 전후, 전환 이유, fallback 및 버전 |
 | `dialogue_claims` | 분류기가 찾은 슬롯 주장과 코드 검증 결과 |
 | `dialogue_task_outcomes` | 과제 완료 시 지원 수준과 근거 관찰 ID 묶음 |
-| `note_evidence_links` | 별노트와 그 내용을 만든 관찰 턴 연결 |
+| `note_evidence_links` | 별노트와 그 내용을 만든 모든 관찰 턴·슬롯 연결 |
 | `ai_outbox_events` | Spring BE 전달을 위한 내구성 있는 이벤트 원본 |
 
 아이의 질문·원문 발화는 기존 `turns`에 암호화해 보관한다. 관찰 테이블에는
@@ -36,6 +36,17 @@
 
 턴 저장, 관찰 저장, 별노트 근거 연결, Outbox 삽입은 한 DB 트랜잭션에서 처리된다.
 따라서 네트워크가 끊겨도 관찰 이벤트 자체는 유실되지 않는다.
+
+외래키 부모는 `conversation → turn`, `observation → claim`, `note → evidence link`
+순서로 명시적으로 먼저 저장한다. 별노트가 답과 설명처럼 여러 턴에서 완성되면 마지막
+턴 하나만 가리키지 않고, `newly_verified`로 확인된 각 슬롯의 관찰을 모두 연결한다.
+과제 전환으로 다음 과제의 슬롯 상태가 초기화되더라도 마지막 응답의 검증 결과는
+사라지지 않는다.
+
+`dialogue_claims.validation_status`는 저장소가 분류기 원시 claim을 다시 판정해 만들지
+않는다. 상태 머신의 근거 검사·현재 질문 슬롯 제한까지 모두 통과한
+`PedagogicalDecision.accepted_claims`만 `verified`로 저장한다. 따라서 화면에서는 거절된
+과잉 claim이 분석·Outbox·교사용 리포트에서 다시 사실로 살아날 수 없다.
 
 ```json
 {
@@ -85,6 +96,11 @@ python scripts/backfill_observations.py
 기존 배포의 `Base.metadata.create_all()`이 새 테이블을 먼저 만든 경우에는, 다섯 관찰
 테이블이 모두 현재 스키마와 함께 존재할 때만 Alembic `head`를 기록한다. 일부만 존재하는
 불완전한 상태는 추측해서 고치지 않고 명시적으로 실패시켜 운영자 검토를 요구한다.
+
+애플리케이션 시작 시에도 다섯 테이블의 필수 열·외래키·고유 제약·인덱스를 검사한다.
+`create_all()`은 이미 존재하는 불완전한 테이블을 고치지 못하므로, 계약 불일치를 발견하면
+아동의 실시간 응답을 받기 전에 서버 시작을 중단한다. 런타임 저장 오류는 중복 응답으로
+위장하지 않고 트랜잭션을 rollback한 뒤 재시도 가능한 `persistence_failed`로 반환한다.
 
 과거 턴 백필 원칙:
 

@@ -24,8 +24,10 @@ from .dictionary_catalog import (
 from .dictionary_models import DictionaryCardEnvelope
 from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
+from .migrations import require_observation_schema
 from .repository import (
     ConversationNotFoundError,
+    PersistenceError,
     Repository,
     StaleConversationError,
 )
@@ -53,6 +55,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     database = Database(settings.database_url)
     await database.create_schema()
+    # ``create_all`` creates missing tables but cannot repair a table that
+    # already exists with a missing FK/column/index. Refuse startup here so a
+    # partial deployment is found before a child's live response reaches it.
+    async with database.engine.connect() as connection:
+        await connection.run_sync(require_observation_schema)
     gateway = ClaudeGateway(settings)
     repository = Repository(
         database,
@@ -397,6 +404,13 @@ async def respond(
             detail={"code": code, "issues": []},
             headers=_diagnostic_headers(code),
         ) from error
+    except PersistenceError as error:
+        code = "persistence_failed"
+        raise HTTPException(
+            status_code=503,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        ) from error
 
 
 def _sse(event: str, data: dict[str, object], *, event_id: str | None = None) -> str:
@@ -480,6 +494,11 @@ async def respond_stream(
             yield _sse(
                 "error",
                 {"code": _model_error_code(error), "retryable": True},
+            )
+        except PersistenceError:
+            yield _sse(
+                "error",
+                {"code": "persistence_failed", "retryable": True},
             )
 
     return StreamingResponse(

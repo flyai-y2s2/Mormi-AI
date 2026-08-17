@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import timedelta
 
 from sqlalchemy import or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .content import get_task
@@ -50,6 +51,49 @@ class StaleConversationError(RuntimeError):
 
 class DuplicateResponseError(RuntimeError):
     pass
+
+
+class PersistenceError(RuntimeError):
+    """A turn could not be stored for a reason other than an idempotent replay."""
+
+
+_DUPLICATE_RESPONSE_CONSTRAINTS = {
+    "uq_conversation_response",
+    "uq_observation_conversation_response",
+    "uq_observation_source_turn",
+}
+
+
+def _is_duplicate_response_integrity_error(error: IntegrityError) -> bool:
+    """Return true only for constraints that represent the same answered turn.
+
+    SQLAlchemy wraps PostgreSQL/asyncpg errors differently across driver
+    versions, so inspect the exception chain as well as SQLite's stable message.
+    Other integrity failures must not masquerade as successful idempotent
+    replays.
+    """
+
+    current: BaseException | None = error.orig
+    seen: set[int] = set()
+    messages: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        constraint_name = getattr(current, "constraint_name", None)
+        if constraint_name in _DUPLICATE_RESPONSE_CONSTRAINTS:
+            return True
+        current = current.__cause__ or current.__context__
+
+    message = " ".join(messages)
+    sqlite_unique_fragments = (
+        "UNIQUE constraint failed: turns.conversation_id, turns.response_id",
+        "UNIQUE constraint failed: dialogue_turn_observations.conversation_id, "
+        "dialogue_turn_observations.response_id",
+        "UNIQUE constraint failed: dialogue_turn_observations.source_turn_id",
+    )
+    return any(fragment in message for fragment in sqlite_unique_fragments) or any(
+        constraint in message for constraint in _DUPLICATE_RESPONSE_CONSTRAINTS
+    )
 
 
 class Repository:
@@ -114,21 +158,24 @@ class Repository:
 
     async def create_conversation(self, state: SessionState, turn: TurnContract) -> None:
         async with self.database.sessions() as db:
-            db.add(
-                ConversationRecord(
-                    conversation_id=state.conversation_id,
-                    learner_id=state.learner_id,
-                    learning_session_id=state.learning_session_id,
-                    scene=state.scene.value,
-                    scenario_id=state.scenario_id,
-                    state_json=self._dump_state(state),
-                    state_version=state.state_version,
-                    status=state.status.value,
-                    raw_retention_until=state.raw_retention_until,
-                    created_at=state.created_at,
-                    updated_at=state.updated_at,
-                )
+            conversation = ConversationRecord(
+                conversation_id=state.conversation_id,
+                learner_id=state.learner_id,
+                learning_session_id=state.learning_session_id,
+                scene=state.scene.value,
+                scenario_id=state.scenario_id,
+                state_json=self._dump_state(state),
+                state_version=state.state_version,
+                status=state.status.value,
+                raw_retention_until=state.raw_retention_until,
+                created_at=state.created_at,
+                updated_at=state.updated_at,
             )
+            db.add(conversation)
+            # No ORM relationship is declared between these persistence
+            # records. Flush the FK parent explicitly instead of relying on
+            # incidental unit-of-work insertion order.
+            await db.flush([conversation])
             db.add(self._turn_record(state, turn))
             await db.commit()
 
@@ -210,6 +257,7 @@ class Repository:
         previous_question: str,
         note: NoteUpdate | None,
         runtime: SpeakerRuntimeAudit,
+        accepted_claims: Mapping[str, object],
     ) -> None:
         async with self.database.sessions() as db:
             conversation_record = await db.get(
@@ -255,27 +303,36 @@ class Repository:
             conversation_record.updated_at = next_state.updated_at
             db.add(self._turn_record(next_state, next_turn))
 
-            observation = self._observation_record(
-                previous_state=previous_state,
-                next_state=next_state,
-                current_turn=current_turn,
-                response=response,
-                analysis=analysis,
-                next_turn=next_turn,
-                runtime=runtime,
-            )
-            db.add(observation)
-            claim_records = self._claim_records(
-                observation.observation_id,
-                previous_state,
-                next_state,
-                analysis,
-            )
-            db.add_all(claim_records)
+            try:
+                observation = self._observation_record(
+                    previous_state=previous_state,
+                    next_state=next_state,
+                    current_turn=current_turn,
+                    response=response,
+                    analysis=analysis,
+                    next_turn=next_turn,
+                    runtime=runtime,
+                )
+                db.add(observation)
+                # Claims reference the observation. SQLAlchemy cannot infer
+                # mapper ordering without an ORM relationship, so persist the
+                # parent before constructing any child rows.
+                await db.flush([observation])
 
-            if note:
-                db.add(
-                    NoteRecord(
+                claim_records = self._claim_records(
+                    observation.observation_id,
+                    previous_state,
+                    analysis,
+                    accepted_claims,
+                )
+                db.add_all(claim_records)
+                # Note provenance can span several child turns. Persist the
+                # current claims before querying the complete task evidence.
+                if claim_records:
+                    await db.flush(claim_records)
+
+                if note:
+                    note_record = NoteRecord(
                         note_id=note.note_id,
                         conversation_id=next_state.conversation_id,
                         learner_id=next_state.learner_id,
@@ -285,35 +342,39 @@ class Repository:
                         evidence=note.evidence.value,
                         attribution_label=note.attribution_label,
                     )
-                )
-                db.add(
-                    NoteEvidenceLinkRecord(
-                        note_id=note.note_id,
-                        observation_id=observation.observation_id,
-                        source_slot_ids_json=sorted(
-                            set(next_state.verified_slots)
-                            - set(previous_state.verified_slots)
-                        ),
+                    db.add(note_record)
+                    # The evidence link has two FK parents: the already
+                    # flushed observation and this note.
+                    await db.flush([note_record])
+                    db.add_all(
+                        await self._note_evidence_link_records(
+                            db,
+                            previous_state=previous_state,
+                            note=note,
+                        )
                     )
+
+                task_outcome = await self._task_outcome_record(
+                    db,
+                    previous_state=previous_state,
+                    next_state=next_state,
+                    observation=observation,
+                    claims=claim_records,
+                    note=note,
                 )
+                if task_outcome:
+                    db.add(task_outcome)
 
-            task_outcome = await self._task_outcome_record(
-                db,
-                previous_state=previous_state,
-                next_state=next_state,
-                observation=observation,
-                analysis=analysis,
-                note=note,
-            )
-            if task_outcome:
-                db.add(task_outcome)
-
-            db.add(self._outbox_record(observation, claim_records, task_outcome))
-            try:
+                db.add(self._outbox_record(observation, claim_records, task_outcome))
                 await db.commit()
             except IntegrityError as error:
                 await db.rollback()
-                raise DuplicateResponseError(response_id) from error
+                if _is_duplicate_response_integrity_error(error):
+                    raise DuplicateResponseError(response_id) from error
+                raise PersistenceError("turn_persistence_failed") from error
+            except SQLAlchemyError as error:
+                await db.rollback()
+                raise PersistenceError("turn_persistence_failed") from error
 
     def _observation_record(
         self,
@@ -402,28 +463,20 @@ class Repository:
         self,
         observation_id: str,
         previous_state: SessionState,
-        next_state: SessionState,
         analysis: UtteranceAnalysis,
+        accepted_claims: Mapping[str, object],
     ) -> list[DialogueClaimRecord]:
         task = get_task(previous_state.current_task_id, previous_state.scenario_data)
-        successful = analysis.response_category in {
-            ResponseCategory.CORRECT_FULL,
-            ResponseCategory.CORRECT_PARTIAL,
-            ResponseCategory.SELF_CORRECTION,
-        }
-        newly_verified = {
-            slot_id
-            for slot_id, value in next_state.verified_slots.items()
-            if previous_state.verified_slots.get(slot_id) != value
-        }
         records: list[DialogueClaimRecord] = []
         for claim in analysis.claims:
             slot = task.slots.get(claim.slot_id)
             accepted = bool(
-                successful
-                and slot is not None
-                and claim.factual
-                and slot.accepts(claim.value)
+                slot is not None
+                and claim.slot_id in accepted_claims
+                and accepted_claims[claim.slot_id] == claim.value
+            )
+            advanced_state = bool(
+                accepted and previous_state.verified_slots.get(claim.slot_id) != claim.value
             )
             records.append(
                 DialogueClaimRecord(
@@ -441,10 +494,61 @@ class Repository:
                         if previous_state.raw_storage_enabled and claim.evidence_span
                         else None
                     ),
-                    newly_verified=claim.slot_id in newly_verified,
+                    newly_verified=advanced_state,
                 )
             )
         return records
+
+    async def _note_evidence_link_records(
+        self,
+        db: AsyncSession,
+        *,
+        previous_state: SessionState,
+        note: NoteUpdate,
+    ) -> list[NoteEvidenceLinkRecord]:
+        """Link a note to every verified task turn that supplied its slots.
+
+        A note may combine an answer from one turn with a method from a later
+        turn. Linking only the completion turn loses that provenance and can
+        make a teacher-facing report cite the wrong child response.
+        """
+
+        task = get_task(previous_state.current_task_id, previous_state.scenario_data)
+        note_slots = set(task.effective_note_slots)
+        if not note_slots:
+            return []
+        statement = (
+            select(
+                DialogueClaimRecord.observation_id,
+                DialogueClaimRecord.slot_id,
+            )
+            .join(
+                DialogueTurnObservationRecord,
+                DialogueTurnObservationRecord.observation_id
+                == DialogueClaimRecord.observation_id,
+            )
+            .where(
+                DialogueTurnObservationRecord.conversation_id
+                == previous_state.conversation_id,
+                DialogueTurnObservationRecord.task_index == previous_state.task_index,
+                DialogueClaimRecord.validation_status == "verified",
+                DialogueClaimRecord.newly_verified.is_(True),
+                DialogueClaimRecord.slot_id.in_(note_slots),
+            )
+        )
+        slots_by_observation: dict[str, set[str]] = {}
+        for observation_id, slot_id in (await db.execute(statement)).all():
+            slots_by_observation.setdefault(observation_id, set()).add(slot_id)
+        if not slots_by_observation:
+            raise PersistenceError("note_evidence_missing")
+        return [
+            NoteEvidenceLinkRecord(
+                note_id=note.note_id,
+                observation_id=observation_id,
+                source_slot_ids_json=sorted(slot_ids),
+            )
+            for observation_id, slot_ids in sorted(slots_by_observation.items())
+        ]
 
     async def _task_outcome_record(
         self,
@@ -453,7 +557,7 @@ class Repository:
         previous_state: SessionState,
         next_state: SessionState,
         observation: DialogueTurnObservationRecord,
-        analysis: UtteranceAnalysis,
+        claims: list[DialogueClaimRecord],
         note: NoteUpdate | None,
     ) -> DialogueTaskOutcomeRecord | None:
         task_finished = (
@@ -503,16 +607,14 @@ class Repository:
         if next_state.task_index == previous_state.task_index:
             verified_slots.update(next_state.verified_slots)
         else:
-            task = get_task(previous_state.current_task_id, previous_state.scenario_data)
-            for claim in analysis.claims:
-                slot = task.slots.get(claim.slot_id)
-                if (
-                    slot
-                    and claim.factual
-                    and claim.value is not None
-                    and slot.accepts(claim.value)
-                ):
-                    verified_slots[claim.slot_id] = claim.value
+            # The next task starts with a fresh ``verified_slots`` mapping.
+            # Reconstruct only from claims that already passed the same
+            # deterministic acceptance gate used by persistence and outbox;
+            # raw classifier claims must never become report evidence merely
+            # because a task transition happened.
+            for claim in claims:
+                if claim.validation_status == "verified" and claim.value_json is not None:
+                    verified_slots[claim.slot_id] = claim.value_json
         return DialogueTaskOutcomeRecord(
             outcome_id=new_id("task_outcome"),
             conversation_id=previous_state.conversation_id,

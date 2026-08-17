@@ -18,7 +18,7 @@ from .engine import (
     select_start_level,
     update_skill_profile,
 )
-from .repository import DuplicateResponseError, Repository
+from .repository import DuplicateResponseError, PersistenceError, Repository
 from .schemas import (
     ChildResponse,
     EntryPhase,
@@ -228,8 +228,9 @@ class ConversationService:
                 previous_question=active_turn.mormi.text,
                 note=next_turn.note_update,
                 runtime=result.runtime,
+                accepted_claims=result.accepted_claims,
             )
-        except DuplicateResponseError:
+        except DuplicateResponseError as error:
             prior = await self.repository.response_exists(conversation_id, response_id)
             if prior:
                 yield ConversationStreamEvent(
@@ -238,7 +239,11 @@ class ConversationService:
                     replayed=True,
                 )
                 return
-            raise
+            # A uniqueness conflict without a replayable result means the DB
+            # is inconsistent (for example, an orphaned observation from a
+            # manual operation). Do not leak an unclassified 500 or pretend
+            # the child's response succeeded.
+            raise PersistenceError("duplicate_response_result_missing") from error
 
         if next_turn.note_update:
             profile = await self.repository.get_profile(state.learner_id)

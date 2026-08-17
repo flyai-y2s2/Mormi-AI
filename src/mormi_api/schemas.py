@@ -576,6 +576,10 @@ class SpeakerContext(BaseModel):
 class PedagogicalDecision(BaseModel):
     state: SessionState
     dialogue_act: str
+    # Canonical claims that the deterministic engine actually accepted from
+    # this response. Persistence must use this decision output rather than
+    # re-validating the classifier's raw claims with a weaker rule.
+    accepted_claims: dict[str, str | int | float | bool] = Field(default_factory=dict)
     required_question: str | None
     input: InputContract
     visual: VisualContract
