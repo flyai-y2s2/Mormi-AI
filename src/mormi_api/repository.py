@@ -4,13 +4,20 @@ from datetime import timedelta
 
 from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from .content import get_task
 from .db import (
     ConversationRecord,
     Database,
     DataMigrationRecord,
+    DialogueClaimRecord,
+    DialogueTaskOutcomeRecord,
+    DialogueTurnObservationRecord,
     LearnerProfileRecord,
+    NoteEvidenceLinkRecord,
     NoteRecord,
+    OutboxEventRecord,
     PracticeResultRecord,
     TurnRecord,
 )
@@ -21,10 +28,13 @@ from .schemas import (
     NoteEvidence,
     NoteUpdate,
     PracticeResult,
+    ResponseCategory,
     RetentionPolicy,
     SessionState,
+    SpeakerRuntimeAudit,
     TurnContract,
     UtteranceAnalysis,
+    new_id,
     utc_now,
 )
 from .security import TextCipher
@@ -52,10 +62,14 @@ class Repository:
         cipher: TextCipher,
         *,
         idempotency_retention_days: int = 30,
+        classifier_model: str = "not_collected",
+        speaker_model: str = "not_collected",
     ) -> None:
         self.database = database
         self.cipher = cipher
         self.idempotency_retention_days = idempotency_retention_days
+        self.classifier_model = classifier_model
+        self.speaker_model = speaker_model
 
     async def save_practice_summary(self, summary: PracticeResult) -> None:
         success_rate = summary.success_rate or 0
@@ -195,6 +209,7 @@ class Repository:
         next_turn: TurnContract,
         previous_question: str,
         note: NoteUpdate | None,
+        runtime: SpeakerRuntimeAudit,
     ) -> None:
         async with self.database.sessions() as db:
             conversation_record = await db.get(
@@ -240,6 +255,24 @@ class Repository:
             conversation_record.updated_at = next_state.updated_at
             db.add(self._turn_record(next_state, next_turn))
 
+            observation = self._observation_record(
+                previous_state=previous_state,
+                next_state=next_state,
+                current_turn=current_turn,
+                response=response,
+                analysis=analysis,
+                next_turn=next_turn,
+                runtime=runtime,
+            )
+            db.add(observation)
+            claim_records = self._claim_records(
+                observation.observation_id,
+                previous_state,
+                next_state,
+                analysis,
+            )
+            db.add_all(claim_records)
+
             if note:
                 db.add(
                     NoteRecord(
@@ -253,11 +286,336 @@ class Repository:
                         attribution_label=note.attribution_label,
                     )
                 )
+                db.add(
+                    NoteEvidenceLinkRecord(
+                        note_id=note.note_id,
+                        observation_id=observation.observation_id,
+                        source_slot_ids_json=sorted(
+                            set(next_state.verified_slots)
+                            - set(previous_state.verified_slots)
+                        ),
+                    )
+                )
+
+            task_outcome = await self._task_outcome_record(
+                db,
+                previous_state=previous_state,
+                next_state=next_state,
+                observation=observation,
+                analysis=analysis,
+                note=note,
+            )
+            if task_outcome:
+                db.add(task_outcome)
+
+            db.add(self._outbox_record(observation, claim_records, task_outcome))
             try:
                 await db.commit()
             except IntegrityError as error:
                 await db.rollback()
                 raise DuplicateResponseError(response_id) from error
+
+    def _observation_record(
+        self,
+        *,
+        previous_state: SessionState,
+        next_state: SessionState,
+        current_turn: TurnRecord,
+        response: ChildResponse,
+        analysis: UtteranceAnalysis,
+        next_turn: TurnContract,
+        runtime: SpeakerRuntimeAudit,
+    ) -> DialogueTurnObservationRecord:
+        input_payload = current_turn.turn_contract.get("input", {})
+        input_kind = (
+            str(input_payload.get("kind", "not_collected"))
+            if isinstance(input_payload, dict)
+            else "not_collected"
+        )
+        current_stage = str(
+            current_turn.turn_contract.get("stage_id", "not_collected")
+        )
+        safe_analysis = analysis.model_dump(
+            mode="json",
+            exclude={"claims", "grounding_span", "note_candidate"},
+        )
+        help_card = next_turn.help_card
+        return DialogueTurnObservationRecord(
+            observation_id=new_id("observation"),
+            conversation_id=previous_state.conversation_id,
+            learner_id=previous_state.learner_id,
+            learning_session_id=previous_state.learning_session_id,
+            scene=previous_state.scene.value,
+            scenario_id=previous_state.scenario_id,
+            task_id=previous_state.current_task_id,
+            stage_id=current_stage,
+            task_index=previous_state.task_index,
+            subgoal_id=previous_state.subgoal_id,
+            source_turn_id=current_turn.turn_id,
+            result_turn_id=next_turn.turn_id,
+            response_id=str(response.response_id),
+            response_type=response.type.value,
+            input_kind=input_kind,
+            response_category=analysis.response_category.value,
+            difficulty_class=analysis.difficulty_class.value,
+            concept_result=self._concept_result(analysis.response_category),
+            safety_category=analysis.safety_category.value,
+            misconception_tag=analysis.misconception_tag,
+            bottleneck=analysis.bottleneck or "unknown",
+            classifier_confidence=analysis.confidence,
+            expression_before=previous_state.expression_level.value,
+            expression_after=next_state.expression_level.value,
+            hint_before=previous_state.hint_level.value,
+            hint_after=next_state.hint_level.value,
+            transition_reason=runtime.dialogue_act,
+            dialogue_act=runtime.dialogue_act,
+            help_card_shown=help_card is not None,
+            help_card_level=help_card.level.value if help_card else None,
+            help_card_auto_open=bool(help_card and help_card.auto_open),
+            speaker_source=runtime.speaker_source,
+            verifier_status=runtime.verifier_status,
+            fallback_reason=runtime.fallback_reason,
+            completion_outcome=(
+                next_state.completion_outcome.value
+                if next_state.completion_outcome is not None
+                else None
+            ),
+            record_origin="live",
+            analysis_json=safe_analysis,
+            runtime_json=runtime.model_dump(mode="json"),
+            versions_json={
+                "observation_schema": 1,
+                "dialogue_policy": previous_state.dialogue_policy_version,
+                "dictionary_catalog": previous_state.dictionary_catalog_version,
+                "content": (
+                    previous_state.dictionary_snapshots[previous_state.current_task_id]
+                    .content_version
+                    if previous_state.current_task_id in previous_state.dictionary_snapshots
+                    else "not_collected"
+                ),
+                "classifier_model": self.classifier_model,
+                "speaker_model": self.speaker_model,
+            },
+        )
+
+    def _claim_records(
+        self,
+        observation_id: str,
+        previous_state: SessionState,
+        next_state: SessionState,
+        analysis: UtteranceAnalysis,
+    ) -> list[DialogueClaimRecord]:
+        task = get_task(previous_state.current_task_id, previous_state.scenario_data)
+        successful = analysis.response_category in {
+            ResponseCategory.CORRECT_FULL,
+            ResponseCategory.CORRECT_PARTIAL,
+            ResponseCategory.SELF_CORRECTION,
+        }
+        newly_verified = {
+            slot_id
+            for slot_id, value in next_state.verified_slots.items()
+            if previous_state.verified_slots.get(slot_id) != value
+        }
+        records: list[DialogueClaimRecord] = []
+        for claim in analysis.claims:
+            slot = task.slots.get(claim.slot_id)
+            accepted = bool(
+                successful
+                and slot is not None
+                and claim.factual
+                and slot.accepts(claim.value)
+            )
+            records.append(
+                DialogueClaimRecord(
+                    observation_id=observation_id,
+                    slot_id=claim.slot_id,
+                    semantic_role=slot.semantic_role if slot else "not_collected",
+                    # Only reviewed canonical values are analytics-safe. A
+                    # rejected model claim can contain arbitrary child text;
+                    # its evidence remains available only in encrypted form.
+                    value_json=claim.value if accepted else None,
+                    factual=claim.factual,
+                    validation_status="verified" if accepted else "rejected",
+                    evidence_span_encrypted=(
+                        self.cipher.encrypt(claim.evidence_span)
+                        if previous_state.raw_storage_enabled and claim.evidence_span
+                        else None
+                    ),
+                    newly_verified=claim.slot_id in newly_verified,
+                )
+            )
+        return records
+
+    async def _task_outcome_record(
+        self,
+        db: AsyncSession,
+        *,
+        previous_state: SessionState,
+        next_state: SessionState,
+        observation: DialogueTurnObservationRecord,
+        analysis: UtteranceAnalysis,
+        note: NoteUpdate | None,
+    ) -> DialogueTaskOutcomeRecord | None:
+        task_finished = (
+            next_state.status.value == "completed"
+            or next_state.task_index != previous_state.task_index
+        )
+        if not task_finished:
+            return None
+        statement = select(DialogueTurnObservationRecord).where(
+            DialogueTurnObservationRecord.conversation_id
+            == previous_state.conversation_id,
+            DialogueTurnObservationRecord.task_index == previous_state.task_index,
+        ).order_by(DialogueTurnObservationRecord.created_at.asc())
+        prior = list((await db.execute(statement)).scalars())
+        evidence_ids = [record.observation_id for record in prior]
+        if observation.observation_id not in evidence_ids:
+            evidence_ids.append(observation.observation_id)
+        evidence_records = list(prior)
+        if all(
+            record.observation_id != observation.observation_id
+            for record in evidence_records
+        ):
+            evidence_records.append(observation)
+        bottlenecks = [
+            {
+                "observation_id": record.observation_id,
+                "value": record.bottleneck,
+                "confidence": record.classifier_confidence,
+            }
+            for record in evidence_records
+            if record.bottleneck not in {"", "unknown", "not_collected"}
+        ]
+        if note is not None:
+            completion_outcome = (
+                "taught"
+                if note.attribution is NoteAttribution.CHILD
+                else "supported"
+            )
+        elif next_state.completion_outcome is not None:
+            completion_outcome = next_state.completion_outcome.value
+        else:
+            # A missing note is not evidence of independent teaching. Some
+            # tasks intentionally have no note policy, so keep the result
+            # explicitly unknown instead of inflating it to ``taught``.
+            completion_outcome = "not_collected"
+        verified_slots = dict(previous_state.verified_slots)
+        if next_state.task_index == previous_state.task_index:
+            verified_slots.update(next_state.verified_slots)
+        else:
+            task = get_task(previous_state.current_task_id, previous_state.scenario_data)
+            for claim in analysis.claims:
+                slot = task.slots.get(claim.slot_id)
+                if (
+                    slot
+                    and claim.factual
+                    and claim.value is not None
+                    and slot.accepts(claim.value)
+                ):
+                    verified_slots[claim.slot_id] = claim.value
+        return DialogueTaskOutcomeRecord(
+            outcome_id=new_id("task_outcome"),
+            conversation_id=previous_state.conversation_id,
+            learner_id=previous_state.learner_id,
+            learning_session_id=previous_state.learning_session_id,
+            scene=previous_state.scene.value,
+            scenario_id=previous_state.scenario_id,
+            task_id=previous_state.current_task_id,
+            task_index=previous_state.task_index,
+            start_expression_level=(
+                previous_state.task_start_level or previous_state.expression_level
+            ).value,
+            end_expression_level=previous_state.expression_level.value,
+            start_hint_level=(prior[0] if prior else observation).hint_before,
+            max_hint_level=max(
+                previous_state.task_max_hint.value,
+                observation.hint_after,
+            ),
+            completion_outcome=completion_outcome,
+            verified_slots_json=verified_slots,
+            bottleneck_candidates_json=bottlenecks,
+            evidence_observation_ids_json=evidence_ids,
+            note_id=note.note_id if note else None,
+            record_origin="live",
+        )
+
+    @staticmethod
+    def _concept_result(category: ResponseCategory) -> str:
+        if category in {ResponseCategory.CORRECT_FULL, ResponseCategory.SELF_CORRECTION}:
+            return "correct_full"
+        if category is ResponseCategory.CORRECT_PARTIAL:
+            return "correct_partial"
+        if category in {
+            ResponseCategory.CONCEPTUAL_ERROR,
+            ResponseCategory.CONCEPTUAL_BLOCK,
+        }:
+            return "incorrect"
+        return "not_assessed"
+
+    @staticmethod
+    def _outbox_record(
+        observation: DialogueTurnObservationRecord,
+        claims: list[DialogueClaimRecord],
+        task_outcome: DialogueTaskOutcomeRecord | None,
+    ) -> OutboxEventRecord:
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "observation_id": observation.observation_id,
+            "conversation_id": observation.conversation_id,
+            "learner_id": observation.learner_id,
+            "learning_session_id": observation.learning_session_id,
+            "scene": observation.scene,
+            "scenario_id": observation.scenario_id,
+            "task_id": observation.task_id,
+            "task_index": observation.task_index,
+            "source_turn_id": observation.source_turn_id,
+            "response_id": observation.response_id,
+            "response_type": observation.response_type,
+            "response_category": observation.response_category,
+            "difficulty_class": observation.difficulty_class,
+            "concept_result": observation.concept_result,
+            "safety_category": observation.safety_category,
+            "bottleneck": observation.bottleneck,
+            "classifier_confidence": observation.classifier_confidence,
+            "expression_before": observation.expression_before,
+            "expression_after": observation.expression_after,
+            "hint_before": observation.hint_before,
+            "hint_after": observation.hint_after,
+            "transition_reason": observation.transition_reason,
+            "dialogue_act": observation.dialogue_act,
+            "speaker_source": observation.speaker_source,
+            "verifier_status": observation.verifier_status,
+            "record_origin": observation.record_origin,
+            "versions": observation.versions_json,
+            "claims": [
+                {
+                    "slot_id": claim.slot_id,
+                    "semantic_role": claim.semantic_role,
+                    "value": claim.value_json,
+                    "factual": claim.factual,
+                    "validation_status": claim.validation_status,
+                    "newly_verified": claim.newly_verified,
+                }
+                for claim in claims
+            ],
+        }
+        if task_outcome:
+            payload["task_outcome"] = {
+                "outcome_id": task_outcome.outcome_id,
+                "completion_outcome": task_outcome.completion_outcome,
+                "max_hint_level": task_outcome.max_hint_level,
+                "verified_slots": task_outcome.verified_slots_json,
+                "evidence_observation_ids": task_outcome.evidence_observation_ids_json,
+                "note_id": task_outcome.note_id,
+            }
+        return OutboxEventRecord(
+            event_id=new_id("event"),
+            aggregate_type="dialogue_observation",
+            aggregate_id=observation.observation_id,
+            event_type="mormi.dialogue.observation.recorded",
+            schema_version=1,
+            payload_json=payload,
+        )
 
     async def raw_turns(self, conversation_id: str) -> list[dict[str, object]]:
         await self.purge_expired_raw_data()
@@ -291,6 +649,134 @@ class Repository:
                 }
                 for record in records
             ]
+
+    async def backfill_historical_observations(self) -> int:
+        """Preserve legacy turns as explicitly incomplete observations.
+
+        This migration never asks an LLM to reinterpret old child language and
+        never fabricates claims, bottlenecks or confidence. Values that were
+        not stored at the time remain ``not_collected``.
+        """
+
+        inserted = 0
+        async with self.database.sessions() as db:
+            answered = list(
+                (
+                    await db.execute(
+                        select(TurnRecord)
+                        .where(TurnRecord.response_id.is_not(None))
+                        .order_by(TurnRecord.id.asc())
+                    )
+                ).scalars()
+            )
+            existing_ids = set(
+                (
+                    await db.execute(
+                        select(DialogueTurnObservationRecord.source_turn_id)
+                    )
+                ).scalars()
+            )
+            for record in answered:
+                if record.turn_id in existing_ids:
+                    continue
+                conversation = await db.get(ConversationRecord, record.conversation_id)
+                if not conversation:
+                    continue
+                result = None
+                if record.result_turn_id:
+                    result = (
+                        await db.execute(
+                            select(TurnRecord).where(
+                                TurnRecord.turn_id == record.result_turn_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                current_contract = dict(record.turn_contract)
+                result_contract = dict(result.turn_contract) if result else {}
+                current_input = current_contract.get("input", {})
+                current_stage = current_contract.get("stage_id", "not_collected")
+                task_index = current_contract.get("task_index", 0)
+                response_category = record.response_category or "not_collected"
+                try:
+                    category = ResponseCategory(response_category)
+                    concept_result = self._concept_result(category)
+                except ValueError:
+                    concept_result = "not_collected"
+                help_payload = result_contract.get("help_card")
+                help_card = help_payload if isinstance(help_payload, dict) else None
+                observation = DialogueTurnObservationRecord(
+                    observation_id=new_id("observation"),
+                    conversation_id=record.conversation_id,
+                    learner_id=conversation.learner_id,
+                    learning_session_id=conversation.learning_session_id,
+                    scene=conversation.scene,
+                    scenario_id=conversation.scenario_id,
+                    task_id=record.task_id,
+                    stage_id=str(current_stage),
+                    task_index=int(task_index),
+                    subgoal_id="not_collected",
+                    source_turn_id=record.turn_id,
+                    result_turn_id=record.result_turn_id,
+                    response_id=record.response_id,
+                    response_type=record.response_type,
+                    input_kind=(
+                        str(current_input.get("kind", "not_collected"))
+                        if isinstance(current_input, dict)
+                        else "not_collected"
+                    ),
+                    response_category=response_category,
+                    difficulty_class="not_collected",
+                    concept_result=concept_result,
+                    safety_category=record.safety_category or "not_collected",
+                    misconception_tag=None,
+                    bottleneck="not_collected",
+                    classifier_confidence=None,
+                    expression_before=record.expression_level,
+                    expression_after=(
+                        result.expression_level if result else record.expression_level
+                    ),
+                    hint_before=record.hint_level,
+                    hint_after=result.hint_level if result else record.hint_level,
+                    transition_reason="not_collected",
+                    dialogue_act="not_collected",
+                    help_card_shown=help_card is not None,
+                    help_card_level=(
+                        str(help_card.get("level")) if help_card else None
+                    ),
+                    help_card_auto_open=bool(
+                        help_card and help_card.get("auto_open", False)
+                    ),
+                    speaker_source="not_collected",
+                    verifier_status="not_collected",
+                    fallback_reason=None,
+                    completion_outcome=None,
+                    record_origin="historical_backfill",
+                    analysis_json={
+                        "historical_backfill": True,
+                        "missing_fields": [
+                            "claims",
+                            "difficulty_class",
+                            "bottleneck",
+                            "confidence",
+                            "dialogue_act",
+                            "speaker_runtime",
+                        ],
+                    },
+                    runtime_json={"historical_backfill": True},
+                    versions_json={
+                        "observation_schema": 1,
+                        "dialogue_policy": "not_collected",
+                        "dictionary_catalog": "not_collected",
+                        "content": "not_collected",
+                        "classifier_model": "not_collected",
+                        "speaker_model": "not_collected",
+                    },
+                    created_at=record.created_at,
+                )
+                db.add(observation)
+                inserted += 1
+            await db.commit()
+        return inserted
 
     async def list_notes(self, learner_id: int) -> list[NoteUpdate]:
         async with self.database.sessions() as db:

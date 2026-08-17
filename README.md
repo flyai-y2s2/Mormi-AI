@@ -312,5 +312,6 @@ PYTHONPATH=src .venv/bin/python scripts/audit_dictionary_cards.py \
 상세 설계와 API 계약은 `docs/`를 참고하세요.
 
 - 사람이 읽는 API 명세: [`docs/API_SPEC.md`](./docs/API_SPEC.md)
+- 대화 관찰·리포트 이벤트: [`docs/OBSERVATION_EVENTS.md`](./docs/OBSERVATION_EVENTS.md)
 - OpenAPI 원본: [`docs/openapi.json`](./docs/openapi.json)
 - 시각자료 계약: [`docs/VISUAL_CONTRACTS.md`](./docs/VISUAL_CONTRACTS.md)

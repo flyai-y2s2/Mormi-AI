@@ -621,6 +621,32 @@ class SpeakerVerification(BaseModel):
     ] = "other"
 
 
+class SpeakerRuntimeAudit(BaseModel):
+    """Non-linguistic audit trail for the line that reached the child.
+
+    Generated candidate text is already stored encrypted as the next turn's
+    question.  This object records *how* that text was selected without
+    duplicating the child's or Mormi's raw language in analytics columns.
+    """
+
+    dialogue_act: str
+    speaker_source: Literal[
+        "reviewed_fallback",
+        "llm",
+        "generation_fallback",
+        "deterministic_validation_fallback",
+        "semantic_verification_fallback",
+    ]
+    verifier_status: Literal[
+        "not_required",
+        "disabled",
+        "approved",
+        "rejected",
+        "error",
+    ] = "not_required"
+    fallback_reason: str | None = Field(default=None, max_length=120)
+
+
 class SessionEnvelope(BaseModel):
     conversation_id: str
     turn: TurnContract

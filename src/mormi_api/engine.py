@@ -47,6 +47,7 @@ from .schemas import (
     SpeakerGuardContract,
     SpeakerOutput,
     SpeakerQuestionIntent,
+    SpeakerRuntimeAudit,
     SpeakerVerification,
     SpeakerVerificationPolicy,
     TurnContract,
@@ -72,6 +73,7 @@ class EngineTurnResult:
     state: SessionState
     analysis: UtteranceAnalysis
     turn: TurnContract
+    runtime: SpeakerRuntimeAudit
 
 
 class ConversationGraphState(TypedDict, total=False):
@@ -82,6 +84,7 @@ class ConversationGraphState(TypedDict, total=False):
     decision: dict[str, Any]
     speaker_output: dict[str, Any]
     speaker_text: str
+    runtime: dict[str, Any]
     turn: dict[str, Any]
 
 
@@ -174,6 +177,7 @@ class ConversationEngine:
             state=SessionState.model_validate(final_values["session"]),
             analysis=UtteranceAnalysis.model_validate(final_values["analysis"]),
             turn=TurnContract.model_validate(final_values["turn"]),
+            runtime=SpeakerRuntimeAudit.model_validate(final_values["runtime"]),
         )
 
     def initial_turn(self, state: SessionState) -> TurnContract:
@@ -281,17 +285,47 @@ class ConversationEngine:
             "session_complete",
             "task_transition",
         }:
-            return {"speaker_text": context.fallback_text}
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="reviewed_fallback",
+                verifier_status="not_required",
+            )
+            return {
+                "speaker_text": context.fallback_text,
+                "runtime": runtime.model_dump(mode="json"),
+            }
         try:
             async with asyncio.timeout(self.speaker_timeout_seconds):
                 output = await self.gateway.speak(context)
-            return {"speaker_output": output.model_dump(mode="json")}
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="llm",
+                verifier_status=(
+                    "disabled"
+                    if context.verification_policy is SpeakerVerificationPolicy.SEMANTIC
+                    and not self.semantic_verifier_enabled
+                    else "not_required"
+                ),
+            )
+            return {
+                "speaker_output": output.model_dump(mode="json"),
+                "runtime": runtime.model_dump(mode="json"),
+            }
         except Exception as error:
             logger.warning(
                 "speaker_fallback stage=generation error_type=%s",
                 type(error).__name__,
             )
-            return {"speaker_text": context.fallback_text}
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="generation_fallback",
+                verifier_status="not_required",
+                fallback_reason=type(error).__name__,
+            )
+            return {
+                "speaker_text": context.fallback_text,
+                "runtime": runtime.model_dump(mode="json"),
+            }
 
     async def _validate_and_compose_node(
         self,
@@ -300,14 +334,23 @@ class ConversationEngine:
         decision = PedagogicalDecision.model_validate(graph_state["decision"])
         task = get_task(decision.state.current_task_id, decision.state.scenario_data)
         guard = self._speaker_guard(task, decision.state, decision.speaker_context)
+        runtime = SpeakerRuntimeAudit.model_validate(graph_state["runtime"])
         text = graph_state.get("speaker_text")
         if not text and graph_state.get("speaker_output"):
             output = SpeakerOutput.model_validate(graph_state["speaker_output"])
             text = validate_speaker_output(output, decision.speaker_context, guard)
+            if not text:
+                runtime = runtime.model_copy(
+                    update={
+                        "speaker_source": "deterministic_validation_fallback",
+                        "fallback_reason": "speaker_contract_rejected",
+                    }
+                )
             if (
                 text
                 and decision.speaker_context.verification_policy
                 is SpeakerVerificationPolicy.SEMANTIC
+                and self.semantic_verifier_enabled
             ):
                 try:
                     async with asyncio.timeout(self.verifier_timeout_seconds):
@@ -324,13 +367,31 @@ class ConversationEngine:
                         output,
                     ):
                         text = None
+                        runtime = runtime.model_copy(
+                            update={
+                                "speaker_source": "semantic_verification_fallback",
+                                "verifier_status": "rejected",
+                                "fallback_reason": verified.reason_code,
+                            }
+                        )
                         logger.info(
                             "speaker_fallback stage=semantic reason=%s dialogue_act=%s",
                             verified.reason_code,
                             decision.dialogue_act,
                         )
+                    else:
+                        runtime = runtime.model_copy(
+                            update={"verifier_status": "approved"}
+                        )
                 except Exception as error:
                     text = None
+                    runtime = runtime.model_copy(
+                        update={
+                            "speaker_source": "semantic_verification_fallback",
+                            "verifier_status": "error",
+                            "fallback_reason": type(error).__name__,
+                        }
+                    )
                     logger.warning(
                         "speaker_fallback stage=verification error_type=%s",
                         type(error).__name__,
@@ -350,6 +411,7 @@ class ConversationEngine:
         return {
             "session": decision.state.model_dump(mode="json"),
             "turn": turn.model_dump(mode="json"),
+            "runtime": runtime.model_dump(mode="json"),
         }
 
     def _decide(
