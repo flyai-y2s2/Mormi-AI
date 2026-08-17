@@ -26,6 +26,7 @@ from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
 from .repository import (
     ConversationNotFoundError,
+    PersistenceError,
     Repository,
     StaleConversationError,
 )
@@ -397,6 +398,13 @@ async def respond(
             detail={"code": code, "issues": []},
             headers=_diagnostic_headers(code),
         ) from error
+    except PersistenceError as error:
+        code = "persistence_failed"
+        raise HTTPException(
+            status_code=503,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        ) from error
 
 
 def _sse(event: str, data: dict[str, object], *, event_id: str | None = None) -> str:
@@ -480,6 +488,11 @@ async def respond_stream(
             yield _sse(
                 "error",
                 {"code": _model_error_code(error), "retryable": True},
+            )
+        except PersistenceError:
+            yield _sse(
+                "error",
+                {"code": "persistence_failed", "retryable": True},
             )
 
     return StreamingResponse(

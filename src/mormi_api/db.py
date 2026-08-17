@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -28,6 +29,14 @@ from .schemas import utc_now
 
 class Base(DeclarativeBase):
     pass
+
+
+def _enable_sqlite_foreign_keys(dbapi_connection: Any, _: object) -> None:
+    """Make local/test SQLite enforce the same parent-child contract as PostgreSQL."""
+
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 class DataMigrationRecord(Base):
@@ -288,6 +297,12 @@ class Database:
     def __init__(self, url: str) -> None:
         self.url = url
         self.engine: AsyncEngine = create_async_engine(url, pool_pre_ping=True)
+        if self.engine.dialect.name == "sqlite":
+            event.listen(
+                self.engine.sync_engine,
+                "connect",
+                _enable_sqlite_foreign_keys,
+            )
         self.sessions: async_sessionmaker[AsyncSession] = async_sessionmaker(
             self.engine,
             expire_on_commit=False,

@@ -52,6 +52,49 @@ class DuplicateResponseError(RuntimeError):
     pass
 
 
+class PersistenceError(RuntimeError):
+    """A turn could not be stored for a reason other than an idempotent replay."""
+
+
+_DUPLICATE_RESPONSE_CONSTRAINTS = {
+    "uq_conversation_response",
+    "uq_observation_conversation_response",
+    "uq_observation_source_turn",
+}
+
+
+def _is_duplicate_response_integrity_error(error: IntegrityError) -> bool:
+    """Return true only for constraints that represent the same answered turn.
+
+    SQLAlchemy wraps PostgreSQL/asyncpg errors differently across driver
+    versions, so inspect the exception chain as well as SQLite's stable message.
+    Other integrity failures must not masquerade as successful idempotent
+    replays.
+    """
+
+    current: BaseException | None = error.orig
+    seen: set[int] = set()
+    messages: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        constraint_name = getattr(current, "constraint_name", None)
+        if constraint_name in _DUPLICATE_RESPONSE_CONSTRAINTS:
+            return True
+        current = current.__cause__ or current.__context__
+
+    message = " ".join(messages)
+    sqlite_unique_fragments = (
+        "UNIQUE constraint failed: turns.conversation_id, turns.response_id",
+        "UNIQUE constraint failed: dialogue_turn_observations.conversation_id, "
+        "dialogue_turn_observations.response_id",
+        "UNIQUE constraint failed: dialogue_turn_observations.source_turn_id",
+    )
+    return any(fragment in message for fragment in sqlite_unique_fragments) or any(
+        constraint in message for constraint in _DUPLICATE_RESPONSE_CONSTRAINTS
+    )
+
+
 class Repository:
     PERMANENT_STORAGE_MIGRATION = "2026-08-permanent-raw-storage"
     _STATE_EVIDENCE_ENCRYPTED = "_child_note_evidence_encrypted"
@@ -114,21 +157,24 @@ class Repository:
 
     async def create_conversation(self, state: SessionState, turn: TurnContract) -> None:
         async with self.database.sessions() as db:
-            db.add(
-                ConversationRecord(
-                    conversation_id=state.conversation_id,
-                    learner_id=state.learner_id,
-                    learning_session_id=state.learning_session_id,
-                    scene=state.scene.value,
-                    scenario_id=state.scenario_id,
-                    state_json=self._dump_state(state),
-                    state_version=state.state_version,
-                    status=state.status.value,
-                    raw_retention_until=state.raw_retention_until,
-                    created_at=state.created_at,
-                    updated_at=state.updated_at,
-                )
+            conversation = ConversationRecord(
+                conversation_id=state.conversation_id,
+                learner_id=state.learner_id,
+                learning_session_id=state.learning_session_id,
+                scene=state.scene.value,
+                scenario_id=state.scenario_id,
+                state_json=self._dump_state(state),
+                state_version=state.state_version,
+                status=state.status.value,
+                raw_retention_until=state.raw_retention_until,
+                created_at=state.created_at,
+                updated_at=state.updated_at,
             )
+            db.add(conversation)
+            # No ORM relationship is declared between these persistence
+            # records. Flush the FK parent explicitly instead of relying on
+            # incidental unit-of-work insertion order.
+            await db.flush([conversation])
             db.add(self._turn_record(state, turn))
             await db.commit()
 
@@ -255,27 +301,32 @@ class Repository:
             conversation_record.updated_at = next_state.updated_at
             db.add(self._turn_record(next_state, next_turn))
 
-            observation = self._observation_record(
-                previous_state=previous_state,
-                next_state=next_state,
-                current_turn=current_turn,
-                response=response,
-                analysis=analysis,
-                next_turn=next_turn,
-                runtime=runtime,
-            )
-            db.add(observation)
-            claim_records = self._claim_records(
-                observation.observation_id,
-                previous_state,
-                next_state,
-                analysis,
-            )
-            db.add_all(claim_records)
+            try:
+                observation = self._observation_record(
+                    previous_state=previous_state,
+                    next_state=next_state,
+                    current_turn=current_turn,
+                    response=response,
+                    analysis=analysis,
+                    next_turn=next_turn,
+                    runtime=runtime,
+                )
+                db.add(observation)
+                # Claims reference the observation. SQLAlchemy cannot infer
+                # mapper ordering without an ORM relationship, so persist the
+                # parent before constructing any child rows.
+                await db.flush([observation])
 
-            if note:
-                db.add(
-                    NoteRecord(
+                claim_records = self._claim_records(
+                    observation.observation_id,
+                    previous_state,
+                    next_state,
+                    analysis,
+                )
+                db.add_all(claim_records)
+
+                if note:
+                    note_record = NoteRecord(
                         note_id=note.note_id,
                         conversation_id=next_state.conversation_id,
                         learner_id=next_state.learner_id,
@@ -285,35 +336,39 @@ class Repository:
                         evidence=note.evidence.value,
                         attribution_label=note.attribution_label,
                     )
-                )
-                db.add(
-                    NoteEvidenceLinkRecord(
-                        note_id=note.note_id,
-                        observation_id=observation.observation_id,
-                        source_slot_ids_json=sorted(
-                            set(next_state.verified_slots)
-                            - set(previous_state.verified_slots)
-                        ),
+                    db.add(note_record)
+                    # The evidence link has two FK parents: the already
+                    # flushed observation and this note.
+                    await db.flush([note_record])
+                    db.add(
+                        NoteEvidenceLinkRecord(
+                            note_id=note.note_id,
+                            observation_id=observation.observation_id,
+                            source_slot_ids_json=sorted(
+                                set(next_state.verified_slots)
+                                - set(previous_state.verified_slots)
+                            ),
+                        )
                     )
+
+                task_outcome = await self._task_outcome_record(
+                    db,
+                    previous_state=previous_state,
+                    next_state=next_state,
+                    observation=observation,
+                    analysis=analysis,
+                    note=note,
                 )
+                if task_outcome:
+                    db.add(task_outcome)
 
-            task_outcome = await self._task_outcome_record(
-                db,
-                previous_state=previous_state,
-                next_state=next_state,
-                observation=observation,
-                analysis=analysis,
-                note=note,
-            )
-            if task_outcome:
-                db.add(task_outcome)
-
-            db.add(self._outbox_record(observation, claim_records, task_outcome))
-            try:
+                db.add(self._outbox_record(observation, claim_records, task_outcome))
                 await db.commit()
             except IntegrityError as error:
                 await db.rollback()
-                raise DuplicateResponseError(response_id) from error
+                if _is_duplicate_response_integrity_error(error):
+                    raise DuplicateResponseError(response_id) from error
+                raise PersistenceError("turn_persistence_failed") from error
 
     def _observation_record(
         self,
