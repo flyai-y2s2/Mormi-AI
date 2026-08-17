@@ -4,7 +4,7 @@ on:
   push:
     branches: [develop]
   pull_request:
-    branches: [develop] 
+    branches: [develop]
   workflow_dispatch: {}
 
 concurrency:
@@ -53,6 +53,11 @@ jobs:
   build-and-push:
     name: Build image, push to ECR
     needs: test
+
+    # PR에서는 테스트만 수행하고,
+    # develop 브랜치에 실제 push 되었을 때만 배포 이미지 생성
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -78,6 +83,7 @@ jobs:
         id: tags
         run: |
           REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+
           echo "sha_image=${REGISTRY}/${{ env.ECR_REPOSITORY }}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           echo "latest_image=${REGISTRY}/${{ env.ECR_REPOSITORY }}:latest" >> "$GITHUB_OUTPUT"
 
@@ -94,6 +100,10 @@ jobs:
   deploy:
     name: Deploy container on EC2
     needs: build-and-push
+
+    # develop push인 경우에만 실제 EC2 배포
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -122,19 +132,24 @@ jobs:
           set -euo pipefail
 
           aws ecr get-login-password --region "${AWS_REGION}" \
-            | docker login --username AWS --password-stdin "${REGISTRY}"
+            | docker login \
+                --username AWS \
+                --password-stdin "${REGISTRY}"
 
-          # 이전 배포 이미지와 빌드 캐시가 쌓이면 새 레이어를 pull 하기 전에
-          # 디스크가 가득 찬다. 실행 중인 mormi-ai 이미지와 볼륨은 보존하고,
-          # 사용하지 않는 캐시만 먼저 정리한다.
+          # 이전 배포 이미지와 빌드 캐시 정리
           docker image prune -af >/dev/null
           docker builder prune -af >/dev/null
 
+          # 새 이미지 다운로드
           docker pull "${IMAGE_URI}"
 
+          # 기존 컨테이너 제거
           docker rm -f mormi-ai 2>/dev/null || true
+
+          # 서비스용 Docker network 생성
           docker network create mormi-services 2>/dev/null || true
 
+          # 새 컨테이너 실행
           docker run -d \
             --name mormi-ai \
             --restart unless-stopped \
@@ -145,10 +160,9 @@ jobs:
             --log-opt max-file=5 \
             "${IMAGE_URI}"
 
-          # 설정이 하나라도 빠지면 uvicorn 이 import 단계에서 죽는다.
-          # (settings.validate_runtime_safety 가 모듈 로드 시점에 실행된다)
-          # 조용히 넘어가면 시연 때 발견하므로 여기서 실패로 만든다.
+          # 컨테이너 health check
           ready=""
+
           for i in $(seq 1 30); do
             if curl -fsS -o /dev/null http://localhost:8000/health 2>/dev/null; then
               ready="yes"
@@ -174,6 +188,7 @@ jobs:
           curl -fsS http://localhost:8000/health
 
           docker image prune -f >/dev/null
+
           docker ps --filter name=mormi-ai
 
           REMOTE
