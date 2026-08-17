@@ -18,12 +18,20 @@ target_metadata = Base.metadata
 
 def synchronous_url(raw_url: str) -> str:
     url = make_url(raw_url)
-    drivers = {
-        "postgresql+asyncpg": "postgresql+psycopg",
-        "sqlite+aiosqlite": "sqlite",
-    }
-    if url.drivername in drivers:
-        url = url.set(drivername=drivers[url.drivername])
+
+    if url.drivername == "postgresql+asyncpg":
+        url = url.set(drivername="postgresql+psycopg")
+
+        query = dict(url.query)
+
+        if "ssl" in query:
+            query["sslmode"] = query.pop("ssl")
+
+        url = url.set(query=query)
+
+    elif url.drivername == "sqlite+aiosqlite":
+        url = url.set(drivername="sqlite")
+
     return url.render_as_string(hide_password=False)
 
 
