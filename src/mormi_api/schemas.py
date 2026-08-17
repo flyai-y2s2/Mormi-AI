@@ -503,6 +503,28 @@ class PedagogySnapshot(BaseModel):
     bottleneck: str | None = None
 
 
+class TaskAnchorCompletedItem(BaseModel):
+    """One child-provided fact that the current task no longer asks for."""
+
+    slot_id: str
+    label: str
+    value: str | int | float | bool
+    # Reviewed context for clients that cannot render an internal canonical
+    # value such as ``right`` on its own. This sentence is exposed only after
+    # the corresponding value has been verified from the child's response.
+    display_text: str
+
+
+class TaskAnchorContract(BaseModel):
+    """Stable, non-LLM reminder of what the child should answer right now."""
+
+    anchor_id: str
+    title: str = "지금 모르미에게 알려줄 것"
+    prompt: str = Field(min_length=1, max_length=50)
+    completed_items: list[TaskAnchorCompletedItem] = Field(default_factory=list)
+    target_slots: list[str] = Field(min_length=1)
+
+
 class TurnContract(BaseModel):
     turn_id: str = Field(default_factory=lambda: new_id("turn"))
     scene: SceneType
@@ -519,6 +541,9 @@ class TurnContract(BaseModel):
     state_version: int
     completion: CompletionContract | None = None
     pedagogy: PedagogySnapshot | None = None
+    # Optional only for backward compatibility with turns persisted before
+    # this contract existed. Every newly generated active turn includes it.
+    task_anchor: TaskAnchorContract | None = None
     # The card itself is pinned in SessionState. Turns expose only its stable
     # identity so clients never derive dictionary copy from help-card text.
     dictionary_ref: DictionaryReference | None = None

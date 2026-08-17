@@ -336,6 +336,25 @@ class TaskDefinition(BaseModel):
 
     @model_validator(mode="after")
     def validate_help_plan(self) -> TaskDefinition:
+        step_groups = list(self.steps.values())
+        if self.entry_step is not None:
+            step_groups.append([self.entry_step])
+        for steps in step_groups:
+            for step in steps:
+                unknown_slots = set(step.target_slots) - set(self.slots)
+                if unknown_slots:
+                    raise ValueError(
+                        f"{self.id}/{step.id}: unknown target slots {sorted(unknown_slots)}"
+                    )
+                declared_input_slots = [*step.target_slots, *step.optional_slots]
+                if (
+                    len(declared_input_slots) != len(set(declared_input_slots))
+                    or set(declared_input_slots) != set(step.input.target_slots)
+                ):
+                    raise ValueError(
+                        f"{self.id}/{step.id}: required/optional and input target slots "
+                        "must match"
+                    )
         required_levels = {HintLevel.H1, HintLevel.H2, HintLevel.H3}
         if set(self.hints) != required_levels:
             raise ValueError("every task needs exactly one H1, H2 and H3 help card")
@@ -426,6 +445,17 @@ class TaskDefinition(BaseModel):
         if targeted_followup and level is ExpressionLevel.L4:
             return self.step_for(ExpressionLevel.L3, verified_slots)
         return self.step_for(level, verified_slots)
+
+    def step_by_id(self, step_id: str) -> StepDefinition | None:
+        """Resolve a persisted subgoal without depending on today's ladder state."""
+
+        if self.entry_step is not None and self.entry_step.id == step_id:
+            return self.entry_step
+        for steps in self.steps.values():
+            for step in steps:
+                if step.id == step_id:
+                    return step
+        return None
 
     def missing_slots(self, verified_slots: Mapping[str, object]) -> list[str]:
         return [slot for slot in self.required_slots if slot not in verified_slots]

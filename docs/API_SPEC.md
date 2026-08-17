@@ -463,6 +463,7 @@ response.progress  stage=planning
 response.progress  stage=speaking
 response.progress  stage=validating
 mormi.start
+turn.metadata      { turn_id, task_anchor }
 mormi.delta        검증된 모르미 문장의 일부
 turn.completed     최종 { conversation_id, turn }
 done
@@ -479,6 +480,9 @@ done
 ```text
 event: response.progress
 data: {"conversation_id":"conversation_123","stage":"speaking"}
+
+event: turn.metadata
+data: {"turn_id":"turn_456","task_anchor":{"anchor_id":"cafe_queue:short_reason","title":"지금 모르미에게 알려줄 것","prompt":"나는 왜 그 줄이 더 빠른지 헷갈려... 알려줄 수 있어?","completed_items":[],"target_slots":["reason"]}}
 
 event: mormi.delta
 data: {"turn_id":"turn_456","delta":"아, 세 개구나!"}
@@ -536,6 +540,18 @@ type TurnContract = {
       visual_type?: string;
       visual_data: Record<string, unknown>;
     };
+    task_anchor: null | {
+      anchor_id: string; // task + 현재 subgoal의 안정적인 식별자
+      title: "지금 모르미에게 알려줄 것";
+      prompt: string; // 검수된 StepDefinition.prompt, 최대 50자
+      completed_items: Array<{
+        slot_id: string;
+        label: string;
+        value: string | number | boolean;
+        display_text: string;
+      }>;
+      target_slots: string[]; // 현재 input.target_slots 중 아직 필요한 슬롯
+    };
     dictionary_ref: null | {
       card_id: string;
       curriculum_session_id: string;
@@ -567,6 +583,12 @@ type TurnContract = {
 
 - `input.kind`에 해당하는 입력 UI 하나만 활성화합니다.
 - `help_card.auto_open=true`이면 도움 카드를 즉시 엽니다.
+- `task_anchor`는 모르미의 자연어 말풍선과 별개인 고정 질문 기억 장치입니다. 그림
+  영역 위에 계속 표시하고, 말풍선이나 도움 카드 문구에서 질문을 역추론하지 않습니다.
+- 같은 subgoal에서 H 단계만 바뀌면 `task_anchor.anchor_id`와 `prompt`는 유지됩니다.
+  부분 답변으로 다음 subgoal로 넘어가면 이미 검증된 값만 `completed_items`에 표시됩니다.
+- 과거 저장 턴에는 `task_anchor=null`일 수 있지만 신규 active 턴과 snapshot 응답은
+  항상 비어 있지 않은 앵커를 반환합니다. 완료 턴은 `null`입니다.
 - `dictionary_ref`는 사전 카드 본문이 아니라 카드의 고정 신원입니다. 화면이 사전을
   열 때 대화별 조회 API로 같은 해시의 스냅샷을 받아 렌더링합니다.
 - `note_update`가 있을 때만 별노트를 추가합니다.

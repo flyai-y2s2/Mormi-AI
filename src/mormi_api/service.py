@@ -193,7 +193,10 @@ class ConversationService:
             return
 
         state = await self.repository.get_state(conversation_id)
-        active_turn = await self.repository.active_turn(state)
+        active_turn = self.engine.ensure_task_anchor(
+            state,
+            await self.repository.active_turn(state),
+        )
         if active_turn.turn_id != response.turn_id:
             raise ValueError("turn_id is stale; use the latest turn")
         if not response_matches_input(active_turn.input.kind, response.type):
@@ -262,7 +265,10 @@ class ConversationService:
 
     async def snapshot(self, conversation_id: str) -> SessionEnvelope:
         state = await self.repository.get_state(conversation_id)
-        turn = await self.repository.active_turn(state)
+        turn = self.engine.ensure_task_anchor(
+            state,
+            await self.repository.active_turn(state),
+        )
         return SessionEnvelope(conversation_id=conversation_id, turn=turn)
 
     async def dictionary_card(self, conversation_id: str) -> DictionaryCardEnvelope:
