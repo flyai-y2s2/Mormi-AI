@@ -2,8 +2,9 @@ name: CI/CD (develop → ECR → EC2)
 
 on:
   push:
-    branches:
-      - develop
+    branches: [develop]
+  pull_request:
+    branches: [develop] 
   workflow_dispatch: {}
 
 concurrency:
