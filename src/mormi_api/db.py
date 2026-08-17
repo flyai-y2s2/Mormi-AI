@@ -183,10 +183,6 @@ class DialogueTurnObservationRecord(Base):
     verifier_status: Mapped[str] = mapped_column(String(40))
     fallback_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
     completion_outcome: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    adult_intervention_status: Mapped[str] = mapped_column(
-        String(40),
-        default="not_collected",
-    )
     record_origin: Mapped[str] = mapped_column(String(40), default="live")
     analysis_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     runtime_json: Mapped[dict[str, Any]] = mapped_column(JSON)

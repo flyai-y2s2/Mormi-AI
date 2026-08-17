@@ -89,6 +89,13 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
         assert "dialogue_task_outcomes" in tables
         assert "note_evidence_links" in tables
         assert "ai_outbox_events" in tables
+        observation_columns = {
+            column["name"]
+            for column in inspect(connection).get_columns(
+                "dialogue_turn_observations"
+            )
+        }
+        assert "adult_intervention_status" not in observation_columns
 
     command.downgrade(config, "base")
     with engine.connect() as connection:

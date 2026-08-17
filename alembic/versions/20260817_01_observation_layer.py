@@ -67,12 +67,6 @@ def upgrade() -> None:
             sa.Column("fallback_reason", sa.String(120), nullable=True),
             sa.Column("completion_outcome", sa.String(40), nullable=True),
             sa.Column(
-                "adult_intervention_status",
-                sa.String(40),
-                nullable=False,
-                server_default="not_collected",
-            ),
-            sa.Column(
                 "record_origin",
                 sa.String(40),
                 nullable=False,

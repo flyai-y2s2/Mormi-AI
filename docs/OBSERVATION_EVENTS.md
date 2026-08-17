@@ -27,7 +27,6 @@
 - 근거: `claims[].semantic_role`, `validation_status`, `newly_verified`
 - 지원: 도움 카드 표시·자동 열림·단계
 - 안전성: `safety_category`, `speaker_source`, `verifier_status`, `fallback_reason`
-- 한계: `adult_intervention_status`는 현재 UI가 전달하지 않으므로 `not_collected`
 - 재현성: 대화 정책·콘텐츠·사전·분류기·화자 모델 버전
 
 `concept_result=not_assessed`는 도움 요청, 입력 오류, 장난 등 수학 개념을 평가할 수
@@ -99,6 +98,5 @@ python scripts/backfill_observations.py
 
 - 단일 오답은 오개념 확정이 아니라 `병목 후보`다.
 - 후보마다 `evidence_observation_ids`를 제시한다.
-- `adult_intervention_status=not_collected`를 `개입 없음`으로 해석하지 않는다.
 - 실제 생활 전이 과제가 아니라면 `전이 성공` 대신 `새 숫자 적용`으로 표현한다.
 - 모든 요약에는 `단일 세션의 수행 관찰이며 진단이 아님`을 표시한다.

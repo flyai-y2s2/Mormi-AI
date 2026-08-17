@@ -380,7 +380,6 @@ class Repository:
                 if next_state.completion_outcome is not None
                 else None
             ),
-            adult_intervention_status="not_collected",
             record_origin="live",
             analysis_json=safe_analysis,
             runtime_json=runtime.model_dump(mode="json"),
@@ -586,7 +585,6 @@ class Repository:
             "dialogue_act": observation.dialogue_act,
             "speaker_source": observation.speaker_source,
             "verifier_status": observation.verifier_status,
-            "adult_intervention_status": observation.adult_intervention_status,
             "record_origin": observation.record_origin,
             "versions": observation.versions_json,
             "claims": [
@@ -752,7 +750,6 @@ class Repository:
                     verifier_status="not_collected",
                     fallback_reason=None,
                     completion_outcome=None,
-                    adult_intervention_status="not_collected",
                     record_origin="historical_backfill",
                     analysis_json={
                         "historical_backfill": True,
