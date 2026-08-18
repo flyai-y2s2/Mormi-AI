@@ -254,6 +254,7 @@ class Repository:
         next_state: SessionState,
         response: ChildResponse,
         analysis: UtteranceAnalysis,
+        classifier_response_category: ResponseCategory,
         next_turn: TurnContract,
         previous_question: str,
         note: NoteUpdate | None,
@@ -311,6 +312,7 @@ class Repository:
                     current_turn=current_turn,
                     response=response,
                     analysis=analysis,
+                    classifier_response_category=classifier_response_category,
                     next_turn=next_turn,
                     runtime=runtime,
                 )
@@ -385,6 +387,7 @@ class Repository:
         current_turn: TurnRecord,
         response: ChildResponse,
         analysis: UtteranceAnalysis,
+        classifier_response_category: ResponseCategory,
         next_turn: TurnContract,
         runtime: SpeakerRuntimeAudit,
     ) -> DialogueTurnObservationRecord:
@@ -403,6 +406,11 @@ class Repository:
                 "social_grounding_span",
                 "note_candidate",
             },
+        )
+        safe_analysis["classifier_response_category"] = classifier_response_category.value
+        safe_analysis["effective_response_category"] = analysis.response_category.value
+        safe_analysis["response_category_reconciled"] = (
+            classifier_response_category is not analysis.response_category
         )
         help_card = next_turn.help_card
         return DialogueTurnObservationRecord(
@@ -475,16 +483,10 @@ class Repository:
         records: list[DialogueClaimRecord] = []
         for claim in analysis.claims:
             slot = task.slots.get(claim.slot_id)
-            # The classifier may return a reviewed alias/strategy value while
-            # the engine stores the slot's canonical value.  Compare like with
-            # like so an accepted explanation is not persisted as rejected
-            # merely because, for example, ``one_by_one_order`` canonicalizes
-            # to ``count_each_once``.
-            canonical_value = (
-                slot.canonical(claim.value)
-                if slot is not None and claim.factual and slot.accepts(claim.value)
-                else None
-            )
+            # Closed slots persist their reviewed canonical value. Open
+            # method/reason/explanation slots persist only ``true`` for
+            # grounded semantic support, never a synthetic strategy code.
+            canonical_value = slot.accepted_claim_value(claim) if slot is not None else None
             accepted = bool(
                 slot is not None
                 and claim.slot_id in accepted_claims
@@ -492,7 +494,11 @@ class Repository:
             )
             advanced_state = bool(
                 accepted
-                and previous_state.verified_slots.get(claim.slot_id) != canonical_value
+                and slot is not None
+                and not slot.equivalent_state_value(
+                    previous_state.verified_slots.get(claim.slot_id),
+                    canonical_value,
+                )
             )
             records.append(
                 DialogueClaimRecord(

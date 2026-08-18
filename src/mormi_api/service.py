@@ -227,6 +227,7 @@ class ConversationService:
                 next_state=next_state,
                 response=response,
                 analysis=analysis,
+                classifier_response_category=result.classifier_response_category,
                 next_turn=next_turn,
                 previous_question=active_turn.mormi.text,
                 note=next_turn.note_update,

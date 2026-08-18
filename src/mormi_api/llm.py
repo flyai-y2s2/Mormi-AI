@@ -7,11 +7,13 @@ from typing import Any
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, transform_schema
 from pydantic import BaseModel, ValidationError
 
-from .content import TaskDefinition
+from .content import SlotDefinition, TaskDefinition
 from .schemas import (
     ChildResponse,
     EntryPhase,
     InteractionIntent,
+    NoteContextualizationContext,
+    NoteContextualizationOutput,
     ResponseCategory,
     ResponseType,
     SessionState,
@@ -219,6 +221,44 @@ class ClaudeGateway:
         except ValidationError as error:
             raise ModelOutputError("Speaker output did not match schema") from error
 
+    async def contextualize_note(
+        self,
+        context: NoteContextualizationContext,
+    ) -> NoteContextualizationOutput:
+        """Resolve scene-bound wording without inventing a child contribution."""
+
+        if not self.client:
+            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
+        schema = structured_output_schema(NoteContextualizationOutput)
+        try:
+            message = await self.client.messages.create(
+                model=self.settings.speaker_model,
+                max_tokens=280,
+                temperature=0.2,
+                system=NOTE_CONTEXTUALIZER_SYSTEM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": json.dumps(context.model_dump(mode="json"), ensure_ascii=False),
+                    }
+                ],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema,
+                    }
+                },
+            )
+        except (APIConnectionError, APIStatusError) as error:
+            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
+        if message.stop_reason in {"refusal", "max_tokens"}:
+            raise ModelOutputError(f"Note contextualizer stopped with {message.stop_reason}")
+        raw = _text_content(message.content)
+        try:
+            return NoteContextualizationOutput.model_validate_json(raw)
+        except ValidationError as error:
+            raise ModelOutputError("Note contextualizer output did not match schema") from error
+
     async def verify_speaker(
         self,
         context: SpeakerContext,
@@ -265,6 +305,30 @@ class ClaudeGateway:
             raise ModelOutputError("Speaker verification did not match schema") from error
 
     @staticmethod
+    def _slot_classifier_contract(slot: SlotDefinition) -> dict[str, Any]:
+        """Expose meaning, not an internal method code, for open slots."""
+
+        contract = slot.model_dump(mode="json")
+        contract["evaluation_mode"] = slot.resolved_evaluation_mode
+        if slot.is_semantic_support:
+            reviewed_examples = [
+                value
+                for value in [*slot.aliases, *slot.accepted_values]
+                if str(value).strip()
+            ]
+            contract.pop("expected", None)
+            contract.pop("aliases", None)
+            contract.pop("accepted_values", None)
+            contract.pop("preserve_value", None)
+            contract["reviewed_examples"] = reviewed_examples
+            contract["claim_contract"] = {
+                "value": None,
+                "supported": True,
+                "evidence_span": "exact_child_substring",
+            }
+        return contract
+
+    @staticmethod
     def _classifier_prompt(
         state: SessionState,
         task: TaskDefinition,
@@ -284,10 +348,12 @@ class ClaudeGateway:
         )
         interpreted_slot_ids = [*step.target_slots, *step.optional_slots]
         expected_slots = {
-            slot_id: task.slots[slot_id].model_dump(mode="json") for slot_id in interpreted_slot_ids
+            slot_id: ClaudeGateway._slot_classifier_contract(task.slots[slot_id])
+            for slot_id in interpreted_slot_ids
         }
         all_task_slots = {
-            slot_id: slot.model_dump(mode="json") for slot_id, slot in task.slots.items()
+            slot_id: ClaudeGateway._slot_classifier_contract(slot)
+            for slot_id, slot in task.slots.items()
         }
         payload: dict[str, Any] = {
             "scene": state.scene.value,
@@ -327,7 +393,7 @@ class ClaudeGateway:
                     "mode": task.entry_mode,
                     "stance_is_not_a_learning_fact": True,
                     "all_possible_slots": {
-                        slot_id: slot.model_dump(mode="json")
+                        slot_id: ClaudeGateway._slot_classifier_contract(slot)
                         for slot_id, slot in task.slots.items()
                     },
                 }
@@ -362,7 +428,23 @@ class ClaudeGateway:
                     "검증되지 않은 수학 답을 담은 구절은 비운다."
                 ),
                 "정답 방향의 일부 의미만 있으면 correct_partial로 분류한다.",
-                "부분 의미가 슬롯 하나를 뒷받침하면 그 슬롯의 expected 값을 claim한다.",
+                (
+                    "evaluation_mode=canonical_value 슬롯은 검수된 expected 값을 value로 "
+                    "claim하고 supported는 null로 둔다."
+                ),
+                (
+                    "evaluation_mode=semantic_support 슬롯은 내부 대표 코드로 정규화하지 "
+                    "않는다. 아이 원문이 description의 의미를 실제로 충족하면 value=null, "
+                    "supported=true, support_confidence와 정확한 evidence_span을 반환한다."
+                ),
+                (
+                    "semantic_support 슬롯의 예시 목록은 유한한 정답 목록이 아니다. 새롭지만 "
+                    "수학적으로 타당하고 화면 사실에 맞는 설명도 supported=true로 인정한다."
+                ),
+                (
+                    "semantic_support가 불충분하거나 틀리면 supported=false인 claim을 만들거나 "
+                    "claim을 생략한다. 원문에 없는 의미를 보충해 supported=true로 만들지 않는다."
+                ),
                 (
                     "숫자 expected에는 쉼표나 단위가 붙어도 같은 수로 해석한다. "
                     "예: 6000원과 6,000원은 같은 값이며 expected 숫자로 claim한다."
@@ -488,6 +570,12 @@ social_grounding_span은 안전한 메타·사회적 반응에 쓸 정확한 원
   예를 들어 '6000원이야'는 expected=6000을 직접 말한 결론이다.
 - semantic_role=method는 실제 행동이나 절차, reason은 사실 사이의 관계,
   explanation은 검수된 수학 관계나 해결 절차가 원문에 있어야 한다.
+- evaluation_mode=canonical_value는 value에 검수된 정답값을 넣고 supported는 null로 둔다.
+- evaluation_mode=semantic_support는 가능한 말을 코드값 목록으로 열거하지 않는다.
+  아이 원문이 슬롯 설명을 실제로 뒷받침하면 value=null, supported=true,
+  support_confidence와 정확한 evidence_span을 반환한다.
+- semantic_support의 reviewed_examples는 의미 경계를 보여주는 예시일 뿐 완전한 정답
+  목록이 아니다. 예시에 없는 창의적인 방법도 수학적으로 타당하면 인정한다.
 - method_acceptance_contract가 open_methods면 예시 목록 밖의 수학적으로 타당한 방법도
   인정한다. 도움 카드의 대표 풀이를 유일한 정답으로 취급하지 않는다.
 - target_method여도 문구 일치를 요구하지 않고 같은 행동·관계·절차인지 의미로 판정한다.
@@ -578,6 +666,37 @@ SPEAKER_VERIFIER_SYSTEM = """
 
 자연스러운 조사·어순·구어체 변화만으로 거절하지 않는다. 하나라도 위반하면
 approved=false로 판정한다.
+""".strip()
+
+
+NOTE_CONTEXTUALIZER_SYSTEM = """
+너는 모르미 별노트의 문장 편집기다. 별노트의 수학적 아이디어와 해결 방법은 반드시
+아이의 source_fragments에서만 와야 한다. reviewed_facts와 note_context는 아이가 생략한
+대상·수치·단위·방향을 풀어 쓰는 데만 사용한다.
+
+허용되는 편집:
+- '둘이', '이거', '오른쪽', '그 수'처럼 화면이 없으면 알 수 없는 말을 검수된 대상이나
+  수치로 바꾼다.
+- 조사, 어순, 띄어쓰기와 문장 종결을 자연스럽게 다듬는다.
+- 짧은 발화를 한 문장만 따로 읽어도 이해되는 완결된 문장으로 만든다.
+
+금지되는 편집:
+- 아이가 말하지 않은 풀이 전략·계산 절차·수학 관계·결론을 새로 넣는다.
+- 교과서의 대표 풀이로 아이의 창의적인 방법을 바꾼다.
+- reviewed_facts에 없는 수치나 대상을 만든다.
+- 아이를 맞다/틀리다 평가하거나 모르미가 가르치는 말투를 쓴다.
+
+검증할 수 있도록 수치는 입력에 나온 아라비아 숫자 표기를 그대로 사용한다.
+
+예시:
+- context: 왼쪽 5개와 오른쪽 7개 비교
+- child: '둘이 빼다보면 2 차이가 나기 때문에 오른쪽이 훨씬 더 커'
+- note: '7에서 5를 빼면 2 차이가 나니까 7이 훨씬 더 커.'
+이 예시는 형태만 보여 준다. 실제 숫자와 대상은 입력의 검수된 문맥만 사용한다.
+
+source_slots_used에는 사용한 모든 source_fragments 키를, source_spans_used에는 해당 원문을
+글자 그대로 넣는다. fact_refs_used에는 실제로 문맥 보완에 쓴 reviewed_facts 키만 넣는다.
+새 수학 내용을 넣지 않았을 때만 introduced_math_content=false로 둔다.
 """.strip()
 
 
@@ -749,6 +868,45 @@ def validate_speaker_output(
         ):
             return None
     elif output.asked_slot_ids or "?" in text:
+        return None
+    return text
+
+
+_FORBIDDEN_NOTE_COPY = re.compile(
+    r"(틀렸|맞았|맞아|정답|오답|잘했|훌륭|다시\s*생각|설명해\s*봐)",
+    re.IGNORECASE,
+)
+
+
+def validate_note_contextualization(
+    output: NoteContextualizationOutput,
+    context: NoteContextualizationContext,
+) -> str | None:
+    """Accept only a closed-world, provenance-preserving note rewrite."""
+
+    text = output.text.strip()
+    if not text or len(text) > 140 or len(text.splitlines()) > 2 or "?" in text:
+        return None
+    if _FORBIDDEN_NOTE_COPY.search(text):
+        return None
+    if not output.meaning_preserved or not output.self_contained:
+        return None
+    if output.introduced_math_content:
+        return None
+    if len(output.source_slots_used) != len(set(output.source_slots_used)):
+        return None
+    if set(output.source_slots_used) != set(context.source_fragments):
+        return None
+    # Two slots may legitimately cite the same full child sentence. Preserve
+    # that multiplicity instead of treating repeated provenance as a model
+    # error.
+    if sorted(output.source_spans_used) != sorted(context.source_fragments.values()):
+        return None
+    if any(ref not in context.reviewed_facts for ref in output.fact_refs_used):
+        return None
+    numbers = extract_numeric_values(text)
+    allowed = {number.replace(",", "") for number in context.allowed_numbers}
+    if any(number not in allowed for number in numbers):
         return None
     return text
 
