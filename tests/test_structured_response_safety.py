@@ -137,7 +137,7 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
 
     assert analysis.response_category is ResponseCategory.CORRECT_FULL
     assert next_state.status.value == "completed"
-    assert next_state.verified_slots["reason"] == "count_comparison"
+    assert next_state.verified_slots["reason"] is True
     assert turn.completion is not None
     assert turn.completion.outcome.value == "supported"
     assert turn.note_update is not None
@@ -677,8 +677,10 @@ async def test_repeated_observations_change_support_in_cafe_queue_too() -> None:
 
 
 @pytest.mark.asyncio
-async def test_number_count_accepts_childs_own_counting_method_without_forcing_pointing() -> None:
-    """Saying the number words in order is a valid method, not a lesser fragment."""
+async def test_number_count_accepts_a_novel_grounded_method_without_a_method_code() -> None:
+    """A valid new method satisfies meaning without expanding an alias enum."""
+
+    child_method = "센 점마다 단추를 하나씩 옆으로 옮겨 놓으면 돼"
 
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
@@ -687,9 +689,11 @@ async def test_number_count_accepts_childs_own_counting_method_without_forcing_p
         claims=[
             SlotClaim(
                 slot_id="tracking",
-                value="하나 둘 셋 하면서 세기",
+                value=None,
                 factual=True,
-                evidence_span="하나, 둘, 셋 하면서 세면 돼",
+                evidence_span=child_method,
+                supported=True,
+                support_confidence=0.94,
             ),
         ],
         confidence=1,
@@ -713,16 +717,52 @@ async def test_number_count_accepts_childs_own_counting_method_without_forcing_p
             turn_id=initial.turn_id,
             response_id=uuid4(),
             type=ResponseType.TEXT,
-            text="하나, 둘, 셋 하면서 세면 돼",
+            text=child_method,
         ),
         initial.mormi.text,
     )
 
-    assert next_state.verified_slots == {"answer": "3", "tracking": "count_each_once"}
+    assert next_state.verified_slots == {"answer": "3", "tracking": True}
     assert next_state.status.value == "completed"
     assert turn.note_update is not None
-    assert "하나, 둘, 셋 하면서 세면 돼" in turn.note_update.text
+    assert child_method in turn.note_update.text
     assert "가리키며" not in turn.note_update.text
+
+
+def test_semantic_support_rejects_an_explicitly_unsupported_internal_code() -> None:
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-count"],
+        skill_id="number-count",
+    )
+
+    verified = task.validated_slot_claims(
+        [
+            SlotClaim(
+                slot_id="tracking",
+                value="count_each_once",
+                factual=True,
+                evidence_span="그냥 해",
+                supported=False,
+                support_confidence=0.99,
+            )
+        ]
+    )
+
+    assert verified == {}
+
+
+def test_legacy_semantic_code_and_new_support_flag_are_the_same_completed_state() -> None:
+    """A deployed conversation can resume after the storage contract changes."""
+
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-count"],
+        skill_id="number-count",
+    )
+    tracking = task.slots["tracking"]
+
+    assert tracking.equivalent_state_value("count_each_once", True) is True
+    assert tracking.equivalent_state_value(True, "one_by_one_order") is True
+    assert tracking.equivalent_state_value(None, True) is False
 
 
 @pytest.mark.asyncio
@@ -1021,9 +1061,7 @@ def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None
                 if is_correct:
                     continue
 
-                verified = task.validated_claims(
-                    (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
-                )
+                verified = task.validated_slot_claims(analysis.claims)
                 merged = {**state.verified_slots, **verified}
 
                 assert analysis.response_category not in {

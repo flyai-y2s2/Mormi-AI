@@ -410,6 +410,12 @@ class SlotClaim(BaseModel):
     value: str | int | float | bool | None = None
     factual: bool = False
     evidence_span: str = ""
+    # Open-ended method/reason/explanation slots cannot be enumerated as a
+    # finite list of canonical answer codes. The classifier instead states
+    # whether the child's exact evidence semantically supports the reviewed
+    # slot contract. Closed-value slots leave this field unset.
+    supported: bool | None = None
+    support_confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class UtteranceAnalysis(BaseModel):

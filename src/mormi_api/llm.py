@@ -7,7 +7,7 @@ from typing import Any
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, transform_schema
 from pydantic import BaseModel, ValidationError
 
-from .content import TaskDefinition
+from .content import SlotDefinition, TaskDefinition
 from .schemas import (
     ChildResponse,
     EntryPhase,
@@ -265,6 +265,30 @@ class ClaudeGateway:
             raise ModelOutputError("Speaker verification did not match schema") from error
 
     @staticmethod
+    def _slot_classifier_contract(slot: SlotDefinition) -> dict[str, Any]:
+        """Expose meaning, not an internal method code, for open slots."""
+
+        contract = slot.model_dump(mode="json")
+        contract["evaluation_mode"] = slot.resolved_evaluation_mode
+        if slot.is_semantic_support:
+            reviewed_examples = [
+                value
+                for value in [*slot.aliases, *slot.accepted_values]
+                if str(value).strip()
+            ]
+            contract.pop("expected", None)
+            contract.pop("aliases", None)
+            contract.pop("accepted_values", None)
+            contract.pop("preserve_value", None)
+            contract["reviewed_examples"] = reviewed_examples
+            contract["claim_contract"] = {
+                "value": None,
+                "supported": True,
+                "evidence_span": "exact_child_substring",
+            }
+        return contract
+
+    @staticmethod
     def _classifier_prompt(
         state: SessionState,
         task: TaskDefinition,
@@ -284,10 +308,12 @@ class ClaudeGateway:
         )
         interpreted_slot_ids = [*step.target_slots, *step.optional_slots]
         expected_slots = {
-            slot_id: task.slots[slot_id].model_dump(mode="json") for slot_id in interpreted_slot_ids
+            slot_id: ClaudeGateway._slot_classifier_contract(task.slots[slot_id])
+            for slot_id in interpreted_slot_ids
         }
         all_task_slots = {
-            slot_id: slot.model_dump(mode="json") for slot_id, slot in task.slots.items()
+            slot_id: ClaudeGateway._slot_classifier_contract(slot)
+            for slot_id, slot in task.slots.items()
         }
         payload: dict[str, Any] = {
             "scene": state.scene.value,
@@ -327,7 +353,7 @@ class ClaudeGateway:
                     "mode": task.entry_mode,
                     "stance_is_not_a_learning_fact": True,
                     "all_possible_slots": {
-                        slot_id: slot.model_dump(mode="json")
+                        slot_id: ClaudeGateway._slot_classifier_contract(slot)
                         for slot_id, slot in task.slots.items()
                     },
                 }
@@ -362,7 +388,23 @@ class ClaudeGateway:
                     "검증되지 않은 수학 답을 담은 구절은 비운다."
                 ),
                 "정답 방향의 일부 의미만 있으면 correct_partial로 분류한다.",
-                "부분 의미가 슬롯 하나를 뒷받침하면 그 슬롯의 expected 값을 claim한다.",
+                (
+                    "evaluation_mode=canonical_value 슬롯은 검수된 expected 값을 value로 "
+                    "claim하고 supported는 null로 둔다."
+                ),
+                (
+                    "evaluation_mode=semantic_support 슬롯은 내부 대표 코드로 정규화하지 "
+                    "않는다. 아이 원문이 description의 의미를 실제로 충족하면 value=null, "
+                    "supported=true, support_confidence와 정확한 evidence_span을 반환한다."
+                ),
+                (
+                    "semantic_support 슬롯의 예시 목록은 유한한 정답 목록이 아니다. 새롭지만 "
+                    "수학적으로 타당하고 화면 사실에 맞는 설명도 supported=true로 인정한다."
+                ),
+                (
+                    "semantic_support가 불충분하거나 틀리면 supported=false인 claim을 만들거나 "
+                    "claim을 생략한다. 원문에 없는 의미를 보충해 supported=true로 만들지 않는다."
+                ),
                 (
                     "숫자 expected에는 쉼표나 단위가 붙어도 같은 수로 해석한다. "
                     "예: 6000원과 6,000원은 같은 값이며 expected 숫자로 claim한다."
@@ -488,6 +530,12 @@ social_grounding_span은 안전한 메타·사회적 반응에 쓸 정확한 원
   예를 들어 '6000원이야'는 expected=6000을 직접 말한 결론이다.
 - semantic_role=method는 실제 행동이나 절차, reason은 사실 사이의 관계,
   explanation은 검수된 수학 관계나 해결 절차가 원문에 있어야 한다.
+- evaluation_mode=canonical_value는 value에 검수된 정답값을 넣고 supported는 null로 둔다.
+- evaluation_mode=semantic_support는 가능한 말을 코드값 목록으로 열거하지 않는다.
+  아이 원문이 슬롯 설명을 실제로 뒷받침하면 value=null, supported=true,
+  support_confidence와 정확한 evidence_span을 반환한다.
+- semantic_support의 reviewed_examples는 의미 경계를 보여주는 예시일 뿐 완전한 정답
+  목록이 아니다. 예시에 없는 창의적인 방법도 수학적으로 타당하면 인정한다.
 - method_acceptance_contract가 open_methods면 예시 목록 밖의 수학적으로 타당한 방법도
   인정한다. 도움 카드의 대표 풀이를 유일한 정답으로 취급하지 않는다.
 - target_method여도 문구 일치를 요구하지 않고 같은 행동·관계·절차인지 의미로 판정한다.

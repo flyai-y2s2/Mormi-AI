@@ -580,9 +580,7 @@ class ConversationEngine:
         # match reviewed curriculum facts.  An error analysis can therefore
         # never fill a slot even if a malformed model/client supplies a value.
         grounded_claims = (
-            task.validated_claims(
-                (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
-            )
+            task.validated_slot_claims(analysis.claims)
             if analysis.response_category in successful_categories
             else {}
         )
@@ -605,7 +603,10 @@ class ConversationEngine:
         understood_claims = {
             slot_id: value
             for slot_id, value in grounded_claims.items()
-            if state.verified_slots.get(slot_id) == value
+            if task.slots[slot_id].equivalent_state_value(
+                state.verified_slots.get(slot_id),
+                value,
+            )
         }
         understood_claims.update(accepted_claims)
         # A repeated fact is still understood, but it is not new learning
@@ -614,7 +615,10 @@ class ConversationEngine:
         newly_verified = {
             slot_id: value
             for slot_id, value in accepted_claims.items()
-            if next_state.verified_slots.get(slot_id) != value
+            if not task.slots[slot_id].equivalent_state_value(
+                next_state.verified_slots.get(slot_id),
+                value,
+            )
         }
         next_state.verified_slots.update(newly_verified)
         if (
@@ -1612,12 +1616,17 @@ class ConversationEngine:
         for slot_id, value in candidate_values.items():
             slot = task.slots.get(slot_id)
             if slot and slot_id in interpreted_slots:
+                factual = slot.accepts(value)
                 claims.append(
                     {
                         "slot_id": slot_id,
                         "value": value,
-                        "factual": slot.accepts(value),
+                        "factual": factual,
                         "evidence_span": str(value),
+                        "supported": factual if slot.is_semantic_support else None,
+                        "support_confidence": (
+                            1.0 if factual and slot.is_semantic_support else None
+                        ),
                     }
                 )
         if not claims and selected_labels:
@@ -1924,12 +1933,13 @@ class ConversationEngine:
         """
 
         filtered = dict(verified)
-        for slot_id in task.text_explanation_slots:
+        for slot_id in task.semantic_support_slots | set(task.text_explanation_slots):
             if slot_id not in filtered:
                 continue
             supported = any(
                 claim.factual
                 and claim.slot_id == slot_id
+                and claim.supported is not False
                 and cls._claim_evidence_text(task, child_text, claim.evidence_span)
                 for claim in analysis.claims
             )

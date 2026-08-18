@@ -158,6 +158,15 @@ def test_every_home_task_declares_semantic_roles_instead_of_relying_on_slot_name
     for spec in HOME_TEACHING_CATALOG.values():
         task = home_teaching_task(spec, skill_id=spec.id)
         assert all(slot.semantic_role for slot in task.slots.values())
+        assert all(
+            slot.resolved_evaluation_mode
+            == (
+                "semantic_support"
+                if slot.semantic_role in {"method", "reason", "explanation"}
+                else "canonical_value"
+            )
+            for slot in task.slots.values()
+        )
         assert task.slots["answer"].semantic_role == "conclusion"
         if spec.id == "number-count":
             assert task.slots["tracking"].semantic_role == "method"
@@ -993,7 +1002,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             )
         ).scalar_one()
         assert tracking_claim.validation_status == "verified"
-        assert tracking_claim.value_json == "count_each_once"
+        assert tracking_claim.value_json is True
         assert tracking_claim.newly_verified is True
         note_link = (
             await db.execute(

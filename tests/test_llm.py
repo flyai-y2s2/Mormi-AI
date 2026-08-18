@@ -375,6 +375,17 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         }
         slots = payload["all_task_slot_contracts"]
         assert {slot_id: slots[slot_id]["semantic_role"] for slot_id in roles} == roles
+        for slot_id, role in roles.items():
+            expected_mode = (
+                "semantic_support"
+                if role in {"method", "reason", "explanation"}
+                else "canonical_value"
+            )
+            assert slots[slot_id]["evaluation_mode"] == expected_mode
+            if expected_mode == "semantic_support":
+                assert "expected" not in slots[slot_id]
+                assert slots[slot_id]["claim_contract"]["supported"] is True
+                assert slots[slot_id]["claim_contract"]["value"] is None
         method_contract = payload["method_acceptance_contract"]
         assert method_contract["policy"] == task.help_method_policy
         assert method_contract["reviewed_examples"] == task.accepted_methods
