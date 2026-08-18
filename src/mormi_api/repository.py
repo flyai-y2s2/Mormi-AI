@@ -680,6 +680,7 @@ class Repository:
     ) -> OutboxEventRecord:
         payload: dict[str, object] = {
             "schema_version": 1,
+            "observation_version": 1,
             "observation_id": observation.observation_id,
             "conversation_id": observation.conversation_id,
             "learner_id": observation.learner_id,
@@ -687,6 +688,7 @@ class Repository:
             "scene": observation.scene,
             "scenario_id": observation.scenario_id,
             "task_id": observation.task_id,
+            "stage": observation.stage_id,
             "task_index": observation.task_index,
             "source_turn_id": observation.source_turn_id,
             "response_id": observation.response_id,
@@ -696,16 +698,21 @@ class Repository:
             "concept_result": observation.concept_result,
             "safety_category": observation.safety_category,
             "bottleneck": observation.bottleneck,
+            "bottleneck_candidate": observation.bottleneck,
             "classifier_confidence": observation.classifier_confidence,
             "expression_before": observation.expression_before,
             "expression_after": observation.expression_after,
             "hint_before": observation.hint_before,
             "hint_after": observation.hint_after,
             "transition_reason": observation.transition_reason,
+            "help_used": observation.help_card_shown,
+            "fallback_occurred": observation.fallback_reason is not None,
+            "completion_outcome": observation.completion_outcome,
             "dialogue_act": observation.dialogue_act,
             "speaker_source": observation.speaker_source,
             "verifier_status": observation.verifier_status,
             "record_origin": observation.record_origin,
+            "observed_at": observation.created_at.isoformat(),
             "versions": observation.versions_json,
             "claims": [
                 {

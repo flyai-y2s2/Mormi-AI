@@ -651,6 +651,15 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert outcome.note_id == completed.turn.note_update.note_id
     assert evidence_link.observation_id == observation.observation_id
     assert outbox.aggregate_id == observation.observation_id
+    assert outbox.payload_json["observation_version"] == 1
+    assert outbox.payload_json["stage"] == observation.stage_id
+    assert outbox.payload_json["bottleneck_candidate"] == observation.bottleneck
+    assert outbox.payload_json["help_used"] is observation.help_card_shown
+    assert outbox.payload_json["fallback_occurred"] is False
+    assert outbox.payload_json["completion_outcome"] == observation.completion_outcome
+    assert outbox.payload_json["observed_at"].removesuffix("+00:00") == (
+        observation.created_at.isoformat()
+    )
     assert outbox.payload_json["claims"][0].get("evidence_span") is None
     await database.dispose()
 

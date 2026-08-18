@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -25,6 +26,7 @@ from .dictionary_models import DictionaryCardEnvelope
 from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
 from .migrations import require_observation_schema
+from .outbox import OutboxDispatcher, OutboxStore
 from .repository import (
     ConversationNotFoundError,
     PersistenceError,
@@ -45,6 +47,8 @@ from .schemas import (
 from .security import StoredTextCodec
 from .service import ConversationService
 from .settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -83,8 +87,40 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gateway = gateway
     app.state.repository = repository
     app.state.service = ConversationService(repository, engine)
-    yield
-    await database.dispose()
+    dispatcher: OutboxDispatcher | None = None
+    dispatcher_task: asyncio.Task[None] | None = None
+    if settings.observation_ingest_enabled:
+        assert settings.observation_ingest_url is not None
+        assert settings.observation_ingest_key is not None
+        dispatcher = OutboxDispatcher(
+            OutboxStore(database, lease_seconds=settings.outbox_lease_seconds),
+            endpoint_url=settings.observation_ingest_url,
+            service_key=settings.observation_ingest_key,
+            poll_interval_seconds=settings.outbox_poll_interval_seconds,
+            batch_size=settings.outbox_batch_size,
+            request_timeout_seconds=settings.outbox_request_timeout_seconds,
+            retry_base_seconds=settings.outbox_retry_base_seconds,
+            retry_max_seconds=settings.outbox_retry_max_seconds,
+        )
+        dispatcher_task = asyncio.create_task(
+            dispatcher.run_forever(),
+            name="observation-outbox-dispatcher",
+        )
+        app.state.outbox_dispatcher = dispatcher
+    elif settings.observation_ingest_url or settings.observation_ingest_key:
+        logger.warning(
+            "observation_outbox_dispatcher_disabled reason=incomplete_configuration"
+        )
+    try:
+        yield
+    finally:
+        if dispatcher is not None:
+            await dispatcher.stop()
+        if dispatcher_task is not None:
+            await dispatcher_task
+        if dispatcher is not None:
+            await dispatcher.close()
+        await database.dispose()
 
 
 app = FastAPI(

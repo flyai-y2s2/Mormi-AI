@@ -259,6 +259,14 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_ANTHROPIC_API_KEY` | 예 | 자유 발화 분류와 모르미 발화 생성용 Claude API 키 |
 | `MORMI_RAW_DATA_ENCRYPTION_KEY` | 아니요 | 이전 `fernet:` 레코드를 최초 1회 평문으로 변환할 때만 필요한 기존 키 |
 | `MORMI_SERVICE_API_KEY` | 예 | Spring→AI 호출을 보호하는 서비스 간 공유 키 |
+| `MORMI_OBSERVATION_INGEST_URL` | 관찰 전송 시 예 | Spring의 `/internal/v1/observations/events` 전체 URL |
+| `MORMI_OBSERVATION_INGEST_KEY` | 관찰 전송 시 예 | AI→Spring 관찰 이벤트 호출을 보호하는 전용 공유 키 |
+| `MORMI_OUTBOX_POLL_INTERVAL_SECONDS` | 아니요 | 전송할 이벤트가 없을 때 폴링 간격, 기본 2초 |
+| `MORMI_OUTBOX_BATCH_SIZE` | 아니요 | 한 폴링 주기에 처리할 최대 이벤트 수, 기본 20개 |
+| `MORMI_OUTBOX_REQUEST_TIMEOUT_SECONDS` | 아니요 | Spring 수신 API 제한 시간, 기본 5초 |
+| `MORMI_OUTBOX_RETRY_BASE_SECONDS` | 아니요 | 재시도 백오프 시작값, 기본 2초 |
+| `MORMI_OUTBOX_RETRY_MAX_SECONDS` | 아니요 | 재시도 백오프 상한, 기본 300초 |
+| `MORMI_OUTBOX_LEASE_SECONDS` | 아니요 | 전송 중 worker 장애를 감지하는 처리 임대 시간, 기본 30초 |
 | `MORMI_CLASSIFIER_MODEL` | 아니요 | 기본값 `claude-haiku-4-5-20251001` |
 | `MORMI_SPEAKER_MODEL` | 아니요 | 기본값 `claude-sonnet-4-6` |
 | `MORMI_SPEAKER_TIMEOUT_SECONDS` | 아니요 | 화자 생성 제한 시간, 기본 8초 |
@@ -268,10 +276,15 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_CORS_ORIGINS` | 아니요 | 브라우저 직접 호출을 허용할 오리진 JSON 배열. Spring 경유만 하면 `[]` |
 | `MORMI_SHOW_INTERNAL_PEDAGOGY=false` | 아니요 | 운영 응답에서 내부 L/H·판정 근거를 숨김 |
 
-Spring 서버에는 AI 비밀 전체가 아니라 다음 두 값만 공유합니다.
+대화 프록시 호출을 위해 Spring 서버와 맞출 값은 다음 두 가지입니다.
 
 - `MORMI_DIALOGUE_BASE_URL`: AI 서버의 내부 주소
 - `MORMI_DIALOGUE_SERVICE_KEY`: AI의 `MORMI_SERVICE_API_KEY`와 동일한 값
+
+관찰 이벤트 파이프라인을 켤 때는 AI 서버에 Spring 수신 URL과
+`MORMI_OBSERVATION_INGEST_KEY`를 함께 설정하고, Spring 수신 API에도 같은 키를
+설정합니다. 둘 중 하나만 있으면 기존 대화 API는 정상 시작하되 전송기는 비활성화되어
+설정 누락 로그를 남깁니다. 키 값과 관찰 payload는 전송 로그에 기록하지 않습니다.
 
 Anthropic 키와 DB 접속 문자열은 FE나 Spring 서버에 전달하지 않습니다. 첫 평문 전환이
 완료되기 전에는 기존 원문 암호화 키도 AI 서버에 유지해야 합니다.
