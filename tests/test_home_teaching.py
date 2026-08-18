@@ -903,7 +903,11 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             claims=[
                 SlotClaim(
                     slot_id="tracking",
-                    value="count_each_once",
+                    # The production classifier may return a reviewed method
+                    # alias rather than the slot's canonical value.  The
+                    # repository must persist the same canonical value used by
+                    # the engine so note provenance remains linkable.
+                    value="one_by_one_order",
                     factual=True,
                     evidence_span=child_method,
                 )
@@ -981,6 +985,25 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
         assert record is not None
         assert "_child_note_evidence_encrypted" not in record.state_json
         assert record.state_json["child_note_evidence"]["tracking"] == child_method
+        tracking_claim = (
+            await db.execute(
+                select(DialogueClaimRecord).where(
+                    DialogueClaimRecord.slot_id == "tracking"
+                )
+            )
+        ).scalar_one()
+        assert tracking_claim.validation_status == "verified"
+        assert tracking_claim.value_json == "count_each_once"
+        assert tracking_claim.newly_verified is True
+        note_link = (
+            await db.execute(
+                select(NoteEvidenceLinkRecord).where(
+                    NoteEvidenceLinkRecord.observation_id
+                    == tracking_claim.observation_id
+                )
+            )
+        ).scalar_one()
+        assert note_link.source_slot_ids_json == ["tracking"]
     restored = await repository.get_state(started.conversation_id)
     assert restored.child_note_evidence["tracking"] == child_method
     await database.dispose()

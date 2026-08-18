@@ -475,13 +475,24 @@ class Repository:
         records: list[DialogueClaimRecord] = []
         for claim in analysis.claims:
             slot = task.slots.get(claim.slot_id)
+            # The classifier may return a reviewed alias/strategy value while
+            # the engine stores the slot's canonical value.  Compare like with
+            # like so an accepted explanation is not persisted as rejected
+            # merely because, for example, ``one_by_one_order`` canonicalizes
+            # to ``count_each_once``.
+            canonical_value = (
+                slot.canonical(claim.value)
+                if slot is not None and claim.factual and slot.accepts(claim.value)
+                else None
+            )
             accepted = bool(
                 slot is not None
                 and claim.slot_id in accepted_claims
-                and accepted_claims[claim.slot_id] == claim.value
+                and accepted_claims[claim.slot_id] == canonical_value
             )
             advanced_state = bool(
-                accepted and previous_state.verified_slots.get(claim.slot_id) != claim.value
+                accepted
+                and previous_state.verified_slots.get(claim.slot_id) != canonical_value
             )
             records.append(
                 DialogueClaimRecord(
@@ -491,7 +502,7 @@ class Repository:
                     # Only reviewed canonical values are analytics-safe. A
                     # rejected model claim can contain arbitrary child text,
                     # so keep it only in the dedicated raw-evidence column.
-                    value_json=claim.value if accepted else None,
+                    value_json=canonical_value if accepted else None,
                     factual=claim.factual,
                     validation_status="verified" if accepted else "rejected",
                     evidence_span_encrypted=(
