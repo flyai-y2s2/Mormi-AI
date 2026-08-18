@@ -83,21 +83,26 @@ async def make_service(
     tmp_path: object,
     *,
     skills: tuple[str, ...] = (),
+    skill_levels: dict[str, ExpressionLevel] | None = None,
 ) -> tuple[ConversationService, Repository, Database]:
     database_path = str(tmp_path) + f"/cafe-{uuid4().hex}.db"
     database = Database(f"sqlite+aiosqlite:///{database_path}")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
-    if skills:
+    configured_skills = {
+        skill: ExpressionLevel.L2 for skill in skills
+    }
+    configured_skills.update(skill_levels or {})
+    if configured_skills:
         await repository.save_profile(
             LearnerProfile(
                 learner_id=1,
                 skills={
                     skill: SkillProfile(
                         skill_id=skill,
-                        highest_stable_expression_level=ExpressionLevel.L2,
+                        highest_stable_expression_level=level,
                     )
-                    for skill in skills
+                    for skill, level in configured_skills.items()
                 },
             )
         )
@@ -303,6 +308,41 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
     ]
     assert outcomes[0].verified_slots_json == {"child_menu": "milk"}
     assert outcomes[1].verified_slots_json == {"operation": "addition", "result": 5000}
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_next_task_starting_at_l0_receives_matching_h3_contract(
+    tmp_path: object,
+) -> None:
+    """A profile-based L0 start must not enter a new task without full H3 support."""
+
+    service, repository, database = await make_service(
+        tmp_path,
+        skill_levels={"add_menu_prices": ExpressionLevel.L0},
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_menu_total",
+            cafe_context=cafe_context("americano"),
+        )
+    )
+
+    picked = await choose(service, started.conversation_id, started.turn, "milk")
+    state = await repository.get_state(started.conversation_id)
+
+    assert picked.turn.task_id == "cafe_total_calculation"
+    assert state.expression_level is ExpressionLevel.L0
+    assert state.hint_level is HintLevel.H3
+    assert state.task_max_hint is HintLevel.H3
+    assert picked.turn.input.kind is InputKind.JOINT
+    assert picked.turn.help_card is not None
+    assert picked.turn.help_card.level is HintLevel.H3
+    assert picked.turn.help_card.auto_open is True
+    assert picked.turn.visual.type == "joint_money_calculation"
+    assert picked.turn.visual.data["result"] == 5000
     await database.dispose()
 
 

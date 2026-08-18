@@ -1226,6 +1226,114 @@ async def test_repeated_no_response_walks_every_ladder_step_without_changing_pro
     assert state.status.value == "active"
 
 
+@pytest.mark.parametrize(
+    ("expression_level", "hint_level"),
+    [
+        (ExpressionLevel.L0, HintLevel.H0),
+        (ExpressionLevel.L0, HintLevel.H2),
+        (ExpressionLevel.L4, HintLevel.H3),
+    ],
+)
+def test_initial_turn_normalizes_every_terminal_mismatch_to_joint_h3(
+    expression_level: ExpressionLevel,
+    hint_level: HintLevel,
+) -> None:
+    """Legacy/profile state may not expose only one half of the terminal contract."""
+
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=expression_level,
+        hint_level=hint_level,
+    )
+
+    turn = engine.initial_turn(state)
+
+    assert state.expression_level is ExpressionLevel.L0
+    assert state.hint_level is HintLevel.H3
+    assert state.task_max_hint is HintLevel.H3
+    assert turn.input.kind is InputKind.JOINT
+    assert turn.help_card is not None
+    assert turn.help_card.level is HintLevel.H3
+    assert turn.pedagogy is not None
+    assert turn.pedagogy.expression_level is ExpressionLevel.L0
+    assert turn.pedagogy.hint_level is HintLevel.H3
+
+
+@pytest.mark.parametrize(
+    ("expression_level", "hint_level"),
+    [
+        (ExpressionLevel.L4, HintLevel.H2),
+        (ExpressionLevel.L1, HintLevel.H0),
+    ],
+)
+def test_nonterminal_expression_and_hint_levels_remain_independent(
+    expression_level: ExpressionLevel,
+    hint_level: HintLevel,
+) -> None:
+    """The terminal invariant must not collapse valid intermediate L/H pairs."""
+
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=expression_level,
+        hint_level=hint_level,
+    )
+
+    turn = engine.initial_turn(state)
+
+    assert state.expression_level is expression_level
+    assert state.hint_level is hint_level
+    assert turn.pedagogy is not None
+    assert turn.pedagogy.expression_level is expression_level
+    assert turn.pedagogy.hint_level is hint_level
+
+
+@pytest.mark.asyncio
+async def test_expression_block_at_l1_enters_complete_joint_contract() -> None:
+    """The original asymmetric branch must not create L0-H2."""
+
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.EXPRESSION_BLOCK,
+        difficulty_class=DifficultyClass.EXPRESSION,
+        bottleneck="expression",
+        confidence=1,
+    )
+    engine = ConversationEngine(
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L1,
+        hint_level=HintLevel.H2,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, classified, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="말로 설명하기 어려워",
+        ),
+        initial.mormi.text,
+    )
+
+    assert classified.response_category is ResponseCategory.EXPRESSION_BLOCK
+    assert next_state.expression_level is ExpressionLevel.L0
+    assert next_state.hint_level is HintLevel.H3
+    assert next_state.task_max_hint is HintLevel.H3
+    assert turn.input.kind is InputKind.JOINT
+    assert turn.help_card is not None
+    assert turn.help_card.level is HintLevel.H3
+    assert turn.help_card.auto_open is True
+    assert "같이" in turn.mormi.text
+
+
 def test_unknown_or_multiple_choice_ids_are_input_errors_in_analysis() -> None:
     """Malformed structured input must never be interpreted as a math answer."""
 
