@@ -14,6 +14,7 @@ from .dictionary_models import dictionary_reference
 from .llm import (
     ClaudeGateway,
     extract_numeric_values,
+    validate_note_contextualization,
     validate_speaker_output,
     validate_speaker_verification,
 )
@@ -35,6 +36,8 @@ from .schemas import (
     LearnerProfile,
     MormiContract,
     NoteAttribution,
+    NoteContextualizationContext,
+    NoteContextualizationOutput,
     NoteEvidence,
     NoteUpdate,
     PedagogicalDecision,
@@ -93,6 +96,7 @@ class ConversationGraphState(TypedDict, total=False):
     decision: dict[str, Any]
     speaker_output: dict[str, Any]
     speaker_text: str
+    note_output: dict[str, Any]
     runtime: dict[str, Any]
     turn: dict[str, Any]
 
@@ -329,10 +333,25 @@ class ConversationEngine:
                 speaker_source="reviewed_fallback",
                 verifier_status="not_required",
             )
-            return {
+            result: dict[str, Any] = {
                 "speaker_text": context.fallback_text,
                 "runtime": runtime.model_dump(mode="json"),
             }
+            note_context = decision.note_contextualization
+            if note_context is not None:
+                try:
+                    async with asyncio.timeout(min(self.speaker_timeout_seconds, 4.0)):
+                        note_output = await self.gateway.contextualize_note(note_context)
+                    result["note_output"] = note_output.model_dump(mode="json")
+                except Exception as error:
+                    # The reviewed deterministic note is always safe to show.
+                    # A note-language failure must never fail or delay the
+                    # completed learning turn beyond the bounded timeout.
+                    logger.warning(
+                        "note_contextualization_fallback error_type=%s",
+                        type(error).__name__,
+                    )
+            return result
         try:
             async with asyncio.timeout(self.speaker_timeout_seconds):
                 output = await self.gateway.speak(context)
@@ -434,6 +453,18 @@ class ConversationEngine:
                         type(error).__name__,
                     )
         text = text or decision.speaker_context.fallback_text
+        note_update = decision.note_update
+        note_context = decision.note_contextualization
+        if note_update is not None and note_context is not None and graph_state.get("note_output"):
+            note_output = NoteContextualizationOutput.model_validate(graph_state["note_output"])
+            contextualized = validate_note_contextualization(note_output, note_context)
+            if contextualized:
+                note_update = note_update.model_copy(update={"text": contextualized})
+            else:
+                logger.info(
+                    "note_contextualization_fallback reason=contract_rejected skill_id=%s",
+                    note_context.skill_id,
+                )
         turn = self._turn_contract(
             decision.state,
             task,
@@ -442,7 +473,7 @@ class ConversationEngine:
             visual=decision.visual,
             help_card=decision.help_card,
             mood=decision.mood,
-            note=decision.note_update,
+            note=note_update,
         )
         decision.state.current_turn_id = turn.turn_id
         return {
@@ -1092,6 +1123,7 @@ class ConversationEngine:
         accepted_claims: Mapping[str, str | int | float | bool],
     ) -> PedagogicalDecision:
         note, direct = self._note_from_provenance(state, task)
+        note_contextualization = self._note_contextualization_context(state, task, note)
         if task.note_policy != "none":
             state.all_tasks_direct = state.all_tasks_direct and direct
         # The speaker may celebrate only what the note provenance permits.
@@ -1140,6 +1172,7 @@ class ConversationEngine:
                 visual=self._visual_for(next_task, state.hint_level),
                 help_card=self._help_card(next_task, state.hint_level),
                 note_update=note,
+                note_contextualization=note_contextualization,
                 mood="relieved",
                 speaker_context=self._speaker_context(
                     task=next_task,
@@ -1171,6 +1204,7 @@ class ConversationEngine:
             visual=VisualContract(type="success", data={"task": task.id}),
             help_card=None,
             note_update=note,
+            note_contextualization=note_contextualization,
             mood="celebrating",
             speaker_context=self._speaker_context(
                 task=task,
@@ -2203,6 +2237,53 @@ class ConversationEngine:
         # emitting the curriculum line would attribute knowledge the child
         # never expressed.
         return None, False
+
+    @staticmethod
+    def _note_contextualization_context(
+        state: SessionState,
+        task: TaskDefinition,
+        note: NoteUpdate | None,
+    ) -> NoteContextualizationContext | None:
+        """Build the only context an LLM may use to complete a direct note.
+
+        Semantic method/reason fact sentences are intentionally excluded:
+        those sentences can contain a curriculum-preferred strategy that the
+        child never used.  The reviewed note context and canonical fact slots
+        are enough to resolve scene-bound references without importing one.
+        """
+
+        if note is None or note.attribution is not NoteAttribution.CHILD:
+            return None
+        source_fragments = {
+            slot_id: state.child_note_evidence[slot_id]
+            for slot_id in task.effective_note_slots
+            if slot_id in state.child_note_evidence
+        }
+        if not source_fragments:
+            return None
+        reviewed_facts = {"note_context": task.note_context}
+        for slot_id in task.effective_note_slots:
+            slot = task.slots[slot_id]
+            if not slot.is_semantic_support and slot_id in state.verified_slots:
+                reviewed_facts[f"slot:{slot_id}"] = slot.fact_sentence
+        allowed_numbers = sorted(
+            extract_numeric_values(
+                " ".join(
+                    [
+                        *source_fragments.values(),
+                        *reviewed_facts.values(),
+                    ]
+                )
+            )
+        )
+        return NoteContextualizationContext(
+            skill_id=task.skill_id,
+            note_context=task.note_context,
+            source_fragments=source_fragments,
+            reviewed_facts=reviewed_facts,
+            allowed_numbers=allowed_numbers,
+            fallback_text=note.text,
+        )
 
 
 def max_hint(left: HintLevel, right: HintLevel) -> HintLevel:

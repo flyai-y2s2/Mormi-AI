@@ -635,6 +635,34 @@ class SpeakerGuardContract(BaseModel):
     child_expression_source: str | None = None
 
 
+class NoteContextualizationContext(BaseModel):
+    """Closed-world input for turning child evidence into a standalone note.
+
+    The child wording remains the source of the mathematical idea.  Reviewed
+    context may only resolve omitted subjects, demonstratives and scene-bound
+    references such as ``둘이`` or ``오른쪽``.
+    """
+
+    skill_id: str
+    note_context: str
+    source_fragments: dict[str, str] = Field(min_length=1)
+    reviewed_facts: dict[str, str] = Field(default_factory=dict)
+    allowed_numbers: list[str] = Field(default_factory=list)
+    fallback_text: str
+
+
+class NoteContextualizationOutput(BaseModel):
+    """Auditable note rewrite produced under the closed-world contract."""
+
+    text: str
+    source_slots_used: list[str] = Field(default_factory=list)
+    source_spans_used: list[str] = Field(default_factory=list)
+    fact_refs_used: list[str] = Field(default_factory=list)
+    meaning_preserved: bool = False
+    self_contained: bool = False
+    introduced_math_content: bool = False
+
+
 class SpeakerContext(BaseModel):
     dialogue_act: str
     task_relation: TaskRelation = TaskRelation.UNKNOWN
@@ -672,6 +700,7 @@ class PedagogicalDecision(BaseModel):
     visual: VisualContract
     help_card: HelpCardContract | None = None
     note_update: NoteUpdate | None = None
+    note_contextualization: NoteContextualizationContext | None = None
     mood: Literal["curious", "listening", "thinking", "relieved", "celebrating"]
     speaker_context: SpeakerContext
 

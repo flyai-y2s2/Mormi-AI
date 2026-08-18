@@ -15,6 +15,8 @@ from mormi_api.schemas import (
     DifficultyClass,
     ExpressionLevel,
     HintLevel,
+    NoteContextualizationContext,
+    NoteContextualizationOutput,
     ResponseCategory,
     SafetyCategory,
     SceneType,
@@ -22,6 +24,39 @@ from mormi_api.schemas import (
     SlotClaim,
     UtteranceAnalysis,
 )
+
+
+class ContextualizedNoteGateway(FakeGateway):
+    async def contextualize_note(
+        self,
+        context: NoteContextualizationContext,
+    ) -> NoteContextualizationOutput:
+        return NoteContextualizationOutput(
+            text="5에서 3을 빼면 2 차이가 나니까 5가 훨씬 더 커.",
+            source_slots_used=list(context.source_fragments),
+            source_spans_used=list(context.source_fragments.values()),
+            fact_refs_used=["note_context", "slot:answer"],
+            meaning_preserved=True,
+            self_contained=True,
+            introduced_math_content=False,
+        )
+
+
+class InventedNoteGateway(FakeGateway):
+    async def contextualize_note(
+        self,
+        context: NoteContextualizationContext,
+    ) -> NoteContextualizationOutput:
+        return NoteContextualizationOutput(
+            # 9 is not present in either the child evidence or reviewed context.
+            text="9에서 3을 빼면 6이니까 9가 더 커.",
+            source_slots_used=list(context.source_fragments),
+            source_spans_used=list(context.source_fragments.values()),
+            fact_refs_used=["note_context"],
+            meaning_preserved=True,
+            self_contained=True,
+            introduced_math_content=False,
+        )
 
 
 def _number_comparison_state() -> SessionState:
@@ -87,6 +122,99 @@ async def test_code_upgrades_classifier_partial_when_all_current_slots_are_verif
     assert turn.status.value == "completed"
     assert turn.note_update is not None
     assert "둘을 빼면 2 차이가 나서 오른쪽이 더 커" in turn.note_update.text
+
+
+@pytest.mark.asyncio
+async def test_direct_note_resolves_scene_references_with_reviewed_context() -> None:
+    child_text = "오른쪽이 더 많구 둘이 빼다보면 2 차이가 나기때문에 오른쪽이 훨씬 더 커"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽이 더 많구",
+            ),
+            SlotClaim(
+                slot_id="reason",
+                factual=True,
+                supported=True,
+                support_confidence=0.98,
+                evidence_span="둘이 빼다보면 2 차이가 나기때문에 오른쪽이 훨씬 더 커",
+            ),
+        ],
+        confidence=0.95,
+    )
+    engine = ConversationEngine(ContextualizedNoteGateway([analysis]))  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="6109e86e-98e9-4dcb-9964-a4990add6720",
+            type="text",
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert turn.note_update is not None
+    assert turn.note_update.text == "5에서 3을 빼면 2 차이가 나니까 5가 훨씬 더 커."
+    assert next_state.child_note_evidence == {
+        "answer": "오른쪽이 더 많구",
+        "reason": "둘이 빼다보면 2 차이가 나기때문에 오른쪽이 훨씬 더 커",
+    }
+
+
+@pytest.mark.asyncio
+async def test_note_contextualizer_cannot_introduce_unknown_numbers() -> None:
+    child_text = "오른쪽이 더 많고 둘을 빼면 2 차이가 나"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽이 더 많고",
+            ),
+            SlotClaim(
+                slot_id="reason",
+                factual=True,
+                supported=True,
+                support_confidence=0.98,
+                evidence_span="둘을 빼면 2 차이가 나",
+            ),
+        ],
+        confidence=0.95,
+    )
+    engine = ConversationEngine(InventedNoteGateway([analysis]))  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    _, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="7109e86e-98e9-4dcb-9964-a4990add6720",
+            type="text",
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert turn.note_update is not None
+    assert "9" not in turn.note_update.text
+    assert child_text in turn.note_update.text
 
 
 @pytest.mark.asyncio

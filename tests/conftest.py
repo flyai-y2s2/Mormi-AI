@@ -5,6 +5,8 @@ from collections.abc import Iterator
 import pytest
 
 from mormi_api.schemas import (
+    NoteContextualizationContext,
+    NoteContextualizationOutput,
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
@@ -27,6 +29,20 @@ class FakeGateway:
             text=context.fallback_text,
             dialogue_act=context.dialogue_act,
             asked_slot_ids=context.required_slot_ids,
+        )
+
+    async def contextualize_note(
+        self,
+        context: NoteContextualizationContext,
+    ) -> NoteContextualizationOutput:
+        return NoteContextualizationOutput(
+            text=context.fallback_text,
+            source_slots_used=list(context.source_fragments),
+            source_spans_used=list(context.source_fragments.values()),
+            fact_refs_used=[],
+            meaning_preserved=True,
+            self_contained=True,
+            introduced_math_content=False,
         )
 
     async def verify_speaker(

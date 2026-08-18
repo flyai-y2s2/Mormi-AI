@@ -12,6 +12,8 @@ from .schemas import (
     ChildResponse,
     EntryPhase,
     InteractionIntent,
+    NoteContextualizationContext,
+    NoteContextualizationOutput,
     ResponseCategory,
     ResponseType,
     SessionState,
@@ -218,6 +220,44 @@ class ClaudeGateway:
             return SpeakerOutput.model_validate_json(raw)
         except ValidationError as error:
             raise ModelOutputError("Speaker output did not match schema") from error
+
+    async def contextualize_note(
+        self,
+        context: NoteContextualizationContext,
+    ) -> NoteContextualizationOutput:
+        """Resolve scene-bound wording without inventing a child contribution."""
+
+        if not self.client:
+            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
+        schema = structured_output_schema(NoteContextualizationOutput)
+        try:
+            message = await self.client.messages.create(
+                model=self.settings.speaker_model,
+                max_tokens=280,
+                temperature=0.2,
+                system=NOTE_CONTEXTUALIZER_SYSTEM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": json.dumps(context.model_dump(mode="json"), ensure_ascii=False),
+                    }
+                ],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema,
+                    }
+                },
+            )
+        except (APIConnectionError, APIStatusError) as error:
+            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
+        if message.stop_reason in {"refusal", "max_tokens"}:
+            raise ModelOutputError(f"Note contextualizer stopped with {message.stop_reason}")
+        raw = _text_content(message.content)
+        try:
+            return NoteContextualizationOutput.model_validate_json(raw)
+        except ValidationError as error:
+            raise ModelOutputError("Note contextualizer output did not match schema") from error
 
     async def verify_speaker(
         self,
@@ -629,6 +669,37 @@ approved=false로 판정한다.
 """.strip()
 
 
+NOTE_CONTEXTUALIZER_SYSTEM = """
+너는 모르미 별노트의 문장 편집기다. 별노트의 수학적 아이디어와 해결 방법은 반드시
+아이의 source_fragments에서만 와야 한다. reviewed_facts와 note_context는 아이가 생략한
+대상·수치·단위·방향을 풀어 쓰는 데만 사용한다.
+
+허용되는 편집:
+- '둘이', '이거', '오른쪽', '그 수'처럼 화면이 없으면 알 수 없는 말을 검수된 대상이나
+  수치로 바꾼다.
+- 조사, 어순, 띄어쓰기와 문장 종결을 자연스럽게 다듬는다.
+- 짧은 발화를 한 문장만 따로 읽어도 이해되는 완결된 문장으로 만든다.
+
+금지되는 편집:
+- 아이가 말하지 않은 풀이 전략·계산 절차·수학 관계·결론을 새로 넣는다.
+- 교과서의 대표 풀이로 아이의 창의적인 방법을 바꾼다.
+- reviewed_facts에 없는 수치나 대상을 만든다.
+- 아이를 맞다/틀리다 평가하거나 모르미가 가르치는 말투를 쓴다.
+
+검증할 수 있도록 수치는 입력에 나온 아라비아 숫자 표기를 그대로 사용한다.
+
+예시:
+- context: 왼쪽 5개와 오른쪽 7개 비교
+- child: '둘이 빼다보면 2 차이가 나기 때문에 오른쪽이 훨씬 더 커'
+- note: '7에서 5를 빼면 2 차이가 나니까 7이 훨씬 더 커.'
+이 예시는 형태만 보여 준다. 실제 숫자와 대상은 입력의 검수된 문맥만 사용한다.
+
+source_slots_used에는 사용한 모든 source_fragments 키를, source_spans_used에는 해당 원문을
+글자 그대로 넣는다. fact_refs_used에는 실제로 문맥 보완에 쓴 reviewed_facts 키만 넣는다.
+새 수학 내용을 넣지 않았을 때만 introduced_math_content=false로 둔다.
+""".strip()
+
+
 _FORBIDDEN_SPEAKER = re.compile(
     r"(틀렸|맞았|맞아|정확해|잘했|옳아|훌륭|정답|오답|다시\s*생각|"
     r"잘\s*생각|쉬운\s*문제|힌트|미션|L[0-4]|H[0-3]|바보|멍청|"
@@ -797,6 +868,45 @@ def validate_speaker_output(
         ):
             return None
     elif output.asked_slot_ids or "?" in text:
+        return None
+    return text
+
+
+_FORBIDDEN_NOTE_COPY = re.compile(
+    r"(틀렸|맞았|맞아|정답|오답|잘했|훌륭|다시\s*생각|설명해\s*봐)",
+    re.IGNORECASE,
+)
+
+
+def validate_note_contextualization(
+    output: NoteContextualizationOutput,
+    context: NoteContextualizationContext,
+) -> str | None:
+    """Accept only a closed-world, provenance-preserving note rewrite."""
+
+    text = output.text.strip()
+    if not text or len(text) > 140 or len(text.splitlines()) > 2 or "?" in text:
+        return None
+    if _FORBIDDEN_NOTE_COPY.search(text):
+        return None
+    if not output.meaning_preserved or not output.self_contained:
+        return None
+    if output.introduced_math_content:
+        return None
+    if len(output.source_slots_used) != len(set(output.source_slots_used)):
+        return None
+    if set(output.source_slots_used) != set(context.source_fragments):
+        return None
+    # Two slots may legitimately cite the same full child sentence. Preserve
+    # that multiplicity instead of treating repeated provenance as a model
+    # error.
+    if sorted(output.source_spans_used) != sorted(context.source_fragments.values()):
+        return None
+    if any(ref not in context.reviewed_facts for ref in output.fact_refs_used):
+        return None
+    numbers = extract_numeric_values(text)
+    allowed = {number.replace(",", "") for number in context.allowed_numbers}
+    if any(number not in allowed for number in numbers):
         return None
     return text
 
