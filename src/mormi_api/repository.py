@@ -254,6 +254,7 @@ class Repository:
         next_state: SessionState,
         response: ChildResponse,
         analysis: UtteranceAnalysis,
+        classifier_response_category: ResponseCategory,
         next_turn: TurnContract,
         previous_question: str,
         note: NoteUpdate | None,
@@ -311,6 +312,7 @@ class Repository:
                     current_turn=current_turn,
                     response=response,
                     analysis=analysis,
+                    classifier_response_category=classifier_response_category,
                     next_turn=next_turn,
                     runtime=runtime,
                 )
@@ -385,6 +387,7 @@ class Repository:
         current_turn: TurnRecord,
         response: ChildResponse,
         analysis: UtteranceAnalysis,
+        classifier_response_category: ResponseCategory,
         next_turn: TurnContract,
         runtime: SpeakerRuntimeAudit,
     ) -> DialogueTurnObservationRecord:
@@ -403,6 +406,11 @@ class Repository:
                 "social_grounding_span",
                 "note_candidate",
             },
+        )
+        safe_analysis["classifier_response_category"] = classifier_response_category.value
+        safe_analysis["effective_response_category"] = analysis.response_category.value
+        safe_analysis["response_category_reconciled"] = (
+            classifier_response_category is not analysis.response_category
         )
         help_card = next_turn.help_card
         return DialogueTurnObservationRecord(

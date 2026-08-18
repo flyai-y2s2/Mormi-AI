@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 from conftest import FakeGateway
 
-from mormi_api.content import CHANGE_TASK_ID, TOTAL_CALC_TASK_ID
+from mormi_api.content import (
+    CHANGE_TASK_ID,
+    HOME_TEACH_TASK_ID,
+    TOTAL_CALC_TASK_ID,
+    create_scenario_data,
+)
 from mormi_api.engine import ConversationEngine
 from mormi_api.schemas import (
     ChildResponse,
@@ -12,10 +17,161 @@ from mormi_api.schemas import (
     HintLevel,
     ResponseCategory,
     SafetyCategory,
+    SceneType,
     SessionState,
     SlotClaim,
     UtteranceAnalysis,
 )
+
+
+def _number_comparison_state() -> SessionState:
+    scenario_data = create_scenario_data(
+        "home_teach",
+        curriculum_session_id="number-compare",
+        skill_id="number-compare",
+    )
+    return SessionState(
+        learner_id=1,
+        scene=SceneType.HOME_TEACH,
+        scenario_id="home_teach",
+        task_ids=[HOME_TEACH_TASK_ID],
+        task_start_levels={HOME_TEACH_TASK_ID: ExpressionLevel.L4},
+        scenario_data=scenario_data,
+        expression_level=ExpressionLevel.L4,
+        task_start_level=ExpressionLevel.L4,
+    )
+
+
+@pytest.mark.asyncio
+async def test_code_upgrades_classifier_partial_when_all_current_slots_are_verified() -> None:
+    child_text = "오른쪽이 더 많구 둘을 빼면 2 차이가 나서 오른쪽이 더 커"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽이 더 많구",
+            ),
+            SlotClaim(
+                slot_id="reason",
+                factual=True,
+                supported=True,
+                support_confidence=0.98,
+                evidence_span="둘을 빼면 2 차이가 나서 오른쪽이 더 커",
+            ),
+        ],
+        confidence=0.92,
+    )
+    engine = ConversationEngine(FakeGateway([analysis]), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, effective_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="4109e86e-98e9-4dcb-9964-a4990add6720",
+            type="text",
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert effective_analysis.response_category is ResponseCategory.CORRECT_FULL
+    assert next_state.status.value == "completed"
+    assert turn.status.value == "completed"
+    assert turn.note_update is not None
+    assert "둘을 빼면 2 차이가 나서 오른쪽이 더 커" in turn.note_update.text
+
+
+@pytest.mark.asyncio
+async def test_code_downgrades_classifier_full_when_only_one_current_slot_is_verified() -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽",
+            )
+        ],
+        confidence=0.99,
+    )
+    engine = ConversationEngine(FakeGateway([analysis]), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, effective_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="5209e86e-98e9-4dcb-9964-a4990add6720",
+            type="text",
+            text="오른쪽",
+        ),
+        initial.mormi.text,
+    )
+
+    assert effective_analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert next_state.verified_slots["answer"] == "오른쪽"
+    assert turn.input.target_slots == ["reason"]
+
+
+@pytest.mark.asyncio
+async def test_verified_slots_recover_a_valid_answer_from_classifier_concept_error() -> None:
+    child_text = "오른쪽이 더 많아. 왼쪽은 3개고 오른쪽은 5개니까"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        difficulty_class=DifficultyClass.CONCEPT,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽이 더 많아",
+            ),
+            SlotClaim(
+                slot_id="reason",
+                factual=True,
+                supported=True,
+                support_confidence=0.97,
+                evidence_span="왼쪽은 3개고 오른쪽은 5개니까",
+            ),
+        ],
+        misconception_tag="reversed_comparison",
+        bottleneck="concept",
+        confidence=0.85,
+    )
+    engine = ConversationEngine(FakeGateway([analysis]), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, effective_analysis, _ = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="6309e86e-98e9-4dcb-9964-a4990add6720",
+            type="text",
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert effective_analysis.response_category is ResponseCategory.CORRECT_FULL
+    assert effective_analysis.difficulty_class is DifficultyClass.UNKNOWN
+    assert effective_analysis.misconception_tag is None
+    assert next_state.status.value == "completed"
 
 
 @pytest.mark.asyncio

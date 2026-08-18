@@ -78,6 +78,7 @@ class EngineProgress:
 class EngineTurnResult:
     state: SessionState
     analysis: UtteranceAnalysis
+    classifier_response_category: ResponseCategory
     turn: TurnContract
     runtime: SpeakerRuntimeAudit
     accepted_claims: dict[str, str | int | float | bool]
@@ -88,6 +89,7 @@ class ConversationGraphState(TypedDict, total=False):
     response: dict[str, Any]
     previous_question: str
     analysis: dict[str, Any]
+    classifier_response_category: str
     decision: dict[str, Any]
     speaker_output: dict[str, Any]
     speaker_text: str
@@ -186,6 +188,9 @@ class ConversationEngine:
         yield EngineTurnResult(
             state=SessionState.model_validate(final_values["session"]),
             analysis=UtteranceAnalysis.model_validate(final_values["analysis"]),
+            classifier_response_category=ResponseCategory(
+                final_values["classifier_response_category"]
+            ),
             turn=TurnContract.model_validate(final_values["turn"]),
             runtime=SpeakerRuntimeAudit.model_validate(final_values["runtime"]),
             accepted_claims=decision.accepted_claims,
@@ -233,7 +238,7 @@ class ConversationEngine:
                 bottleneck="expression",
                 confidence=1,
             )
-            return {"analysis": analysis.model_dump(mode="json")}
+            return self._understanding_result(analysis)
 
         text = response.text or self._response_as_text(response)
         deterministic_category = deterministic_safety(text)
@@ -258,7 +263,7 @@ class ConversationEngine:
                 ),
                 confidence=1,
             )
-            return {"analysis": analysis.model_dump(mode="json")}
+            return self._understanding_result(analysis)
 
         if response.type is ResponseType.TEXT:
             analysis = await self.gateway.classify(
@@ -271,10 +276,19 @@ class ConversationEngine:
             # stricter but can never downgrade an explicit local match.
             if analysis.safety_category is SafetyCategory.UNKNOWN:
                 analysis.safety_category = SafetyCategory.NORMAL
-            return {"analysis": analysis.model_dump(mode="json")}
+            return self._understanding_result(analysis)
 
         analysis = self._deterministic_analysis(state, task, response)
-        return {"analysis": analysis.model_dump(mode="json")}
+        return self._understanding_result(analysis)
+
+    @staticmethod
+    def _understanding_result(analysis: UtteranceAnalysis) -> dict[str, Any]:
+        """Keep the understanding model's label before code reconciliation."""
+
+        return {
+            "analysis": analysis.model_dump(mode="json"),
+            "classifier_response_category": analysis.response_category.value,
+        }
 
     async def _orchestrate_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
         state = SessionState.model_validate(graph_state["session"])
@@ -290,6 +304,10 @@ class ConversationEngine:
         )
         return {
             "session": decision.state.model_dump(mode="json"),
+            # ``_decide`` may reconcile correctness from validated slot claims.
+            # Put that effective analysis back into graph state while keeping
+            # the classifier's original label in its own audit field.
+            "analysis": analysis.model_dump(mode="json"),
             "decision": decision.model_dump(mode="json"),
         }
 
@@ -532,7 +550,10 @@ class ConversationEngine:
         # Accepting a reviewed wrong guess is concept evidence, never a
         # successful conversational answer.  Conversely, rejecting it is only
         # a stance: it cannot fill answer/reason slots or enter the star note.
-        if entry_active and analysis.entry_stance is EntryStance.ACCEPT_WRONG_GUESS:
+        accepted_wrong_entry_guess = (
+            entry_active and analysis.entry_stance is EntryStance.ACCEPT_WRONG_GUESS
+        )
+        if accepted_wrong_entry_guess:
             analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
             analysis.difficulty_class = DifficultyClass.CONCEPT
 
@@ -570,20 +591,12 @@ class ConversationEngine:
                 )
                 return decision
 
-        successful_categories = {
-            ResponseCategory.CORRECT_FULL,
-            ResponseCategory.CORRECT_PARTIAL,
-            ResponseCategory.SELF_CORRECTION,
-        }
-        # Completion requires two independent gates: the understanding stage
-        # must call the response successful, and every accepted claim must
-        # match reviewed curriculum facts.  An error analysis can therefore
-        # never fill a slot even if a malformed model/client supplies a value.
-        grounded_claims = (
-            task.validated_slot_claims(analysis.claims)
-            if analysis.response_category in successful_categories
-            else {}
-        )
+        # The model proposes claims and an initial label; code owns the final
+        # correctness label.  Validate every safe, task-directed claim against
+        # the reviewed slot contracts first, so an inconsistent model label
+        # cannot turn a complete answer into ``correct_partial`` or block a
+        # valid answer from advancing the session.
+        grounded_claims = task.validated_slot_claims(analysis.claims)
         if response.type is ResponseType.TEXT and response.text:
             grounded_claims = self._filter_text_explanation_claims(
                 task,
@@ -599,6 +612,19 @@ class ConversationEngine:
             slot_id: value
             for slot_id, value in grounded_claims.items()
             if slot_id in interpreted_slots
+        }
+        if not accepted_wrong_entry_guess:
+            self._reconcile_response_category(
+                analysis,
+                task,
+                interpreted_step,
+                accepted_claims,
+                grounded_claims,
+            )
+        successful_categories = {
+            ResponseCategory.CORRECT_FULL,
+            ResponseCategory.CORRECT_PARTIAL,
+            ResponseCategory.SELF_CORRECTION,
         }
         understood_claims = {
             slot_id: value
@@ -964,6 +990,96 @@ class ConversationEngine:
             analysis=analysis,
             previous_question=previous_question,
         )
+
+    @staticmethod
+    def _reconcile_response_category(
+        analysis: UtteranceAnalysis,
+        task: TaskDefinition,
+        step: StepDefinition,
+        accepted_claims: Mapping[str, str | int | float | bool],
+        grounded_claims: Mapping[str, str | int | float | bool],
+    ) -> None:
+        """Derive effective correctness from reviewed claims, not model prose.
+
+        Safety, input failures and explicit help requests describe interaction
+        state rather than mathematical completeness, so they remain protected.
+        For an assessable learning response, current-turn target coverage is the
+        canonical source of ``correct_full`` versus ``correct_partial``.
+        """
+
+        protected_categories = {
+            ResponseCategory.HELP_REQUEST,
+            ResponseCategory.EXPRESSION_BLOCK,
+            ResponseCategory.CONCEPTUAL_BLOCK,
+            ResponseCategory.NO_RESPONSE,
+            ResponseCategory.RECOGNITION_OR_INPUT_ERROR,
+        }
+        if analysis.response_category in protected_categories or (
+            analysis.response_category is ResponseCategory.UNRELATED_RESPONSE
+            and analysis.task_relation is TaskRelation.OFF_TOPIC
+        ):
+            return
+
+        target_slots = set(step.target_slots)
+        accepted_slots = set(accepted_claims)
+        accepted_targets = target_slots.intersection(accepted_slots)
+        accepted_optional = set(step.optional_slots).intersection(accepted_slots)
+
+        if target_slots and target_slots.issubset(accepted_slots):
+            analysis.response_category = (
+                ResponseCategory.SELF_CORRECTION
+                if analysis.response_category is ResponseCategory.SELF_CORRECTION
+                else ResponseCategory.CORRECT_FULL
+            )
+            analysis.difficulty_class = DifficultyClass.UNKNOWN
+            analysis.misconception_tag = None
+            analysis.bottleneck = "unknown"
+            return
+
+        if accepted_targets or accepted_optional:
+            analysis.response_category = ResponseCategory.CORRECT_PARTIAL
+            # A response can contain a verified part and a conflicting part.
+            # Keep concept difficulty for analytics while still preserving and
+            # acknowledging the part the child genuinely supplied.
+            if analysis.difficulty_class not in {DifficultyClass.CONCEPT, DifficultyClass.BOTH}:
+                analysis.difficulty_class = DifficultyClass.UNKNOWN
+                analysis.bottleneck = "unknown"
+            return
+
+        rejected_target_claim = any(
+            claim.slot_id in target_slots
+            and task.slots[claim.slot_id].accepted_claim_value(claim) is None
+            for claim in analysis.claims
+            if claim.slot_id in task.slots
+        )
+        if rejected_target_claim:
+            analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
+            analysis.difficulty_class = DifficultyClass.CONCEPT
+            analysis.bottleneck = "concept"
+            if analysis.misconception_tag is None and task.misconception_tags:
+                analysis.misconception_tag = task.misconception_tags[0]
+            return
+
+        # The child may naturally repeat an already verified fact while the
+        # current turn asks for a missing reason or method.  It is understood
+        # but makes no new progress, so keep it as a partial response.  The
+        # existing no-progress policy will then lower support instead of
+        # repeating the same open question forever.
+        if grounded_claims:
+            analysis.response_category = ResponseCategory.CORRECT_PARTIAL
+            analysis.difficulty_class = DifficultyClass.UNKNOWN
+            analysis.misconception_tag = None
+            analysis.bottleneck = "unknown"
+            return
+
+        if analysis.response_category in {
+            ResponseCategory.CORRECT_FULL,
+            ResponseCategory.SELF_CORRECTION,
+        }:
+            analysis.response_category = ResponseCategory.RELATED_VAGUE
+            analysis.difficulty_class = DifficultyClass.EXPRESSION
+            analysis.misconception_tag = None
+            analysis.bottleneck = "expression"
 
     def _complete_task(
         self,
@@ -1916,6 +2032,31 @@ class ConversationEngine:
             return None
         return cls._safe_child_note_text(task, span)
 
+    @staticmethod
+    def _exact_child_evidence_text(
+        child_text: str,
+        evidence_span: str,
+    ) -> str | None:
+        """Return an exact, bounded clause from the child's own utterance.
+
+        Open method/reason/explanation slots are semantically judged by the
+        classifier.  Their evidence may legitimately contain a derived number
+        that is not printed on screen (for example, ``5와 3의 차이는 2``).
+        Reusing the note-specific visible-number allowlist here used to erase
+        such valid explanations and leave the classifier's ``correct_partial``
+        label uncorrected.  Exact-substring provenance keeps model-authored
+        wording out without reducing open mathematical reasoning to a finite
+        number or phrase list.
+        """
+
+        span = re.sub(r"\s+", " ", evidence_span).strip()
+        source = re.sub(r"\s+", " ", child_text).strip()
+        if not span or span not in source or len(span) > 120:
+            return None
+        if re.search(r"(틀렸|맞았|정답|오답)", span):
+            return None
+        return span
+
     @classmethod
     def _filter_text_explanation_claims(
         cls,
@@ -1939,8 +2080,25 @@ class ConversationEngine:
             supported = any(
                 claim.factual
                 and claim.slot_id == slot_id
-                and claim.supported is not False
-                and cls._claim_evidence_text(task, child_text, claim.evidence_span)
+                and (
+                    (
+                        claim.supported is True
+                        and cls._exact_child_evidence_text(
+                            child_text,
+                            claim.evidence_span,
+                        )
+                    )
+                    # Compatibility for deterministic responses and old test
+                    # fixtures that predate the semantic-support contract.
+                    or (
+                        claim.supported is None
+                        and cls._claim_evidence_text(
+                            task,
+                            child_text,
+                            claim.evidence_span,
+                        )
+                    )
+                )
                 for claim in analysis.claims
             )
             if not supported:
@@ -1971,10 +2129,18 @@ class ConversationEngine:
                 # No inferred fallback: missing or rewritten evidence fails
                 # closed.  Task completion may still proceed, but it cannot
                 # produce a direct-attribution note without an exact source.
-                evidence = cls._claim_evidence_text(
-                    task,
-                    response.text,
-                    claim.evidence_span,
+                slot = task.slots[slot_id]
+                evidence = (
+                    cls._exact_child_evidence_text(
+                        response.text,
+                        claim.evidence_span,
+                    )
+                    if slot.is_semantic_support and claim.supported is True
+                    else cls._claim_evidence_text(
+                        task,
+                        response.text,
+                        claim.evidence_span,
+                    )
                 )
                 if evidence:
                     state.child_note_evidence[slot_id] = evidence

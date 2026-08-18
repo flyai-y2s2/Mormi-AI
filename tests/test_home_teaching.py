@@ -656,6 +656,66 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
 
 
 @pytest.mark.asyncio
+async def test_persistence_keeps_classifier_category_but_reports_reconciled_result(
+    tmp_path: object,
+) -> None:
+    child_text = "600원이야. 500원과 100원을 더했어"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        # Reproduce the pilot failure: the classifier says partial although it
+        # supplied valid evidence for every slot requested by the L4 turn.
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="600원",
+                factual=True,
+                evidence_span="600원이야",
+            ),
+            SlotClaim(
+                slot_id="rule",
+                factual=True,
+                supported=True,
+                support_confidence=0.98,
+                evidence_span="500원과 100원을 더했어",
+            ),
+        ],
+        confidence=0.91,
+    )
+    database, _, service, started = await _start_money_count_conversation(
+        tmp_path, [analysis], "reconciled-category"
+    )
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="741dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text=child_text,
+        ),
+    )
+
+    assert completed.turn.status.value == "completed"
+    async with database.sessions() as db:
+        observation = (await db.execute(select(DialogueTurnObservationRecord))).scalar_one()
+        answered_turn = (
+            await db.execute(
+                select(TurnRecord).where(TurnRecord.response_id.is_not(None))
+            )
+        ).scalar_one()
+
+    assert answered_turn.response_category == "correct_full"
+    assert observation.response_category == "correct_full"
+    assert observation.concept_result == "correct_full"
+    assert observation.analysis_json["classifier_response_category"] == "correct_partial"
+    assert observation.analysis_json["effective_response_category"] == "correct_full"
+    assert observation.analysis_json["response_category_reconciled"] is True
+    await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_genuine_l4_answer_only_keeps_l4_and_asks_only_for_method(
     tmp_path: object,
 ) -> None:
