@@ -425,6 +425,40 @@ def _text_chunks(text: str, size: int = 8) -> list[str]:
     return [text[index : index + size] for index in range(0, len(text), size)]
 
 
+async def _turn_sse_events(
+    envelope: SessionEnvelope,
+    *,
+    replayed: bool,
+) -> AsyncIterator[str]:
+    """Serialize one committed turn with metadata before visible text deltas."""
+
+    turn_id = envelope.turn.turn_id
+    yield _sse(
+        "mormi.start",
+        {"turn_id": turn_id, "replayed": replayed},
+        event_id=turn_id,
+    )
+    yield _sse(
+        "turn.metadata",
+        {
+            "turn_id": turn_id,
+            "task_anchor": envelope.turn.task_anchor.model_dump(mode="json")
+            if envelope.turn.task_anchor is not None
+            else None,
+        },
+    )
+    for delta in _text_chunks(envelope.turn.mormi.text):
+        yield _sse("mormi.delta", {"turn_id": turn_id, "delta": delta})
+        # Yield control so ASGI can flush each already-validated chunk.
+        await asyncio.sleep(0)
+    yield _sse(
+        "turn.completed",
+        envelope.model_dump(mode="json"),
+        event_id=turn_id,
+    )
+    yield _sse("done", {"turn_id": turn_id})
+
+
 @app.post(
     "/v1/conversations/{conversation_id}/responses/stream",
     response_class=StreamingResponse,
@@ -462,24 +496,11 @@ async def respond_stream(
                     continue
                 if event.envelope is None:
                     continue
-
-                envelope = event.envelope
-                turn_id = envelope.turn.turn_id
-                yield _sse(
-                    "mormi.start",
-                    {"turn_id": turn_id, "replayed": event.replayed},
-                    event_id=turn_id,
-                )
-                for delta in _text_chunks(envelope.turn.mormi.text):
-                    yield _sse("mormi.delta", {"turn_id": turn_id, "delta": delta})
-                    # Yield control so ASGI can flush each already-validated chunk.
-                    await asyncio.sleep(0)
-                yield _sse(
-                    "turn.completed",
-                    envelope.model_dump(mode="json"),
-                    event_id=turn_id,
-                )
-                yield _sse("done", {"turn_id": turn_id})
+                async for chunk in _turn_sse_events(
+                    event.envelope,
+                    replayed=event.replayed,
+                ):
+                    yield chunk
         except ConversationNotFoundError:
             yield _sse(
                 "error",

@@ -53,6 +53,8 @@ from .schemas import (
     SpeakerVerification,
     SpeakerVerificationPolicy,
     SupportTrigger,
+    TaskAnchorCompletedItem,
+    TaskAnchorContract,
     TaskRelation,
     TurnContract,
     UtteranceAnalysis,
@@ -990,6 +992,7 @@ class ConversationEngine:
                 state.verified_slots,
                 entry_active=state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE,
             )
+            state.subgoal_id = next_step.id
             fallback = self._success_then_question(contribution, next_step.prompt)
             return PedagogicalDecision(
                 state=state,
@@ -1435,11 +1438,86 @@ class ConversationEngine:
                 else None
             ),
             pedagogy=pedagogy,
+            task_anchor=self._task_anchor(state, task, input_contract),
             dictionary_ref=(
                 dictionary_reference(state.dictionary_snapshots[task.id])
                 if task.id in state.dictionary_snapshots
                 else None
             ),
+        )
+
+    def ensure_task_anchor(
+        self,
+        state: SessionState,
+        turn: TurnContract,
+    ) -> TurnContract:
+        """Backfill the additive anchor contract for an active legacy turn."""
+
+        if turn.task_anchor is not None or turn.status is not SessionStatus.ACTIVE:
+            return turn
+        task = get_task(state.current_task_id, state.scenario_data)
+        anchor = self._task_anchor(state, task, turn.input)
+        return turn.model_copy(update={"task_anchor": anchor})
+
+    @staticmethod
+    def _task_anchor_label(task: TaskDefinition, slot_id: str) -> str:
+        slot = task.slots[slot_id]
+        if len(slot.description) <= 24:
+            return slot.description
+        return {
+            "observation": "확인한 것",
+            "conclusion": "알아낸 답",
+            "operation": "계산",
+            "method": "알려준 방법",
+            "reason": "알려준 이유",
+            "explanation": "알려준 설명",
+            "selection": "고른 것",
+        }[slot.semantic_role]
+
+    def _task_anchor(
+        self,
+        state: SessionState,
+        task: TaskDefinition,
+        input_contract: InputContract,
+    ) -> TaskAnchorContract | None:
+        """Build the visible reminder from reviewed content and verified state only."""
+
+        if state.status is not SessionStatus.ACTIVE or input_contract.kind is InputKind.NONE:
+            return None
+        step = task.step_by_id(state.subgoal_id)
+        if step is None:
+            step = task.active_step(
+                state.expression_level,
+                state.verified_slots,
+                entry_active=(state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE),
+                targeted_followup=(
+                    state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
+                ),
+            )
+        target_slots = [
+            slot_id
+            for slot_id in input_contract.target_slots
+            if slot_id not in state.verified_slots
+        ]
+        # L0 joint performance can intentionally revisit already verified
+        # pieces. Keep the contract usable without inventing another target.
+        if not target_slots:
+            target_slots = list(input_contract.target_slots)
+        completed_items = [
+            TaskAnchorCompletedItem(
+                slot_id=slot_id,
+                label=self._task_anchor_label(task, slot_id),
+                value=state.verified_slots[slot_id],
+                display_text=task.slots[slot_id].fact_sentence,
+            )
+            for slot_id in task.slots
+            if slot_id in state.verified_slots and slot_id not in target_slots
+        ]
+        return TaskAnchorContract(
+            anchor_id=f"{task.id}:{state.subgoal_id}",
+            prompt=step.prompt,
+            completed_items=completed_items,
+            target_slots=target_slots,
         )
 
     @staticmethod

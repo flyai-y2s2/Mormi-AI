@@ -209,6 +209,13 @@ ID·버전·해시를 알려 줍니다. 프론트가 힌트 문구를 조합해 
     "input": {"kind": "text", "target_slots": ["right_count"]},
     "visual": {"type": "cafe_queues", "data": {}},
     "help_card": null,
+    "task_anchor": {
+      "anchor_id": "cafe_queue:short_reason",
+      "title": "지금 모르미에게 알려줄 것",
+      "prompt": "나는 왜 그 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+      "completed_items": [],
+      "target_slots": ["reason"]
+    },
     "dictionary_ref": {
       "card_id": "dictionary.cafe.cafe-queue",
       "curriculum_session_id": "cafe_queue",
