@@ -155,6 +155,8 @@ class ConversationEngine:
     ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
         """Expose safe graph milestones without leaking unvalidated model text."""
 
+        normalized_state = state.model_copy(deep=True)
+        self._normalize_terminal_support(normalized_state)
         final_values: dict[str, Any] | None = None
         node_stages: dict[str, EngineProgress] = {
             "understand": EngineProgress("understanding"),
@@ -164,7 +166,7 @@ class ConversationEngine:
         }
         async for mode, payload in self.graph.astream(
             {
-                "session": state.model_dump(mode="json"),
+                "session": normalized_state.model_dump(mode="json"),
                 "response": response.model_dump(mode="json"),
                 "previous_question": previous_question,
             },
@@ -191,6 +193,7 @@ class ConversationEngine:
 
     def initial_turn(self, state: SessionState) -> TurnContract:
         task = get_task(state.current_task_id, state.scenario_data)
+        self._normalize_terminal_support(state)
         step = task.active_step(
             state.expression_level,
             state.verified_slots,
@@ -207,7 +210,7 @@ class ConversationEngine:
             task,
             text=step.prompt,
             input_contract=step.input,
-            visual=task.base_visual,
+            visual=self._visual_for(task, state.hint_level),
             help_card=self._help_card(task, state.hint_level),
             mood="curious",
         )
@@ -439,6 +442,7 @@ class ConversationEngine:
         previous_question: str,
     ) -> PedagogicalDecision:
         next_state = state.model_copy(deep=True)
+        self._normalize_terminal_support(next_state)
         next_state.state_version += 1
         next_state.current_turn_id = None
         entry_active = (
@@ -810,16 +814,28 @@ class ConversationEngine:
             next_state.expression_failures += 1
             next_state.vague_clarifications = 0
             next_state.expression_level = next_state.expression_level.lower()
+            previous_hint = next_state.hint_level
+            self._normalize_terminal_support(next_state)
+            joint_mode = next_state.expression_level is ExpressionLevel.L0
+            help_event = self._help_card_event(previous_hint, next_state.hint_level)
             return self._decision_for_current_step(
                 next_state,
                 task,
-                dialogue_act="reduce_expression_load",
-                fallback=self._smooth_ladder_fallback(next_state, task),
+                dialogue_act="joint_mode" if joint_mode else "reduce_expression_load",
+                fallback=(
+                    self._support_transition_fallback(
+                        SupportTrigger.EXPRESSION_BLOCK,
+                        help_event,
+                    )
+                    if joint_mode
+                    else self._smooth_ladder_fallback(next_state, task)
+                ),
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
                 support_trigger=SupportTrigger.EXPRESSION_BLOCK,
-                must_reframe=True,
+                help_card_event=help_event,
+                must_reframe=not joint_mode,
             )
 
         if category is ResponseCategory.HELP_REQUEST:
@@ -972,6 +988,7 @@ class ConversationEngine:
             state.task_start_level = state.expression_level
             state.hint_level = HintLevel.H0
             state.task_max_hint = HintLevel.H0
+            self._normalize_terminal_support(state)
             state.subgoal_id = "initial"
             state.verified_slots = {}
             state.expression_failures = 0
@@ -1000,8 +1017,8 @@ class ConversationEngine:
                 accepted_claims=dict(accepted_claims),
                 required_question=next_step.prompt,
                 input=next_step.input,
-                visual=next_task.base_visual,
-                help_card=None,
+                visual=self._visual_for(next_task, state.hint_level),
+                help_card=self._help_card(next_task, state.hint_level),
                 note_update=note,
                 mood="relieved",
                 speaker_context=self._speaker_context(
@@ -1064,8 +1081,7 @@ class ConversationEngine:
         help_card_event: HelpCardEvent = HelpCardEvent.NONE,
         must_reframe: bool = False,
     ) -> PedagogicalDecision:
-        if state.hint_level is HintLevel.H3:
-            state.expression_level = ExpressionLevel.L0
+        self._normalize_terminal_support(state)
         step = task.active_step(
             state.expression_level,
             state.verified_slots,
@@ -1109,6 +1125,27 @@ class ConversationEngine:
             mood="thinking" if help_card else "listening",
             speaker_context=context,
         )
+
+    @staticmethod
+    def _normalize_terminal_support(state: SessionState) -> None:
+        """Keep the terminal expression and hint contracts as one safe pair.
+
+        L and H remain independent above the terminal state.  L0, however,
+        uses a reviewed joint-performance input whose completion values can
+        finish the task, while H3 is the matching fully revealed help card.
+        Allowing only one side to reach its terminal value would either expose
+        a joint answer without the H3 explanation or reveal H3 while still
+        asking the child for an independent response.
+        """
+
+        if (
+            state.expression_level is not ExpressionLevel.L0
+            and state.hint_level is not HintLevel.H3
+        ):
+            return
+        state.expression_level = ExpressionLevel.L0
+        state.hint_level = HintLevel.H3
+        state.task_max_hint = HintLevel.H3
 
     def _speaker_context(
         self,
