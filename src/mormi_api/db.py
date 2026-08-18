@@ -78,6 +78,8 @@ class TurnRecord(Base):
     )
     task_id: Mapped[str] = mapped_column(String(100))
     state_version: Mapped[int] = mapped_column(Integer)
+    # Legacy physical name retained for zero-downtime schema compatibility.
+    # Current values are readable ``plain:<text>`` envelopes.
     mormi_question_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     turn_contract: Mapped[dict[str, Any]] = mapped_column(JSON)
     response_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -87,6 +89,7 @@ class TurnRecord(Base):
     )
     result_turn_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     response_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Legacy physical name; current values are plaintext envelopes.
     response_raw_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_structured: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     safety_category: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -215,6 +218,7 @@ class DialogueClaimRecord(Base):
     value_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
     factual: Mapped[bool] = mapped_column(Boolean)
     validation_status: Mapped[str] = mapped_column(String(40), index=True)
+    # Legacy physical name; current values are plaintext evidence envelopes.
     evidence_span_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     newly_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

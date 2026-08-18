@@ -229,7 +229,7 @@ class PracticeAttempt(BaseModel):
     # Practice summaries are service telemetry, not dialogue transcripts.
     # Keep only a non-linguistic answer value (for example, a count, equation
     # result, or selected choice IDs). Free-text child utterances belong only
-    # in ChildResponse, where consent-controlled encrypted storage applies.
+    # in ChildResponse, where consent-controlled plaintext storage applies.
     response: int | float | list[str] | None = None
     misconception_tag: str | None = Field(default=None, max_length=80)
     latency_ms: int | None = Field(default=None, ge=0, le=600_000)
@@ -335,7 +335,7 @@ class SessionCreate(BaseModel):
     cafe_context: CafeSessionContext | None = None
     queue_context: QueueSessionContext | None = None
     # 파일럿 참여자는 사전에 원문 저장 동의를 완료한다. 별도 필드를 보내지
-    # 않는 호출도 질문·아이 원문·선택 응답을 암호화해 영구 보존한다.
+    # 않는 호출도 질문·아이 원문·선택 응답을 평문으로 영구 보존한다.
     conversation_storage_consent: bool = True
     retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT
 
@@ -712,7 +712,7 @@ class SpeakerVerification(BaseModel):
 class SpeakerRuntimeAudit(BaseModel):
     """Non-linguistic audit trail for the line that reached the child.
 
-    Generated candidate text is already stored encrypted as the next turn's
+    Generated candidate text is already stored as the next turn's plaintext
     question.  This object records *how* that text was selected without
     duplicating the child's or Mormi's raw language in analytics columns.
     """

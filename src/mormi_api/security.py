@@ -50,11 +50,13 @@ def deterministic_safety(text: str | None) -> SafetyCategory:
     return SafetyCategory.NORMAL
 
 
-class TextCipher:
-    """Encrypt raw child-facing dialogue at rest.
+class StoredTextCodec:
+    """Store new dialogue as plaintext and decode legacy encrypted envelopes.
 
-    Development without a key uses a clearly marked plaintext envelope so tests
-    remain easy to run. Production settings prohibit this mode.
+    Earlier releases wrote ``fernet:...`` or ``plain:...`` envelopes.  New
+    writes intentionally remain human-readable in the database.  The optional
+    legacy key exists only so startup migration and rollback-compatible reads
+    can recover rows created before the plaintext-storage policy change.
     """
 
     def __init__(self, secret: str | None) -> None:
@@ -65,22 +67,33 @@ class TextCipher:
         digest = hashlib.sha256(secret.encode("utf-8")).digest()
         return base64.urlsafe_b64encode(digest)
 
-    def encrypt(self, text: str) -> str:
-        if not self._fernet:
-            return f"plain:{text}"
-        return f"fernet:{self._fernet.encrypt(text.encode('utf-8')).decode('ascii')}"
+    def store(self, text: str) -> str:
+        # Keep the legacy plaintext envelope so a deployment rollback can
+        # still read rows created by this release.  The payload itself remains
+        # directly readable in the database and is not encrypted.
+        return f"plain:{text}"
 
-    def decrypt(self, payload: str) -> str:
+    def load(self, payload: str) -> str:
         if payload.startswith("plain:"):
             return payload.removeprefix("plain:")
-        if not payload.startswith("fernet:") or not self._fernet:
-            raise ValueError("Encrypted dialogue cannot be read with the configured key")
+        if not payload.startswith("fernet:"):
+            return payload
+        if not self._fernet:
+            raise ValueError(
+                "Legacy encrypted dialogue cannot be migrated without "
+                "MORMI_RAW_DATA_ENCRYPTION_KEY"
+            )
         try:
             return self._fernet.decrypt(payload.removeprefix("fernet:").encode("ascii")).decode(
                 "utf-8"
             )
         except InvalidToken as error:
-            raise ValueError("Invalid dialogue encryption key") from error
+            raise ValueError("Invalid legacy dialogue encryption key") from error
+
+
+# Backward-compatible import for tests and integrations that still construct
+# ``TextCipher``.  Its behavior is now plaintext storage plus legacy decoding.
+TextCipher = StoredTextCodec
 
 
 def safety_redirect(category: SafetyCategory) -> str:

@@ -38,7 +38,7 @@ from .schemas import (
     new_id,
     utc_now,
 )
-from .security import TextCipher
+from .security import StoredTextCodec
 
 
 class ConversationNotFoundError(KeyError):
@@ -98,19 +98,20 @@ def _is_duplicate_response_integrity_error(error: IntegrityError) -> bool:
 
 class Repository:
     PERMANENT_STORAGE_MIGRATION = "2026-08-permanent-raw-storage"
+    PLAINTEXT_STORAGE_MIGRATION = "2026-08-plaintext-dialogue-storage"
     _STATE_EVIDENCE_ENCRYPTED = "_child_note_evidence_encrypted"
 
     def __init__(
         self,
         database: Database,
-        cipher: TextCipher,
+        text_codec: StoredTextCodec,
         *,
         idempotency_retention_days: int = 30,
         classifier_model: str = "not_collected",
         speaker_model: str = "not_collected",
     ) -> None:
         self.database = database
-        self.cipher = cipher
+        self.text_codec = text_codec
         self.idempotency_retention_days = idempotency_retention_days
         self.classifier_model = classifier_model
         self.speaker_model = speaker_model
@@ -290,7 +291,7 @@ class Repository:
             current_turn.result_turn_id = next_turn.turn_id
             current_turn.response_type = response.type.value
             current_turn.response_raw_encrypted = (
-                self.cipher.encrypt(raw_response) if previous_state.raw_storage_enabled else None
+                self.text_codec.store(raw_response) if previous_state.raw_storage_enabled else None
             )
             current_turn.response_structured = response.model_dump(mode="json", exclude={"text"})
             current_turn.safety_category = analysis.safety_category.value
@@ -488,13 +489,13 @@ class Repository:
                     slot_id=claim.slot_id,
                     semantic_role=slot.semantic_role if slot else "not_collected",
                     # Only reviewed canonical values are analytics-safe. A
-                    # rejected model claim can contain arbitrary child text;
-                    # its evidence remains available only in encrypted form.
+                    # rejected model claim can contain arbitrary child text,
+                    # so keep it only in the dedicated raw-evidence column.
                     value_json=claim.value if accepted else None,
                     factual=claim.factual,
                     validation_status="verified" if accepted else "rejected",
                     evidence_span_encrypted=(
-                        self.cipher.encrypt(claim.evidence_span)
+                        self.text_codec.store(claim.evidence_span)
                         if previous_state.raw_storage_enabled and claim.evidence_span
                         else None
                     ),
@@ -734,12 +735,12 @@ class Repository:
             return [
                 {
                     "turn_id": record.turn_id,
-                    "question": self.cipher.decrypt(record.mormi_question_encrypted)
+                    "question": self.text_codec.load(record.mormi_question_encrypted)
                     if record.mormi_question_encrypted
                     else None,
                     "response_id": record.response_id,
                     "response_type": record.response_type,
-                    "response": self.cipher.decrypt(record.response_raw_encrypted)
+                    "response": self.text_codec.load(record.response_raw_encrypted)
                     if record.response_raw_encrypted
                     else None,
                     "structured": record.response_structured,
@@ -926,28 +927,69 @@ class Repository:
             await db.commit()
 
     def _dump_state(self, state: SessionState) -> dict[str, object]:
-        """Serialize state without leaving child note evidence in plaintext."""
+        """Serialize canonical state with note evidence stored as plaintext."""
 
-        payload: dict[str, object] = state.model_dump(mode="json")
-        evidence = state.child_note_evidence
-        if evidence:
-            payload["child_note_evidence"] = {
-                slot_id: self.cipher.encrypt(text) for slot_id, text in evidence.items()
-            }
-            payload[self._STATE_EVIDENCE_ENCRYPTED] = True
-        return payload
+        return state.model_dump(mode="json")
 
     def _load_state(self, payload: dict[str, object]) -> SessionState:
-        """Decrypt transient note evidence before giving state to the engine."""
+        """Load plaintext state while remaining compatible with legacy envelopes."""
 
         data = dict(payload)
         encrypted = data.pop(self._STATE_EVIDENCE_ENCRYPTED, False)
         evidence = data.get("child_note_evidence")
         if encrypted and isinstance(evidence, dict):
             data["child_note_evidence"] = {
-                str(slot_id): self.cipher.decrypt(str(value)) for slot_id, value in evidence.items()
+                str(slot_id): self.text_codec.load(str(value))
+                for slot_id, value in evidence.items()
             }
         return SessionState.model_validate(data)
+
+    async def migrate_existing_storage_to_plaintext(self) -> None:
+        """Convert every legacy text envelope to plaintext in one transaction.
+
+        The physical column names retain their historical ``*_encrypted``
+        suffix so the running application remains compatible with the existing
+        PostgreSQL schema.  The values written to those columns are plaintext
+        after this migration.
+        """
+
+        async with self.database.sessions() as db:
+            applied = await db.get(DataMigrationRecord, self.PLAINTEXT_STORAGE_MIGRATION)
+            if applied:
+                return
+
+            turns = list((await db.execute(select(TurnRecord))).scalars())
+            for turn in turns:
+                if turn.mormi_question_encrypted is not None:
+                    turn.mormi_question_encrypted = self.text_codec.store(
+                        self.text_codec.load(turn.mormi_question_encrypted)
+                    )
+                if turn.response_raw_encrypted is not None:
+                    turn.response_raw_encrypted = self.text_codec.store(
+                        self.text_codec.load(turn.response_raw_encrypted)
+                    )
+
+            claims = list((await db.execute(select(DialogueClaimRecord))).scalars())
+            for claim in claims:
+                if claim.evidence_span_encrypted is not None:
+                    claim.evidence_span_encrypted = self.text_codec.store(
+                        self.text_codec.load(claim.evidence_span_encrypted)
+                    )
+
+            conversations = list((await db.execute(select(ConversationRecord))).scalars())
+            for conversation in conversations:
+                state_json = dict(conversation.state_json)
+                encrypted = state_json.pop(self._STATE_EVIDENCE_ENCRYPTED, False)
+                evidence = state_json.get("child_note_evidence")
+                if encrypted and isinstance(evidence, dict):
+                    state_json["child_note_evidence"] = {
+                        str(slot_id): self.text_codec.load(str(value))
+                        for slot_id, value in evidence.items()
+                    }
+                conversation.state_json = state_json
+
+            db.add(DataMigrationRecord(migration_id=self.PLAINTEXT_STORAGE_MIGRATION))
+            await db.commit()
 
     async def migrate_existing_storage_to_permanent(self) -> None:
         """One-time upgrade for conversations created before pilot consent became mandatory."""
@@ -983,10 +1025,9 @@ class Repository:
             conversation_id=state.conversation_id,
             task_id=state.current_task_id,
             state_version=state.state_version,
-            # The generated question is required to recover the latest screen,
-            # so it is always kept encrypted. Child raw responses remain
-            # consent-gated separately.
-            mormi_question_encrypted=self.cipher.encrypt(turn.mormi.text),
+            # The legacy column name is kept for schema compatibility, but the
+            # generated question is now intentionally stored as plaintext.
+            mormi_question_encrypted=self.text_codec.store(turn.mormi.text),
             turn_contract=self._stored_turn_contract(turn),
             expression_level=state.expression_level.value,
             hint_level=state.hint_level.value,
@@ -1010,7 +1051,7 @@ class Repository:
         payload = dict(record.turn_contract)
         mormi = dict(payload.get("mormi", {}))
         mormi["text"] = (
-            self.cipher.decrypt(record.mormi_question_encrypted)
+            self.text_codec.load(record.mormi_question_encrypted)
             if record.mormi_question_encrypted
             else "대화 보존 기간이 끝났어요."
         )

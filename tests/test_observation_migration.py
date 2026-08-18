@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 from conftest import FakeGateway
+from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, delete, inspect, select
 
 from alembic import command
@@ -12,6 +15,8 @@ from mormi_api.db import (
     Base,
     ConversationRecord,
     Database,
+    DataMigrationRecord,
+    DialogueClaimRecord,
     DialogueTurnObservationRecord,
     OutboxEventRecord,
     TurnRecord,
@@ -20,7 +25,7 @@ from mormi_api.engine import ConversationEngine
 from mormi_api.migrations import apply_database_migrations
 from mormi_api.repository import Repository
 from mormi_api.schemas import ChildResponse, SessionCreate, utc_now
-from mormi_api.security import TextCipher
+from mormi_api.security import StoredTextCodec, TextCipher
 from mormi_api.service import ConversationService
 
 
@@ -30,6 +35,31 @@ def _alembic_config(database_url: str) -> Config:
     config.set_main_option("script_location", str(root / "alembic"))
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+def _legacy_fernet(secret: str, text: str) -> str:
+    digest = hashlib.sha256(secret.encode("utf-8")).digest()
+    key = base64.urlsafe_b64encode(digest)
+    return f"fernet:{Fernet(key).encrypt(text.encode('utf-8')).decode('ascii')}"
+
+
+def test_stored_text_codec_writes_plaintext_and_reads_legacy_envelopes() -> None:
+    secret = "legacy-encryption-key"
+    codec = StoredTextCodec(secret)
+
+    assert codec.store("점이 3개야") == "plain:점이 3개야"
+    assert codec.load("plain:점이 3개야") == "점이 3개야"
+    assert codec.load("이미 평문인 값") == "이미 평문인 값"
+    assert codec.load(_legacy_fernet(secret, "예전 암호문")) == "예전 암호문"
+
+
+def test_stored_text_codec_requires_legacy_key_only_for_old_fernet_rows() -> None:
+    codec = StoredTextCodec(None)
+
+    assert codec.load("plain:새 평문") == "새 평문"
+    assert codec.load("접두사 없는 평문") == "접두사 없는 평문"
+    with pytest.raises(ValueError, match="MORMI_RAW_DATA_ENCRYPTION_KEY"):
+        codec.load(_legacy_fernet("missing-key", "예전 암호문"))
 
 
 def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
@@ -173,6 +203,115 @@ def test_migration_refuses_head_version_with_a_missing_observation_table(
 
 
 @pytest.mark.asyncio
+async def test_plaintext_migration_converts_every_legacy_dialogue_evidence_once(
+    tmp_path: Path,
+) -> None:
+    secret = "legacy-encryption-key"
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/plaintext-migration.db")
+    await database.create_schema()
+    repository = Repository(database, StoredTextCodec(secret))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=10,
+            scene="cafe",
+            scenario_id="cafe_queue_demo",
+        )
+    )
+    await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="1e120ef8-16a3-451f-9e73-254b63f45645",
+            type="no_response",
+        ),
+    )
+
+    question = "왼쪽과 오른쪽에는 각각 몇 명이 있어?"
+    response = "왼쪽 세 명, 오른쪽 다섯 명"
+    evidence = "오른쪽 다섯 명"
+    note_evidence = "사람이 적은 줄에 서면 덜 기다려"
+    async with database.sessions() as db:
+        source_turn = (
+            await db.execute(
+                select(TurnRecord).where(TurnRecord.turn_id == started.turn.turn_id)
+            )
+        ).scalar_one()
+        observation = (
+            await db.execute(
+                select(DialogueTurnObservationRecord).where(
+                    DialogueTurnObservationRecord.source_turn_id == started.turn.turn_id
+                )
+            )
+        ).scalar_one()
+        conversation = await db.get(ConversationRecord, started.conversation_id)
+        assert conversation is not None
+
+        source_turn.mormi_question_encrypted = _legacy_fernet(secret, question)
+        source_turn.response_raw_encrypted = _legacy_fernet(secret, response)
+        db.add(
+            DialogueClaimRecord(
+                observation_id=observation.observation_id,
+                slot_id="right_count",
+                semantic_role="observation",
+                value_json=5,
+                factual=True,
+                validation_status="verified",
+                evidence_span_encrypted=_legacy_fernet(secret, evidence),
+                newly_verified=True,
+            )
+        )
+        state_json = dict(conversation.state_json)
+        state_json["child_note_evidence"] = {
+            "reason": _legacy_fernet(secret, note_evidence)
+        }
+        state_json[Repository._STATE_EVIDENCE_ENCRYPTED] = True
+        conversation.state_json = state_json
+        await db.commit()
+
+    await repository.migrate_existing_storage_to_plaintext()
+    await repository.migrate_existing_storage_to_plaintext()
+
+    async with database.sessions() as db:
+        source_turn = (
+            await db.execute(
+                select(TurnRecord).where(TurnRecord.turn_id == started.turn.turn_id)
+            )
+        ).scalar_one()
+        claim = (
+            await db.execute(
+                select(DialogueClaimRecord).where(
+                    DialogueClaimRecord.slot_id == "right_count"
+                )
+            )
+        ).scalar_one()
+        conversation = await db.get(ConversationRecord, started.conversation_id)
+        migration = await db.get(
+            DataMigrationRecord,
+            Repository.PLAINTEXT_STORAGE_MIGRATION,
+        )
+
+        assert source_turn.mormi_question_encrypted == f"plain:{question}"
+        assert source_turn.response_raw_encrypted == f"plain:{response}"
+        assert claim.evidence_span_encrypted == f"plain:{evidence}"
+        assert conversation is not None
+        assert Repository._STATE_EVIDENCE_ENCRYPTED not in conversation.state_json
+        assert conversation.state_json["child_note_evidence"] == {
+            "reason": note_evidence
+        }
+        assert migration is not None
+
+    raw_turns = await repository.raw_turns(started.conversation_id)
+    first_answered = next(turn for turn in raw_turns if turn["response"] is not None)
+    assert first_answered["question"] == question
+    assert first_answered["response"] == response
+    await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_historical_backfill_marks_missing_fields_without_reanalysis(
     tmp_path: Path,
 ) -> None:
@@ -200,7 +339,7 @@ async def test_historical_backfill_marks_missing_fields_without_reanalysis(
     )
 
     # Simulate a row created by the legacy application before observation
-    # tables existed. The encrypted original turn remains untouched.
+    # tables existed. The original turn remains untouched.
     async with database.sessions() as db:
         await db.execute(delete(OutboxEventRecord))
         await db.execute(delete(DialogueTurnObservationRecord))

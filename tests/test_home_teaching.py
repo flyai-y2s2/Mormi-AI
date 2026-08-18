@@ -632,7 +632,11 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert observation.analysis_json.get("social_grounding_span") is None
     assert {claim.slot_id for claim in claims} == {"answer", "rule"}
     assert all(claim.validation_status == "verified" for claim in claims)
-    assert all(claim.evidence_span_encrypted for claim in claims)
+    assert all(
+        claim.evidence_span_encrypted
+        and claim.evidence_span_encrypted.startswith("plain:")
+        for claim in claims
+    )
     assert outcome.completion_outcome == "taught"
     assert outcome.evidence_observation_ids_json == [observation.observation_id]
     assert outcome.note_id == completed.turn.note_update.note_id
@@ -975,8 +979,8 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     async with database.sessions() as db:
         record = await db.get(ConversationRecord, started.conversation_id)
         assert record is not None
-        assert record.state_json["_child_note_evidence_encrypted"] is True
-        assert child_method not in str(record.state_json["child_note_evidence"])
+        assert "_child_note_evidence_encrypted" not in record.state_json
+        assert record.state_json["child_note_evidence"]["tracking"] == child_method
     restored = await repository.get_state(started.conversation_id)
     assert restored.child_note_evidence["tracking"] == child_method
     await database.dispose()

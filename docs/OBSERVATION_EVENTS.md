@@ -16,9 +16,10 @@
 | `note_evidence_links` | 별노트와 그 내용을 만든 모든 관찰 턴·슬롯 연결 |
 | `ai_outbox_events` | Spring BE 전달을 위한 내구성 있는 이벤트 원본 |
 
-아이의 질문·원문 발화는 기존 `turns`에 암호화해 보관한다. 관찰 테이블에는
-`grounding_span`, `note_candidate`, 평문 `evidence_span`을 복사하지 않는다.
-슬롯의 근거 구절은 저장 동의가 있는 경우에만 별도로 암호화한다.
+아이의 질문·원문 발화는 기존 `turns`에 평문으로 보관한다. 슬롯의 근거 구절도
+저장 동의가 있는 경우 `dialogue_claims`에 평문으로 보관한다. 물리 컬럼의
+`*_encrypted` 이름은 기존 PostgreSQL 스키마 호환을 위해 유지된다. Outbox 분석
+이벤트에는 `grounding_span`, `note_candidate`, 원문 `evidence_span`을 복사하지 않는다.
 
 ## 핵심 필드
 

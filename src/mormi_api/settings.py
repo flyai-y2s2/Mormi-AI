@@ -37,8 +37,6 @@ class Settings(BaseSettings):
         return self.environment.lower() == "production"
 
     def validate_runtime_safety(self) -> None:
-        if self.production and not self.raw_data_encryption_key:
-            raise RuntimeError("MORMI_RAW_DATA_ENCRYPTION_KEY is required in production")
         if self.production and self.database_url.startswith("sqlite"):
             raise RuntimeError("A PostgreSQL database is required in production")
         if self.production and not self.service_api_key:

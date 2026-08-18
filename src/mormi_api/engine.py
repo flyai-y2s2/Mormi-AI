@@ -128,7 +128,7 @@ class ConversationEngine:
         builder.add_edge("orchestrate", "speak")
         builder.add_edge("speak", "validate_and_compose")
         builder.add_edge("validate_and_compose", END)
-        # Canonical state is committed atomically to the encrypted application
+        # Canonical state is committed atomically to the access-controlled application
         # database after this per-turn graph succeeds. We deliberately do not
         # checkpoint raw child text inside LangGraph.
         return builder.compile()

@@ -135,7 +135,8 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
             await db.execute(select(TurnRecord).where(TurnRecord.turn_id == started.turn.turn_id))
         ).scalar_one()
         assert initial_record.turn_contract["mormi"]["text"] == ""
-        assert initial_record.mormi_question_encrypted != started.turn.mormi.text
+        assert initial_record.mormi_question_encrypted == f"plain:{started.turn.mormi.text}"
+        assert initial_record.response_raw_encrypted == f"plain:{left_count}"
 
     await database.dispose()
 

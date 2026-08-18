@@ -42,7 +42,7 @@ from .schemas import (
     SkillProfilesResponse,
     StarNotesResponse,
 )
-from .security import TextCipher
+from .security import StoredTextCodec
 from .service import ConversationService
 from .settings import Settings, get_settings
 
@@ -63,12 +63,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     gateway = ClaudeGateway(settings)
     repository = Repository(
         database,
-        TextCipher(settings.raw_data_encryption_key),
+        StoredTextCodec(settings.raw_data_encryption_key),
         idempotency_retention_days=settings.idempotency_retention_days,
         classifier_model=settings.classifier_model,
         speaker_model=settings.speaker_model,
     )
     await repository.migrate_existing_storage_to_permanent()
+    await repository.migrate_existing_storage_to_plaintext()
     await repository.purge_expired_raw_data()
     engine = ConversationEngine(
         gateway,
