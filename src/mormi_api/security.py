@@ -53,6 +53,10 @@ class TextCipher:
     def __init__(self, secret: str | None) -> None:
         self._fernet = Fernet(self._derive_key(secret)) if secret else None
 
+    @property
+    def has_key(self) -> bool:
+        return self._fernet is not None
+
     @staticmethod
     def _derive_key(secret: str) -> bytes:
         digest = hashlib.sha256(secret.encode("utf-8")).digest()

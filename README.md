@@ -226,6 +226,7 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_ANTHROPIC_API_KEY` | 예 | 자유 발화 분류와 모르미 발화 생성용 Claude API 키 |
 | `MORMI_RAW_DATA_ENCRYPTION_KEY` | 예 | 원문 질문·응답 저장 암호화 키. 배포 후 임의 변경 금지 |
 | `MORMI_SERVICE_API_KEY` | 예 | Spring→AI 호출을 보호하는 서비스 간 공유 키 |
+| `MORMI_SKIP_STARTUP_MAINTENANCE` | 아니오 | 로컬·개발·테스트 진단 전용. `true`이면 시작 시 스키마 생성·저장소 마이그레이션·만료 원문 정리를 모두 건너뛴다. 운영 환경에서는 사용할 수 없다. |
 | `MORMI_CLASSIFIER_MODEL` | 아니요 | 기본값 `claude-haiku-4-5-20251001` |
 | `MORMI_SPEAKER_MODEL` | 아니요 | 기본값 `claude-sonnet-4-6` |
 | `MORMI_SPEAKER_TIMEOUT_SECONDS` | 아니요 | 화자 생성 제한 시간, 기본 8초 |

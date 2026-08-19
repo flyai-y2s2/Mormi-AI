@@ -38,6 +38,14 @@ class Settings(BaseSettings):
         return self.environment.lower() == "production"
 
     def validate_runtime_safety(self) -> None:
+        if self.skip_startup_maintenance and self.environment.lower() not in {
+            "local",
+            "development",
+            "test",
+        }:
+            raise RuntimeError(
+                "MORMI_SKIP_STARTUP_MAINTENANCE is allowed only in local, development, or test"
+            )
         if self.production and not self.raw_data_encryption_key:
             raise RuntimeError("MORMI_RAW_DATA_ENCRYPTION_KEY is required in production")
         if self.production and self.database_url.startswith("sqlite"):

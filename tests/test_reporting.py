@@ -544,16 +544,36 @@ async def test_report_evidence_keeps_structured_turns_when_raw_key_is_unavailabl
     tmp_path: object,
 ) -> None:
     repository = await reporting_repository(tmp_path)
-    await seed_completed_conversation(repository, learner_id=11, response_text="두 개가 더 적어요")
     repository_without_key = Repository(repository.database, TextCipher(None))
+    await seed_completed_conversation(
+        repository_without_key,
+        learner_id=11,
+        response_text="두 개가 더 적어요",
+    )
+    await repository_without_key.save_profile(
+        LearnerProfile(
+            learner_id=11,
+            skills={
+                "compare_quantity_in_context": SkillProfile(
+                    skill_id="compare_quantity_in_context",
+                    concept_mastery=0.75,
+                )
+            },
+        )
+    )
 
     evidence = await repository_without_key.report_evidence(11, include_raw=True)
 
-    turn = evidence.conversations[0].turns[0]
+    conversation = evidence.conversations[0]
+    turn = conversation.turns[0]
     assert turn.response is None
     assert turn.response_category == "correct_full"
     assert turn.expression_level is ExpressionLevel.L2
     assert turn.hint_level is HintLevel.H1
+    assert turn.pedagogy is not None
+    assert conversation.verified_slots
+    assert conversation.task_max_hint is HintLevel.H1
+    assert [skill.skill_id for skill in evidence.skills] == ["compare_quantity_in_context"]
     await repository.database.dispose()
 
 
