@@ -644,7 +644,12 @@ class ConversationEngine:
         # cannot turn a complete answer into ``correct_partial`` or block a
         # valid answer from advancing the session.
         if response.type is ResponseType.TEXT and response.text:
-            self._ground_text_numeric_claims(task, response.text, analysis)
+            self._ground_text_numeric_claims(
+                task,
+                response.text,
+                analysis,
+                candidate_slot_ids={*interpreted_slots, *state.verified_slots},
+            )
         grounded_claims = task.validated_slot_claims(analysis.claims)
         if response.type is ResponseType.TEXT and response.text:
             grounded_claims = self._filter_text_explanation_claims(
@@ -2132,12 +2137,91 @@ class ConversationEngine:
             return None
         return int(next(iter(values)))
 
+    @staticmethod
+    def _direct_numeric_answer_value(text: str) -> int | None:
+        """Return one number only when the whole utterance is a short answer.
+
+        This deliberately does not mine numbers from a longer sentence.  A
+        bare amount such as ``1200``, ``1,200원`` or ``천이백 원이야`` is an
+        unambiguous answer to a closed numeric slot; text containing a second
+        quantity, a negation, or an explanation still belongs to the
+        classifier and arithmetic truth gates.
+        """
+
+        compact = re.sub(r"\s+", "", text).strip()
+        direct_answer = re.fullmatch(
+            r"(?:"
+            r"[+-]?\d[\d,]*"
+            r"|[영공일이삼사오육칠팔구십백천만]+"
+            r"|하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|열"
+            r")"
+            r"(?:원|개|명)?"
+            r"(?:이야|야|이에요|예요|입니다|라고|라고요)?"
+            r"[.!?]?",
+            compact,
+        )
+        if direct_answer is None:
+            return None
+        values = extract_numeric_values(compact)
+        if len(values) != 1:
+            return None
+        return int(next(iter(values)))
+
+    @classmethod
+    def _recover_direct_numeric_claim(
+        cls,
+        task: TaskDefinition,
+        child_text: str,
+        analysis: UtteranceAnalysis,
+        candidate_slot_ids: set[str],
+    ) -> None:
+        """Recover a classifier-omitted claim for one closed numeric slot.
+
+        Haiku occasionally labels a bare correct amount as ``correct_partial``
+        but omits the corresponding ``SlotClaim``.  State progression is claim
+        driven, so that omission used to make Mormi repeat the same question.
+        Code can safely repair only this narrow case because both the entire
+        child utterance and the reviewed canonical answer resolve to the same
+        single integer.
+        """
+
+        child_value = cls._direct_numeric_answer_value(child_text)
+        if child_value is None:
+            return
+
+        matching_slots: list[str] = []
+        for slot_id in candidate_slot_ids:
+            slot = task.slots.get(slot_id)
+            if slot is None or slot.is_semantic_support or isinstance(slot.expected, bool):
+                continue
+            expected_value = cls._direct_numeric_answer_value(str(slot.expected))
+            if expected_value == child_value:
+                matching_slots.append(slot_id)
+
+        # Never guess between two semantically different slots that happen to
+        # share a number.  The classifier remains responsible for ambiguity.
+        if len(matching_slots) != 1:
+            return
+
+        slot_id = matching_slots[0]
+        analysis.claims = [claim for claim in analysis.claims if claim.slot_id != slot_id]
+        analysis.claims.append(
+            SlotClaim(
+                slot_id=slot_id,
+                value=task.slots[slot_id].expected,
+                factual=True,
+                evidence_span=child_text.strip(),
+                interpretation_confidence=1,
+            )
+        )
+
     @classmethod
     def _ground_text_numeric_claims(
         cls,
         task: TaskDefinition,
         child_text: str,
         analysis: UtteranceAnalysis,
+        candidate_slot_ids: set[str] | None = None,
     ) -> None:
         """Bind numeric claims to the child's evidence before correctness checks.
 
@@ -2148,6 +2232,14 @@ class ConversationEngine:
         interpretation, which preserves support for forms such as a typo in a
         Korean number word without trusting model-authored arithmetic.
         """
+
+        if candidate_slot_ids:
+            cls._recover_direct_numeric_claim(
+                task,
+                child_text,
+                analysis,
+                candidate_slot_ids,
+            )
 
         for claim in analysis.claims:
             slot = task.slots.get(claim.slot_id)

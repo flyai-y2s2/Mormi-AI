@@ -373,6 +373,95 @@ async def test_every_home_l4_answer_only_preserves_credit_and_asks_the_missing_i
     await database.dispose()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("curriculum_session_id", "child_text", "expected_answer"),
+    [
+        ("money-price", "1200", "1,200원"),
+        ("money-price", "1,200원", "1,200원"),
+        ("money-budget", "200", "200원"),
+    ],
+)
+async def test_home_direct_numeric_answer_is_recovered_when_classifier_omits_claim(
+    curriculum_session_id: str,
+    child_text: str,
+    expected_answer: str,
+    tmp_path: object,
+) -> None:
+    """A correct bare amount must not make Mormi repeat the answer question."""
+
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[],
+        confidence=0.9,
+    )
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-{child_text}-claimless.db"
+    )
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway([analysis])),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=22,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id=f"session_{curriculum_session_id}_claimless",
+            practice_result_id=f"practice_{curriculum_session_id}_claimless",
+            practice_summary={
+                "curriculum_session_id": curriculum_session_id,
+                "skill_id": curriculum_session_id,
+                "question_count": 5,
+                "first_try_correct_count": 3,
+            },
+        )
+    )
+
+    followed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id=uuid4(),
+            type="text",
+            text=child_text,
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.verified_slots["answer"] == expected_answer
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
+    assert state.hint_level is HintLevel.H0
+    assert followed.turn.input.target_slots == ["rule"]
+    assert followed.turn.help_card is None
+    assert followed.turn.visual == started.turn.visual
+    await database.dispose()
+
+
+def test_direct_numeric_claim_recovery_rejects_wrong_or_ambiguous_text() -> None:
+    spec = HOME_TEACHING_CATALOG["money-price"]
+    task = home_teaching_task(spec, skill_id=spec.id)
+
+    for child_text in ("1300", "1200원이 아니라 1300원", "700원과 500원"):
+        analysis = UtteranceAnalysis(
+            safety_category=SafetyCategory.NORMAL,
+            response_category=ResponseCategory.CORRECT_PARTIAL,
+            claims=[],
+        )
+        ConversationEngine._ground_text_numeric_claims(
+            task,
+            child_text,
+            analysis,
+            candidate_slot_ids={"answer", "rule"},
+        )
+        assert analysis.claims == []
+
+
 def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> None:
     from mormi_api.content import home_teaching_task
 
