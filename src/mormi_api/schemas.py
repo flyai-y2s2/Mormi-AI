@@ -424,6 +424,23 @@ class SlotClaim(BaseModel):
     support_confidence: float | None = Field(default=None, ge=0, le=1)
 
 
+class ArithmeticClaim(BaseModel):
+    """One arithmetic relation understood from the child's own words.
+
+    Claude extracts the linguistic meaning; deterministic code only checks
+    whether the resulting numbers and operation are mathematically true for
+    the reviewed task.  This keeps Korean wording out of the orchestrator.
+    """
+
+    left: int
+    right: int
+    operation: Literal["addition", "subtraction"]
+    result: int
+    evidence_span: str = ""
+    related_slot_ids: list[str] = Field(default_factory=list)
+    interpretation_confidence: float = Field(default=0, ge=0, le=1)
+
+
 class UtteranceAnalysis(BaseModel):
     safety_category: SafetyCategory = SafetyCategory.UNKNOWN
     response_category: ResponseCategory = ResponseCategory.RECOGNITION_OR_INPUT_ERROR
@@ -434,6 +451,7 @@ class UtteranceAnalysis(BaseModel):
     interaction_intent: InteractionIntent = InteractionIntent.NONE
     entry_stance: EntryStance = EntryStance.NOT_APPLICABLE
     claims: list[SlotClaim] = Field(default_factory=list)
+    arithmetic_claims: list[ArithmeticClaim] = Field(default_factory=list)
     misconception_tag: str | None = None
     bottleneck: str = "unknown"
     # A short, exact substring of the child's response that is safe and useful

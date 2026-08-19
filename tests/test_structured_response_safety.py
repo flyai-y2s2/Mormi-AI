@@ -17,6 +17,7 @@ from mormi_api.db import Database
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
+    ArithmeticClaim,
     ChildResponse,
     DifficultyClass,
     EntryPhase,
@@ -183,6 +184,214 @@ async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> Non
     assert next_state.status.value == "active"
     assert turn.note_update is None
     assert turn.completion is None
+
+
+@pytest.mark.asyncio
+async def test_false_arithmetic_relation_cannot_verify_or_enter_the_star_note() -> None:
+    """Haiku interprets wording; code rejects only the structured false equation."""
+
+    child_text = "2000원에서 1800원 내면 300원 남아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value=300,
+                factual=True,
+                evidence_span="300원",
+                interpretation_confidence=1,
+            ),
+            SlotClaim(
+                slot_id="rule",
+                value=None,
+                factual=True,
+                evidence_span=child_text,
+                supported=True,
+                support_confidence=1,
+            ),
+        ],
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=2000,
+                right=1800,
+                operation="subtraction",
+                result=300,
+                evidence_span=child_text,
+                related_slot_ids=["rule"],
+                interpretation_confidence=1,
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "money-budget",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
+    assert "answer" not in next_state.verified_slots
+    assert "rule" not in next_state.verified_slots
+    assert next_state.status.value == "active"
+    assert turn.note_update is None
+    assert turn.completion is None
+
+
+@pytest.mark.asyncio
+async def test_number_rich_explanation_without_structured_relation_fails_closed() -> None:
+    """A positive label alone cannot bypass the structured arithmetic contract."""
+
+    child_text = "2000원에서 1800원 내면 300원 남아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="rule",
+                value=None,
+                factual=True,
+                evidence_span=child_text,
+                supported=True,
+                support_confidence=1,
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "money-budget",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
+    assert "rule" not in next_state.verified_slots
+    assert next_state.status.value == "active"
+    assert turn.note_update is None
+    assert turn.completion is None
+
+
+@pytest.mark.asyncio
+async def test_true_arithmetic_relation_can_complete_without_a_phrase_allowlist() -> None:
+    """A correct relation is accepted from structured meaning, not a Korean verb regex."""
+
+    child_text = "500원이랑 100원을 모으면 600원이 되는 거야"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value=600,
+                factual=True,
+                evidence_span="600원",
+                interpretation_confidence=1,
+            ),
+            SlotClaim(
+                slot_id="rule",
+                value=None,
+                factual=True,
+                evidence_span=child_text,
+                supported=True,
+                support_confidence=1,
+            ),
+        ],
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=500,
+                right=100,
+                operation="addition",
+                result=600,
+                evidence_span=child_text,
+                related_slot_ids=["rule"],
+                interpretation_confidence=1,
+            )
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "money-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.response_category is ResponseCategory.CORRECT_FULL
+    assert next_state.status.value == "completed"
+    assert next_state.verified_slots["answer"] == "600원"
+    assert "rule" in next_state.verified_slots
+    assert turn.note_update is not None
+    assert turn.completion is not None
+
+
+def test_reviewed_money_tasks_publish_arithmetic_truth_contracts() -> None:
+    """Home money skills expose facts for validation without dictating child wording."""
+
+    expected = {
+        "money-count": ("addition", 500, 100, 600),
+        "money-price": ("addition", 700, 500, 1200),
+        "money-budget": ("subtraction", 2000, 1800, 200),
+    }
+    for curriculum_session_id, values in expected.items():
+        spec = HOME_TEACHING_CATALOG[curriculum_session_id]
+        task = home_teaching_task(spec, skill_id=spec.id)
+        contract = task.arithmetic_contract
+
+        assert contract is not None
+        assert (contract.operation, contract.left, contract.right, contract.result) == values
 
 
 @pytest.mark.asyncio

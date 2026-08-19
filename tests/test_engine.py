@@ -12,6 +12,7 @@ from mormi_api.content import (
 )
 from mormi_api.engine import ConversationEngine
 from mormi_api.schemas import (
+    ArithmeticClaim,
     ChildResponse,
     DifficultyClass,
     ExpressionLevel,
@@ -578,10 +579,22 @@ def test_wrong_subtraction_cannot_satisfy_result_or_method_contract() -> None:
                 supported=True,
                 support_confidence=1,
                 evidence_span=child_text,
-            ),
+                ),
+            ],
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=5000,
+                right=2400,
+                operation="subtraction",
+                result=2700,
+                evidence_span=child_text,
+                related_slot_ids=["method"],
+                interpretation_confidence=1,
+            )
         ],
     )
 
+    ConversationEngine._invalidate_false_structured_arithmetic(task, child_text, analysis)
     ConversationEngine._ground_text_numeric_claims(task, child_text, analysis)
     verified = task.validated_slot_claims(analysis.claims)
     verified = ConversationEngine._filter_text_explanation_claims(

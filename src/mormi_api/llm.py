@@ -175,10 +175,59 @@ class ClaudeGateway:
             and analysis.interaction_intent is not InteractionIntent.NONE
             and bool(analysis.social_grounding_span.strip())
         )
+        entry_active = (
+            task.entry_step is not None
+            and state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE
+        )
+        current_step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=entry_active,
+            targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
+        )
+        current_slot_ids = {*current_step.target_slots, *current_step.optional_slots}
+        positive_without_current_claim = (
+            analysis.response_category
+            in {
+                ResponseCategory.CORRECT_FULL,
+                ResponseCategory.CORRECT_PARTIAL,
+                ResponseCategory.SELF_CORRECTION,
+            }
+            and bool(current_slot_ids)
+            and not any(claim.slot_id in current_slot_ids for claim in analysis.claims)
+        )
+        # Do not parse Korean arithmetic wording in code.  If the classifier
+        # says a number-rich explanation is supported but omitted the
+        # structured relation needed for deterministic truth checking, ask
+        # Haiku to audit its own semantic extraction once.  This is limited to
+        # reviewed arithmetic tasks and does not add latency to ordinary
+        # correctly structured turns.
+        arithmetic_explanation_without_relation = (
+            task.arithmetic_contract is not None
+            and analysis.response_category
+            in {
+                ResponseCategory.CORRECT_FULL,
+                ResponseCategory.CORRECT_PARTIAL,
+                ResponseCategory.SELF_CORRECTION,
+            }
+            and len(extract_numeric_values(response.text or "")) >= 3
+            and not analysis.arithmetic_claims
+            and any(
+                claim.slot_id in current_slot_ids
+                and task.slots[claim.slot_id].is_semantic_support
+                and claim.supported is True
+                for claim in analysis.claims
+                if claim.slot_id in task.slots
+            )
+        )
         if (
             analysis.safety_category.value == "normal"
             and response.type is ResponseType.TEXT
-            and analysis.response_category in negative_free_text_categories
+            and (
+                analysis.response_category in negative_free_text_categories
+                or positive_without_current_claim
+                or arithmetic_explanation_without_relation
+            )
             # A confident, safely grounded social turn is not a candidate
             # mathematical answer.  Skip the second learning audit so the
             # bridge verifier replaces that call instead of adding latency.
@@ -416,6 +465,11 @@ class ClaudeGateway:
             "optional_partial_slots_for_this_question": step.optional_slots,
             "already_verified_slots": state.verified_slots,
             "known_misconceptions": task.misconception_tags,
+            "reviewed_arithmetic_truth": (
+                task.arithmetic_contract.model_dump(mode="json")
+                if task.arithmetic_contract is not None
+                else None
+            ),
             "method_acceptance_contract": {
                 "policy": task.help_method_policy,
                 "reviewed_examples": task.accepted_methods,
@@ -499,6 +553,20 @@ class ClaudeGateway:
                     "아이의 숫자 표현은 쉼표나 단위를 제거해 같은 수로 정규화한다. "
                     "예: 아이가 6,000원이라고 말하면 value=6000이다."
                 ),
+                (
+                    "아이가 덧셈·뺄셈 관계를 말하면 표현 방식과 상관없이 arithmetic_claims에 "
+                    "아이가 실제로 말한 left, right, operation, result를 구조화한다. 예: "
+                    "'2,000원에서 1,800원 내면 300원 남아'는 subtraction(2000,1800,300)이다."
+                ),
+                (
+                    "arithmetic_claims.evidence_span에는 산술 관계 전체를 뒷받침하는 아이 원문을 "
+                    "그대로 복사하고, related_slot_ids에는 그 관계가 뒷받침한다고 주장한 현재 "
+                    "슬롯만 넣는다. 틀린 계산도 고치지 말고 아이가 말한 결과 그대로 추출한다."
+                ),
+                (
+                    "reviewed_arithmetic_truth는 정답을 아이 발화에 끼워 넣기 위한 정보가 아니다. "
+                    "아이 발화의 산술 관계를 빠짐없이 추출하고 정오 분류를 돕는 검수 계약이다."
+                ),
                 "검수된 valid_explanations나 aliases 중 어느 하나와 뜻이 맞으면 인정한다.",
                 (
                     "method_acceptance_contract.policy가 open_methods이면 reviewed_examples는 "
@@ -567,7 +635,10 @@ class ClaudeGateway:
         }
         if prior_analysis is not None:
             payload["semantic_relation_audit"] = {
-                "reason": "1차 부정 판정이 아이식 부분 설명을 놓쳤는지 재검토한다.",
+                "reason": (
+                    "1차 판정과 구조화 claim이 일치하는지, 아이식 답이나 부분 설명을 "
+                    "놓치지 않았는지 재검토한다."
+                ),
                 "prior_analysis": prior_analysis.model_dump(mode="json"),
                 "instructions": [
                     "정확한 문구가 아니라 semantic_role과 description으로 다시 본다.",
@@ -578,6 +649,15 @@ class ClaudeGateway:
                     "하지만 말하지 않은 방법·이유·설명 슬롯이나 모범 전략을 끼워 넣지 않는다.",
                     "보이는 사실과 충돌하거나 실제로 잘못된 전략이면 부정 판정을 유지한다.",
                     "원문에 없는 사실은 만들지 말고, 근거 있는 슬롯만 claim한다.",
+                    (
+                        "1차 결과가 정답·부분정답인데 현재 슬롯 claim이 하나도 없다면, 아이가 "
+                        "말한 값이나 설명을 다시 찾아 claim으로 구조화한다. "
+                        "없는 값은 만들지 않는다."
+                    ),
+                    (
+                        "숫자 사이의 덧셈·뺄셈 관계를 말했는데 arithmetic_claims가 비어 있으면 "
+                        "표현이 비표준이어도 실제 의미를 다시 읽어 구조화한다."
+                    ),
                 ],
             }
         return json.dumps(payload, ensure_ascii=False)

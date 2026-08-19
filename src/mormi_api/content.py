@@ -208,16 +208,26 @@ class SlotDefinition(BaseModel):
             .replace(" ", "")
             .replace(",", "")
         )
-        if isinstance(self.expected, (int, float)) and not isinstance(self.expected, bool):
-            numeric_claim = re.fullmatch(
-                r"([+-]?\d+(?:\.\d+)?)(?:원|개|명)?"
-                r"(?:이야|야|이에요|예요|입니다)?[.!?]?",
-                normalized,
+        # Language understanding already happened in the classifier. Compare
+        # its structured numeric value with the reviewed numeric answer even
+        # when curriculum copy stores that answer as ``"1,200원"``. Do not
+        # parse Korean sentence endings here; the orchestrator only normalizes
+        # closed values and units.
+        def closed_numeric(item: object) -> float | None:
+            if isinstance(item, bool):
+                return None
+            if isinstance(item, (int, float)):
+                return float(item)
+            match = re.fullmatch(
+                r"([+-]?\d+(?:\.\d+)?)(?:원|개|명)?",
+                str(item).strip().replace(" ", "").replace(",", ""),
             )
-            if numeric_claim is not None:
-                parsed = float(numeric_claim.group(1))
-                if parsed == float(self.expected):
-                    return True
+            return float(match.group(1)) if match is not None else None
+
+        expected_numeric = closed_numeric(self.expected)
+        value_numeric = closed_numeric(value)
+        if expected_numeric is not None and value_numeric == expected_numeric:
+            return True
         candidates = [
             str(self.expected),
             *self.aliases,
@@ -332,6 +342,33 @@ def reviewed_help_card(
     )
 
 
+class ArithmeticValidationContract(BaseModel):
+    """Reviewed arithmetic truth for one task instance.
+
+    The classifier may understand a child's wording, but it must not be the
+    only authority deciding whether an explicit numerical relation is true.
+    Keeping the concrete operands and result beside the task lets the engine
+    reject a fluent but false explanation without prescribing one wording or
+    one calculation strategy.
+    """
+
+    operation: Literal["addition", "subtraction"]
+    left: int
+    right: int
+    result: int
+
+    @model_validator(mode="after")
+    def validate_result(self) -> ArithmeticValidationContract:
+        expected = (
+            self.left + self.right
+            if self.operation == "addition"
+            else self.left - self.right
+        )
+        if self.result != expected:
+            raise ValueError("arithmetic validation contract has an inconsistent result")
+        return self
+
+
 class TaskDefinition(BaseModel):
     id: str
     dictionary_card_id: str
@@ -344,6 +381,7 @@ class TaskDefinition(BaseModel):
     title: str
     goal: str
     visible_facts: dict[str, Any]
+    arithmetic_contract: ArithmeticValidationContract | None = None
     slots: dict[str, SlotDefinition]
     required_slots: list[str]
     steps: dict[ExpressionLevel, list[StepDefinition]]
@@ -1206,7 +1244,7 @@ def calculation_task(
     skill_id: str,
     left: int,
     right: int,
-    operation: str,
+    operation: Literal["addition", "subtraction"],
     result: int,
     scene: SceneType = SceneType.CAFE,
     stage_id: str | None = None,
@@ -1236,6 +1274,12 @@ def calculation_task(
         title=title,
         goal=f"{left:,}{symbol}{right:,}을 계산하고 {method_label} 방법을 설명한다.",
         visible_facts={"left": left, "right": right, "operation": operation},
+        arithmetic_contract=ArithmeticValidationContract(
+            operation=operation,
+            left=left,
+            right=right,
+            result=result,
+        ),
         slots={
             "operation": SlotDefinition(
                 id="operation",
@@ -1858,7 +1902,7 @@ def simple_calculation_task(
     title: str,
     left: int,
     right: int,
-    operation: str,
+    operation: Literal["addition", "subtraction"],
     left_label: str,
     right_label: str,
     behavior: str,
@@ -1994,6 +2038,12 @@ def simple_calculation_task(
         title=title,
         goal=f"{left:,}{symbol}{right:,}을 생활 맥락에서 계산한다.",
         visible_facts={"left": left, "right": right, "operation": operation, **dict(context)},
+        arithmetic_contract=ArithmeticValidationContract(
+            operation=operation,
+            left=left,
+            right=right,
+            result=result,
+        ),
         slots={
             "operation": SlotDefinition(
                 id="operation",
@@ -2137,6 +2187,32 @@ def home_teaching_task(
     sample = raw_sample
     sample.pop("correct", None)
 
+    arithmetic_contract: ArithmeticValidationContract | None = None
+    visual = sample.get("visual")
+    if isinstance(visual, dict) and visual.get("type") == "money":
+        amounts = visual.get("amounts")
+        if isinstance(amounts, list) and amounts and all(
+            isinstance(amount, int) and not isinstance(amount, bool) for amount in amounts
+        ):
+            if "subtraction" in spec.help_skills and isinstance(visual.get("paid"), int):
+                paid = int(visual["paid"])
+                spent = sum(int(amount) for amount in amounts)
+                arithmetic_contract = ArithmeticValidationContract(
+                    operation="subtraction",
+                    left=paid,
+                    right=spent,
+                    result=paid - spent,
+                )
+            elif "addition" in spec.help_skills and len(amounts) >= 2:
+                left = int(amounts[0])
+                right = sum(int(amount) for amount in amounts[1:])
+                arithmetic_contract = ArithmeticValidationContract(
+                    operation="addition",
+                    left=left,
+                    right=right,
+                    result=left + right,
+                )
+
     task = TaskDefinition(
         id=HOME_TEACH_TASK_ID,
         dictionary_card_id=spec.dictionary_card_id,
@@ -2154,6 +2230,7 @@ def home_teaching_task(
             "sample_answer": expected_answer,
             "sample_problem": sample,
         },
+        arithmetic_contract=arithmetic_contract,
         slots={
             # The concrete answer is useful partial evidence: when a child only
             # corrects Mormi's answer, preserve it and ask only for the method.

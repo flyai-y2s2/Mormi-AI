@@ -375,26 +375,37 @@ async def test_every_home_l4_answer_only_preserves_credit_and_asks_the_missing_i
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("curriculum_session_id", "child_text", "expected_answer"),
+    ("curriculum_session_id", "child_text", "claim_value", "expected_answer"),
     [
-        ("money-price", "1200", "1,200원"),
-        ("money-price", "1,200원", "1,200원"),
-        ("money-budget", "200", "200원"),
+        ("money-price", "1200", 1200, "1,200원"),
+        ("money-price", "1,200원", 1200, "1,200원"),
+        ("money-price", "1200원이지", 1200, "1,200원"),
+        ("money-budget", "200", 200, "200원"),
+        ("money-count", "600원이지", 600, "600원"),
     ],
 )
-async def test_home_direct_numeric_answer_is_recovered_when_classifier_omits_claim(
+async def test_home_structured_numeric_answer_advances_without_repeating(
     curriculum_session_id: str,
     child_text: str,
+    claim_value: int,
     expected_answer: str,
     tmp_path: object,
 ) -> None:
-    """A correct bare amount must not make Mormi repeat the answer question."""
+    """A Haiku-interpreted amount is compared as a value, not Korean copy."""
 
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
         response_category=ResponseCategory.CORRECT_PARTIAL,
         difficulty_class=DifficultyClass.UNKNOWN,
-        claims=[],
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value=claim_value,
+                factual=True,
+                evidence_span=child_text,
+                interpretation_confidence=0.99,
+            )
+        ],
         confidence=0.9,
     )
     database = Database(
@@ -443,23 +454,40 @@ async def test_home_direct_numeric_answer_is_recovered_when_classifier_omits_cla
     await database.dispose()
 
 
-def test_direct_numeric_claim_recovery_rejects_wrong_or_ambiguous_text() -> None:
+def test_structured_numeric_claim_must_be_grounded_in_child_evidence() -> None:
     spec = HOME_TEACHING_CATALOG["money-price"]
     task = home_teaching_task(spec, skill_id=spec.id)
 
-    for child_text in ("1300", "1200원이 아니라 1300원", "700원과 500원"):
+    for child_text, evidence_span in (("1300", "1300"), ("700원과 500원", "700원과 500원")):
         analysis = UtteranceAnalysis(
             safety_category=SafetyCategory.NORMAL,
             response_category=ResponseCategory.CORRECT_PARTIAL,
-            claims=[],
+            claims=[
+                SlotClaim(
+                    slot_id="answer",
+                    value=1200,
+                    factual=True,
+                    evidence_span=evidence_span,
+                    interpretation_confidence=0.99,
+                )
+            ],
         )
         ConversationEngine._ground_text_numeric_claims(
             task,
             child_text,
             analysis,
-            candidate_slot_ids={"answer", "rule"},
         )
-        assert analysis.claims == []
+        assert analysis.claims[0].factual is False
+
+
+def test_closed_numeric_slot_compares_structured_values_not_display_copy() -> None:
+    spec = HOME_TEACHING_CATALOG["money-price"]
+    answer = home_teaching_task(spec, skill_id=spec.id).slots["answer"]
+
+    assert answer.expected == "1,200원"
+    assert answer.accepts(1200)
+    assert answer.accepts("1200원")
+    assert not answer.accepts(1300)
 
 
 def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> None:

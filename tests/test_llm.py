@@ -22,6 +22,7 @@ from mormi_api.llm import (
     validate_speaker_verification,
 )
 from mormi_api.schemas import (
+    ArithmeticClaim,
     CafeMenuItem,
     ChildResponse,
     DifficultyClass,
@@ -622,6 +623,153 @@ async def test_negative_free_text_classification_is_semantically_rechecked_once(
     assert "semantic_relation_audit" in messages.prompts[1]
     assert "문구 일치가 아니라" in messages.prompts[0]
     assert "10개 중 색칠된 게 3개던데" not in messages.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_positive_classification_without_current_claim_is_rechecked_once() -> None:
+    """A positive label without evidence cannot leave the state claimless."""
+
+    first = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        confidence=0.8,
+    )
+    audited = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value=600,
+                factual=True,
+                evidence_span="600원이지",
+                interpretation_confidence=0.99,
+            )
+        ],
+        confidence=0.95,
+    )
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.outputs = [first.model_dump_json(), audited.model_dump_json()]
+            self.prompts: list[str] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.prompts.append(kwargs["messages"][0]["content"])
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=self.outputs.pop(0))],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None))
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    state = SessionState(
+        learner_id=1,
+        scene=SceneType.HOME_TEACH,
+        scenario_id="home_teach",
+        task_ids=[HOME_TEACH_TASK_ID],
+        expression_level=ExpressionLevel.L4,
+    )
+
+    result = await gateway.classify(
+        state=state,
+        task=task,
+        previous_question="모두 얼마인지랑 어떻게 더하는지 알려줄 수 있어?",
+        response=ChildResponse(
+            turn_id="turn_1",
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="600원이지",
+        ),
+    )
+
+    assert len(messages.prompts) == 2
+    assert result.claims[0].slot_id == "answer"
+    assert result.claims[0].value == 600
+    assert "구조화 claim이 일치" in messages.prompts[1]
+    assert "arithmetic_claims" in messages.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_number_rich_supported_explanation_without_relation_is_rechecked_once() -> None:
+    """Haiku, not a Korean phrase regex, repairs missing arithmetic structure."""
+
+    child_text = "2000원에서 1800원 내면 300원 남아"
+    first = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="rule",
+                value=None,
+                factual=True,
+                evidence_span=child_text,
+                supported=True,
+                support_confidence=0.9,
+            )
+        ],
+        confidence=0.8,
+    )
+    audited = first.model_copy(
+        update={
+            "arithmetic_claims": [
+                ArithmeticClaim(
+                    left=2000,
+                    right=1800,
+                    operation="subtraction",
+                    result=300,
+                    evidence_span=child_text,
+                    related_slot_ids=["rule"],
+                    interpretation_confidence=0.99,
+                )
+            ]
+        }
+    )
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.outputs = [first.model_dump_json(), audited.model_dump_json()]
+            self.prompts: list[str] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.prompts.append(kwargs["messages"][0]["content"])
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=self.outputs.pop(0))],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None))
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-budget"], skill_id="money-budget")
+    state = SessionState(
+        learner_id=1,
+        scene=SceneType.HOME_TEACH,
+        scenario_id="home_teach",
+        task_ids=[HOME_TEACH_TASK_ID],
+        expression_level=ExpressionLevel.L4,
+    )
+
+    result = await gateway.classify(
+        state=state,
+        task=task,
+        previous_question="얼마가 남는지랑 어떻게 계산하는지 알려줄 수 있어?",
+        response=ChildResponse(
+            turn_id="turn_1",
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+    )
+
+    assert len(messages.prompts) == 2
+    assert result.arithmetic_claims[0].operation == "subtraction"
+    assert "숫자 사이의 덧셈·뺄셈 관계" in messages.prompts[1]
 
 
 @pytest.mark.asyncio
