@@ -12,13 +12,14 @@
 - 카페의 줄 서기, 예산 메뉴 선택, 메뉴값 덧셈, 거스름돈 진행
 - 발화사다리 `L4~L0`와 힌트사다리 `H0~H3`를 독립적으로 조절
 - 도움 카드 자동 공개
+- 도움 카드와 분리된 검수·버전 고정 궁금해사전 40개 제공
 - 발화 이해 LLM, 결정형 오케스트레이터, 모르미 화자 LLM 분리
 - 모든 화자 대사의 결정형 검증과 위험 턴의 조건부 의미 검증
 - 검증된 대사만 전송하는 SSE 진행·대사 스트리밍
 - 자유문장은 LLM, 선택·빈칸·조작은 검수 ID 기반 결정형 판정 후 동일 오케스트레이터 사용
 - 아이 근거를 보존한 직접 별노트와 검수된 공동 별노트를 구분해 생성
 - 학습자별 안정 발화 단계와 최근 힌트 의존도 저장
-- 모르미 질문과 아이 원문 발화·선택 기록을 암호화 저장
+- 모르미 질문과 아이 원문 발화·선택 기록을 DB에 평문 저장
 
 ## 서비스 책임 경계
 
@@ -27,9 +28,10 @@
 - 아이 발화 이해와 사실 슬롯·누락 슬롯·안전 유형 분류
 - 결정형 발화사다리·힌트사다리 및 세션 진행
 - 도움 카드와 시각자료 계약 생성
+- 궁금해사전의 개념·예시·전용 시각자료 카탈로그와 버전 스냅샷 제공
 - 모르미 대사 생성과 출력 안전 검증
 - 별노트의 원문 근거·맥락 보충·귀속 및 학습 프로필 변경값 계산
-- 대화 중 활성 상태와 암호화 턴 기록
+- 대화 중 활성 상태와 평문 턴 기록
 
 일반 서비스 백엔드인 [`Mormi-BE`](https://github.com/flyai-y2s2/Mormi-BE)는 회원·인증, 전체 학습 진도, 반복학습 원본, 보상·장소 해금 등 서비스 데이터를 담당합니다. 장기적으로 별노트와 학습자 프로필의 영구 원장은 BE가 소유하고, 이 서비스는 생성·갱신 결과를 반환하는 구조를 기준으로 합니다.
 
@@ -55,6 +57,12 @@
 - **통제는 코드, 언어는 LLM**: LLM이 정답, 진도, L/H 전환, 힌트, 별노트 귀속을 결정하지 않습니다.
 - **두 축을 분리**: 표현이 어렵다면 `L`만 낮추고, 개념이 어렵다면 `H`만 높입니다.
 - **힌트의 주체는 도움 카드**: 모르미는 카드를 함께 보자고 요청할 뿐, 스스로 정답을 가르치지 않습니다.
+- **세 콘텐츠의 역할 분리**: 궁금해사전은 믿고 참고하는 개념 자료, 도움 카드는 현재
+  문제를 푸는 단계별 발판, 별노트는 아이가 실제로 알려 준 근거의 기록입니다.
+  서로의 문구를 복사해 만들지 않습니다.
+- **사전은 런타임 생성 금지**: 궁금해사전은 LLM이 대화 중 만들지 않습니다. 검수된
+  버전 카탈로그를 대화 시작 시 스냅샷으로 고정하고, 이후 배포가 있어도 진행 중인
+  대화에는 같은 카드가 보입니다.
 - **도움카드 공통 계약**: 모든 콘텐츠는 `H1=주의`, `H2=구체적 행동·표상`,
   `H3=공동 수행·정답 마무리`를 선언하며, 단계가 올라갈수록 지원이 실제로 증가해야 합니다.
   수식·강조·탭 조작·순서 배열 중 학습 기능에 맞는 수단을 쓰며 이미지만을 강제하지 않습니다.
@@ -78,7 +86,7 @@
 - **조건부 의미 검증**: 부분 답변, 설명 요청, 아이 표현을 되받는 턴만 Haiku가
   질문 의미와 캐릭터를 재검증합니다. 단순 안전 대응과 검수 문구에는 추가 호출을
   하지 않으며, 시간 초과나 거절 시 교육 진행은 유지하고 검수 문구로 대체합니다.
-- **원문 기록 분리**: 원문은 암호화된 대화 기록에만 저장하며 학습 상태에는 검증된 사실만 저장합니다.
+- **원문 기록 분리**: 원문은 접근이 통제된 대화 기록에 평문 저장하며 학습 상태에는 검증된 사실만 저장합니다.
 - **완료 사실 연동**: `completion.verified_facts`에는 코드가 검증한 슬롯만 담아
   Spring BE가 카페 진행을 동기화하며, 원문 발화나 LLM 추측은 넣지 않습니다.
 
@@ -122,6 +130,8 @@ pip install -r requirements.txt
 | POST | `/v1/conversations/{conversation_id}/responses` | 발화·선택·조작 응답 제출 |
 | POST | `/v1/conversations/{conversation_id}/responses/stream` | SSE 진행 상태와 검증된 다음 턴 스트리밍 |
 | GET | `/v1/conversations/{conversation_id}` | 최신 상태와 턴 복구 |
+| GET | `/v1/content/dictionary-cards/{curriculum_session_id}` | 현재 승인된 궁금해사전 카드 조회 |
+| GET | `/v1/conversations/{conversation_id}/dictionary-card` | 대화에 고정된 궁금해사전 카드 조회 |
 | GET | `/v1/learners/{learner_id}/skill-profiles` | 학습자별 L/H 근거 조회 |
 | GET | `/v1/learners/{learner_id}/star-notes` | 별노트 조회 |
 | GET | `/v1/conversations/{conversation_id}/transcript` | 보호된 원문 질문·응답 기록 조회 |
@@ -149,6 +159,14 @@ pip install -r requirements.txt
 반드시 필요합니다. `practice_summary`는 시작 요청에 함께 보내거나, 같은
 `practice_result_id`로 미리 저장한 결과를 복구할 수 있습니다. 같은 결과 ID를
 재전송하면 최초 저장된 반복 결과가 유지됩니다.
+
+궁금해사전은 집 커리큘럼 36개와 현재 카페 4개에 각각 한 장씩 등록되어 있습니다.
+각 카드는 도움 문구와 별개인 `concept`, 구체적인 `example`, 그 예시에 근거한 전용
+`visual`, `source_refs`, 승인 정보와 콘텐츠 버전을 가집니다. 대화 시작 시 카드 본문과
+해시가 세션에 고정되며, 각 `TurnContract.dictionary_ref`는 화면이 사용할 카드의
+ID·버전·해시를 알려 줍니다. 프론트가 힌트 문구를 조합해 사전 내용을 만들지 않습니다.
+아동 화면에는 `title`·`concept`·`example`·`visual`만 사전 본문으로 표시하고,
+`learning_goal`·출처·승인 정보는 운영 및 검수용 메타데이터로 유지합니다.
 
 거스름돈 단계는 현재 FE 계약을 따릅니다. 모르미가 고른 메뉴 하나에 10,000원을
 내며, 아이는 `10,000 − 모르미 메뉴 가격`을 계산합니다.
@@ -191,6 +209,20 @@ pip install -r requirements.txt
     "input": {"kind": "text", "target_slots": ["right_count"]},
     "visual": {"type": "cafe_queues", "data": {}},
     "help_card": null,
+    "task_anchor": {
+      "anchor_id": "cafe_queue:short_reason",
+      "title": "지금 모르미에게 알려줄 것",
+      "prompt": "나는 왜 그 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+      "completed_items": [],
+      "target_slots": ["reason"]
+    },
+    "dictionary_ref": {
+      "card_id": "dictionary.cafe.cafe-queue",
+      "curriculum_session_id": "cafe_queue",
+      "schema_version": 1,
+      "content_version": 1,
+      "content_hash": "<sha256>"
+    },
     "note_update": null,
     "status": "active",
     "state_version": 2
@@ -200,17 +232,18 @@ pip install -r requirements.txt
 
 내부 `L/H`, 검증 슬롯, 병목은 기본 응답에서 숨깁니다. 로컬 디버깅에서만 `MORMI_SHOW_INTERNAL_PEDAGOGY=true`로 노출할 수 있습니다.
 
-## 원문 데이터 보호
+## 원문 데이터 저장과 접근 보호
 
 사전 동의를 완료한 파일럿 참여자의 모르미 질문과 아이 원문 발화·선택을 기본적으로
-암호화해 영구 저장합니다.
+DB에서 바로 읽을 수 있는 평문으로 영구 저장합니다. 기존 배포에서 생성한 `fernet:`
+레코드는 새 버전의 첫 시작 시 하나의 트랜잭션에서 `plain:` 레코드로 변환합니다.
 
-- 운영 환경에서는 `MORMI_RAW_DATA_ENCRYPTION_KEY` 없이는 서버가 시작되지 않습니다.
 - 운영 환경에서는 PostgreSQL과 `MORMI_SERVICE_API_KEY`가 필수입니다.
 - Spring 백엔드와의 서비스 간 호출은 `X-Mormi-Service-Key` 헤더로 보호합니다.
 - Claude API 키는 Mormi-AI에만 두고, Spring과 프론트에는 전달하지 않습니다.
 - Mormi-AI 서비스 키는 Spring 서버에만 두고, 브라우저에는 전달하지 않습니다.
-- 원문은 발화 이해 요청과 암호화 기록에만 사용하고 학습 프로필에는 복사하지 않습니다.
+- 원문은 발화 이해 요청과 대화 기록에만 사용하고 학습 프로필에는 복사하지 않습니다.
+- DB 계정, 운영 서버, 백업 접근 권한으로 평문 원문을 보호해야 합니다.
 - 원문 동의가 없으면 아이 원문은 저장하지 않고 구조화 판정만 저장합니다.
 - 원문 보존 정책은 `no_raw`, `30_days`, `90_days` 중 하나입니다.
 - 실제 아동 대상 운영 전에 보호자·기관의 동의 철회·삭제 요청 절차를 확정해야 합니다.
@@ -224,9 +257,18 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_ENVIRONMENT=production` | 예 | 운영 안전 검증 활성화 |
 | `MORMI_DATABASE_URL` | 예 | `postgresql+asyncpg://...` 형식의 PostgreSQL 접속 문자열 |
 | `MORMI_ANTHROPIC_API_KEY` | 예 | 자유 발화 분류와 모르미 발화 생성용 Claude API 키 |
-| `MORMI_RAW_DATA_ENCRYPTION_KEY` | 예 | 원문 질문·응답 저장 암호화 키. 배포 후 임의 변경 금지 |
+| `MORMI_RAW_DATA_ENCRYPTION_KEY` | 아니요 | 이전 `fernet:` 레코드를 최초 1회 평문으로 변환할 때만 필요한 기존 키 |
 | `MORMI_SERVICE_API_KEY` | 예 | Spring→AI 호출을 보호하는 서비스 간 공유 키 |
 | `MORMI_SKIP_STARTUP_MAINTENANCE` | 아니오 | 로컬·개발·테스트 진단 전용. `true`이면 시작 시 스키마 생성·저장소 마이그레이션·만료 원문 정리를 모두 건너뛴다. 운영 환경에서는 사용할 수 없다. |
+| `MORMI_OBSERVATION_INGEST_URL` | 관찰 전송 시 예 | Spring의 `/internal/v1/observations/events` 전체 URL |
+| `MORMI_OBSERVATION_INGEST_KEY` | 관찰 전송 시 예 | AI→Spring 관찰 이벤트 호출을 보호하는 전용 공유 키 |
+| `MORMI_STAR_NOTE_EVENTS_ENABLED` | 아니요 | BE 별노트 수신 계약 배포 후 `true`; 기본 `false`에서는 별노트 이벤트를 pending으로 보존 |
+| `MORMI_OUTBOX_POLL_INTERVAL_SECONDS` | 아니요 | 전송할 이벤트가 없을 때 폴링 간격, 기본 2초 |
+| `MORMI_OUTBOX_BATCH_SIZE` | 아니요 | 한 폴링 주기에 처리할 최대 이벤트 수, 기본 20개 |
+| `MORMI_OUTBOX_REQUEST_TIMEOUT_SECONDS` | 아니요 | Spring 수신 API 제한 시간, 기본 5초 |
+| `MORMI_OUTBOX_RETRY_BASE_SECONDS` | 아니요 | 재시도 백오프 시작값, 기본 2초 |
+| `MORMI_OUTBOX_RETRY_MAX_SECONDS` | 아니요 | 재시도 백오프 상한, 기본 300초 |
+| `MORMI_OUTBOX_LEASE_SECONDS` | 아니요 | 전송 중 worker 장애를 감지하는 처리 임대 시간, 기본 30초 |
 | `MORMI_CLASSIFIER_MODEL` | 아니요 | 기본값 `claude-haiku-4-5-20251001` |
 | `MORMI_SPEAKER_MODEL` | 아니요 | 기본값 `claude-sonnet-4-6` |
 | `MORMI_SPEAKER_TIMEOUT_SECONDS` | 아니요 | 화자 생성 제한 시간, 기본 8초 |
@@ -236,12 +278,25 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_CORS_ORIGINS` | 아니요 | 브라우저 직접 호출을 허용할 오리진 JSON 배열. Spring 경유만 하면 `[]` |
 | `MORMI_SHOW_INTERNAL_PEDAGOGY=false` | 아니요 | 운영 응답에서 내부 L/H·판정 근거를 숨김 |
 
-Spring 서버에는 AI 비밀 전체가 아니라 다음 두 값만 공유합니다.
+대화 프록시 호출을 위해 Spring 서버와 맞출 값은 다음 두 가지입니다.
 
 - `MORMI_DIALOGUE_BASE_URL`: AI 서버의 내부 주소
 - `MORMI_DIALOGUE_SERVICE_KEY`: AI의 `MORMI_SERVICE_API_KEY`와 동일한 값
 
-Anthropic 키, 원문 암호화 키와 DB 접속 문자열은 FE나 Spring 서버에 전달하지 않습니다.
+관찰 이벤트 파이프라인을 켤 때는 AI 서버에 Spring 수신 URL과
+`MORMI_OBSERVATION_INGEST_KEY`를 함께 설정하고, Spring 수신 API에도 같은 키를
+설정합니다. 둘 중 하나만 있으면 기존 대화 API는 정상 시작하되 전송기는 비활성화되어
+설정 누락 로그를 남깁니다. 키 값과 관찰 payload는 전송 로그에 기록하지 않습니다.
+
+별노트 B안은 같은 수신 URL에 `event_type=star_note_created`를 별도 이벤트로 보냅니다.
+AI는 별노트가 생성된 턴과 같은 트랜잭션에서 outbox row를 만들지만,
+`MORMI_STAR_NOTE_EVENTS_ENABLED=false`인 동안에는 전송 대상으로 가져오지 않습니다.
+Spring이 해당 이벤트의 멱등 수집·조회 원장을 배포한 뒤 이 값을 `true`로 바꾸면 기존
+pending 이벤트까지 차례로 전달됩니다. AI를 먼저 배포할 때도 별노트가 422로 유실되지
+않도록 운영 순서를 보장하기 위한 플래그입니다.
+
+Anthropic 키와 DB 접속 문자열은 FE나 Spring 서버에 전달하지 않습니다. 첫 평문 전환이
+완료되기 전에는 기존 원문 암호화 키도 AI 서버에 유지해야 합니다.
 
 ## 검증
 
@@ -269,8 +324,25 @@ PYTHONPATH=src .venv/bin/python scripts/audit_help_cards.py \
 H1~H3 누락, 미등록 사실 참조, 학습 기능과 맞지 않는 지원 수단, H3에서 완료할 수 없는
 필수 슬롯은 빌드 전에 실패합니다.
 
+궁금해사전도 같은 세 겹의 출시 전 검수를 거칩니다. 결정형 검사는 40개 활성 과제
+전수 대응, 승인·출처·버전 해시, 문장 독립성, 산술·시각 사실 일치, 도움카드 문구 복사,
+고아·누락 카드와 `3십` 같은 비표준 자릿값 표현을 검사합니다. 순차 수 세기 그림은
+`1`부터 목표 개수까지 빠짐없이 증가하지 않으면 카탈로그 로딩이 실패합니다.
+
+```bash
+# 개념·예시·시각자료·연결 과제를 함께 보는 사람 검수표
+PYTHONPATH=src .venv/bin/python scripts/audit_dictionary_cards.py \
+  --report /tmp/mormi-dictionary-review.md
+
+# 선택 실행: 이해 가능성·수학 정확성·풀이 강요·도움카드 중복 의미 검수
+PYTHONPATH=src .venv/bin/python scripts/audit_dictionary_cards.py \
+  --ai --report /tmp/mormi-dictionary-review.md \
+  --json /tmp/mormi-dictionary-ai-audit.json
+```
+
 상세 설계와 API 계약은 `docs/`를 참고하세요.
 
 - 사람이 읽는 API 명세: [`docs/API_SPEC.md`](./docs/API_SPEC.md)
+- 대화 관찰·리포트 이벤트: [`docs/OBSERVATION_EVENTS.md`](./docs/OBSERVATION_EVENTS.md)
 - OpenAPI 원본: [`docs/openapi.json`](./docs/openapi.json)
 - 시각자료 계약: [`docs/VISUAL_CONTRACTS.md`](./docs/VISUAL_CONTRACTS.md)

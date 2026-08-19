@@ -46,6 +46,8 @@ X-Mormi-Service-Key: <service-key>
 | POST | `/v1/conversations/{conversation_id}/responses` | 아이 응답 제출 및 다음 턴 생성 |
 | POST | `/v1/conversations/{conversation_id}/responses/stream` | SSE 진행 상태와 검증된 다음 턴 전송 |
 | GET | `/v1/conversations/{conversation_id}` | 최신 턴 복구 |
+| GET | `/v1/content/dictionary-cards/{curriculum_session_id}` | 현재 승인된 궁금해사전 카드 조회 |
+| GET | `/v1/conversations/{conversation_id}/dictionary-card` | 대화에 고정된 궁금해사전 카드 조회 |
 | GET | `/v1/learners/{learner_id}/skill-profiles` | 학습자별 시작 발화 단계 정보 조회 |
 | GET | `/v1/learners/{learner_id}/star-notes` | 별노트 조회 |
 | GET | `/v1/conversations/{conversation_id}/transcript` | 보호된 대화 기록 조회 |
@@ -72,6 +74,86 @@ X-Mormi-Service-Key: <service-key>
 응답 본문은 `GET /health`와 같고, `X-Mormi-Service-Key`를 함께 검사합니다.
 서버가 살아 있는지와 BE↔AI 공유 키가 맞는지를 한 번에 확인할 때 씁니다.
 키가 틀리면 `401`이므로, 배포 후 연동 점검은 `/health`가 아니라 이쪽을 호출하세요.
+
+### 궁금해사전 콘텐츠 조회
+
+궁금해사전은 도움카드 문구를 조합하거나 런타임 LLM으로 생성하지 않습니다. AI가
+소유한 승인·버전 고정 카탈로그를 조회합니다.
+
+#### `GET /v1/content/dictionary-cards/{curriculum_session_id}`
+
+현재 배포에서 승인된 카드 한 장을 조회합니다. 선택 쿼리
+`expected_content_version`을 보내면 호출자가 기대한 버전과 다를 때 `409`를 반환합니다.
+
+```http
+GET /v1/content/dictionary-cards/number-count?expected_content_version=2
+X-Mormi-Service-Key: <service-key>
+```
+
+#### `GET /v1/conversations/{conversation_id}/dictionary-card`
+
+대화 시작 시 해당 과제에 고정된 카드 스냅샷을 반환합니다. 카탈로그가 새로 배포되어도
+진행 중인 대화에는 이 카드가 유지됩니다. 이 조회는 L/H 단계, 검증 슬롯, 별노트,
+현재 턴을 변경하지 않습니다.
+
+두 API의 정상 응답 형식은 같습니다.
+
+```json
+{
+  "catalog_version": 2,
+  "reference": {
+    "card_id": "dictionary.home.number-count",
+    "curriculum_session_id": "number-count",
+    "schema_version": 1,
+    "content_version": 2,
+    "content_hash": "<sha256>"
+  },
+  "card": {
+    "card_id": "dictionary.home.number-count",
+    "curriculum_session_id": "number-count",
+    "schema_version": 1,
+    "content_version": 2,
+    "locale": "ko-KR",
+    "title": "수를 빠뜨리지 않고 세기",
+    "learning_goal": "눈에 보이는 대상을 빠뜨리거나 겹치지 않고 센다.",
+    "concept": {
+      "lines": ["개수를 셀 때는 ‘1개, 2개, 3개’처럼 하나씩 세어."]
+    },
+    "example": {
+      "lines": ["색칠된 칸을 하나씩 세면 ‘1개, 2개, 3개’, 모두 3개야."],
+      "facts": {"count": 3},
+      "equation": null
+    },
+    "visual": {
+      "type": "count_sequence",
+      "data": {
+        "count": 3,
+        "sequence_counts": [1, 2, 3],
+        "layout": "left_to_right",
+        "counted_object": "filled_cell"
+      },
+      "fact_refs": ["count"],
+      "alt_text": "색칠된 칸을 1개, 2개, 3개로 차례로 세는 세 장의 그림"
+    },
+    "method_policy": "target_method",
+    "source_refs": ["2022 개정 초등 수학: 수와 연산"],
+    "review": {
+      "status": "approved",
+      "approved_by": "Mormi content team",
+      "approved_at": "2026-08-16"
+    }
+  }
+}
+```
+
+아동 화면에 기본적으로 표시하는 본문은 `title`, `concept`, `example`, `visual`입니다.
+`learning_goal`, `method_policy`, `source_refs`, `review`는 계약 검증·운영·검수용
+메타데이터이며 아동용 사전 본문으로 그대로 노출하지 않습니다.
+
+- 등록되지 않은 커리큘럼 ID: `404 dictionary_card_not_found`
+- 현재 콘텐츠 버전 불일치: `409 dictionary_version_mismatch`
+- 구버전 대화에 고정 카드가 없음: `409 dictionary_snapshot_unavailable`
+- 스키마·사실·산술·시각자료 계약이 잘못된 카탈로그: 서버 시작 및 CI 실패
 
 ## 4. 반복학습 결과 저장
 
@@ -238,7 +320,7 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 
 `practice_summary.attempts[].response`에는 수치 결과 또는 선택 ID 목록처럼 구조화된
 결과만 넣습니다. 아이의 자유 발화 원문·음성 전사·문제 문장은 넣지 않습니다. 자유
-발화는 이후 `ChildResponse.text`로만 전송되며, 저장 동의가 있을 때에만 암호화된
+발화는 이후 `ChildResponse.text`로만 전송되며, 저장 동의가 있을 때에만 평문
 대화 기록으로 보관됩니다.
 
 `scenario_id=home_teach` 요청에는 비어 있지 않은 `learning_session_id`와
@@ -255,9 +337,9 @@ AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionSt
 | 동의 | `retention_policy` | 결과 |
 |---|---|---|
 | `false` | `no_raw` | 아이 원문을 저장하지 않음 |
-| `true` | `30_days` | 암호화된 아이 원문을 30일 보관 |
-| `true` | `90_days` | 암호화된 아이 원문을 90일 보관 |
-| `true` | `permanent` | 암호화된 질문·아이 원문·선택 응답을 만료 없이 보관 |
+| `true` | `30_days` | 평문 아이 원문을 30일 보관 |
+| `true` | `90_days` | 평문 아이 원문을 90일 보관 |
+| `true` | `permanent` | 평문 질문·아이 원문·선택 응답을 만료 없이 보관 |
 
 파일럿 운영 기본값은 사전 동의를 전제로 `true` / `permanent`다.
 
@@ -381,6 +463,7 @@ response.progress  stage=planning
 response.progress  stage=speaking
 response.progress  stage=validating
 mormi.start
+turn.metadata      { turn_id, task_anchor }
 mormi.delta        검증된 모르미 문장의 일부
 turn.completed     최종 { conversation_id, turn }
 done
@@ -397,6 +480,9 @@ done
 ```text
 event: response.progress
 data: {"conversation_id":"conversation_123","stage":"speaking"}
+
+event: turn.metadata
+data: {"turn_id":"turn_456","task_anchor":{"anchor_id":"cafe_queue:short_reason","title":"지금 모르미에게 알려줄 것","prompt":"나는 왜 그 줄이 더 빠른지 헷갈려... 알려줄 수 있어?","completed_items":[],"target_slots":["reason"]}}
 
 event: mormi.delta
 data: {"turn_id":"turn_456","delta":"아, 세 개구나!"}
@@ -454,6 +540,25 @@ type TurnContract = {
       visual_type?: string;
       visual_data: Record<string, unknown>;
     };
+    task_anchor: null | {
+      anchor_id: string; // task + 현재 subgoal의 안정적인 식별자
+      title: "지금 모르미에게 알려줄 것";
+      prompt: string; // 검수된 StepDefinition.prompt, 최대 50자
+      completed_items: Array<{
+        slot_id: string;
+        label: string;
+        value: string | number | boolean;
+        display_text: string;
+      }>;
+      target_slots: string[]; // 현재 input.target_slots 중 아직 필요한 슬롯
+    };
+    dictionary_ref: null | {
+      card_id: string;
+      curriculum_session_id: string;
+      schema_version: number;
+      content_version: number;
+      content_hash: string; // SHA-256
+    };
     note_update: null | {
       note_id: string;
       skill_id: string;
@@ -478,6 +583,14 @@ type TurnContract = {
 
 - `input.kind`에 해당하는 입력 UI 하나만 활성화합니다.
 - `help_card.auto_open=true`이면 도움 카드를 즉시 엽니다.
+- `task_anchor`는 모르미의 자연어 말풍선과 별개인 고정 질문 기억 장치입니다. 그림
+  영역 위에 계속 표시하고, 말풍선이나 도움 카드 문구에서 질문을 역추론하지 않습니다.
+- 같은 subgoal에서 H 단계만 바뀌면 `task_anchor.anchor_id`와 `prompt`는 유지됩니다.
+  부분 답변으로 다음 subgoal로 넘어가면 이미 검증된 값만 `completed_items`에 표시됩니다.
+- 과거 저장 턴에는 `task_anchor=null`일 수 있지만 신규 active 턴과 snapshot 응답은
+  항상 비어 있지 않은 앵커를 반환합니다. 완료 턴은 `null`입니다.
+- `dictionary_ref`는 사전 카드 본문이 아니라 카드의 고정 신원입니다. 화면이 사전을
+  열 때 대화별 조회 API로 같은 해시의 스냅샷을 받아 렌더링합니다.
 - `note_update`가 있을 때만 별노트를 추가합니다.
 - 정오, 오개념, L/H 전환, 별노트 귀속을 프론트가 다시 계산하지 않습니다.
 - `status=completed`이면 입력을 보내지 않고 완료 연출로 이동합니다.
@@ -549,6 +662,10 @@ type TurnContract = {
 
 ### `GET /v1/learners/{learner_id}/star-notes`
 
+이 엔드포인트는 AI 내부 감사·디버깅용 조회다. 운영 FE의 별노트 모아보기는 AI가
+발행한 `star_note_created` 이벤트를 멱등 수집한 Spring의 학습자별 별노트 API를
+사용한다. 브라우저가 이 AI 엔드포인트를 직접 호출하지 않는다.
+
 ```json
 {
   "learner_id": 1,
@@ -578,10 +695,13 @@ type TurnContract = {
 
 운영자 분석용 보호 엔드포인트입니다. 일반 아동 화면에서 호출하지 않습니다.
 
-- 모르미 질문은 화면 복구를 위해 항상 암호화 저장됩니다.
-- 아이 원문은 저장 동의가 있을 때만 암호화 저장됩니다.
+- 모르미 질문은 화면 복구를 위해 항상 평문 저장됩니다.
+- 아이 원문은 저장 동의가 있을 때만 평문 저장됩니다.
 - 동의가 없으면 선택 ID, 응답 유형, 분류 결과 등 구조 데이터만 남습니다.
 - 음성 파일은 저장하지 않습니다.
+
+물리 DB 컬럼의 `*_encrypted` 이름은 기존 스키마와 무중단 호환을 위해 유지하지만,
+현재 값은 `plain:<text>` 형식입니다. 이전 `fernet:` 값은 서버 시작 시 일괄 변환됩니다.
 
 ## 12. 오류 계약
 

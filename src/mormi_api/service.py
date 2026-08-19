@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .content import create_scenario_data, get_scenario, get_task
+from .dictionary_catalog import (
+    DICTIONARY_CATALOG,
+    dictionary_card_envelope,
+    get_dictionary_card_by_id,
+)
+from .dictionary_models import DictionaryCardEnvelope
 from .engine import (
     ConversationEngine,
     EngineProgress,
@@ -12,7 +18,7 @@ from .engine import (
     select_start_level,
     update_skill_profile,
 )
-from .repository import DuplicateResponseError, Repository
+from .repository import DuplicateResponseError, PersistenceError, Repository
 from .schemas import (
     ChildResponse,
     EntryPhase,
@@ -129,6 +135,13 @@ class ConversationService:
             scenario_id=request.scenario_id,
             task_ids=scenario.task_ids,
             scenario_data=scenario_data,
+            dictionary_catalog_version=DICTIONARY_CATALOG.catalog_version,
+            dictionary_snapshots={
+                task_id: get_dictionary_card_by_id(
+                    get_task(task_id, scenario_data).dictionary_card_id
+                ).model_copy(deep=True)
+                for task_id in scenario.task_ids
+            },
             task_start_levels=task_start_levels,
             expression_level=start_level,
             task_start_level=start_level,
@@ -180,7 +193,10 @@ class ConversationService:
             return
 
         state = await self.repository.get_state(conversation_id)
-        active_turn = await self.repository.active_turn(state)
+        active_turn = self.engine.ensure_task_anchor(
+            state,
+            await self.repository.active_turn(state),
+        )
         if active_turn.turn_id != response.turn_id:
             raise ValueError("turn_id is stale; use the latest turn")
         if not response_matches_input(active_turn.input.kind, response.type):
@@ -211,11 +227,14 @@ class ConversationService:
                 next_state=next_state,
                 response=response,
                 analysis=analysis,
+                classifier_response_category=result.classifier_response_category,
                 next_turn=next_turn,
                 previous_question=active_turn.mormi.text,
                 note=next_turn.note_update,
+                runtime=result.runtime,
+                accepted_claims=result.accepted_claims,
             )
-        except DuplicateResponseError:
+        except DuplicateResponseError as error:
             prior = await self.repository.response_exists(conversation_id, response_id)
             if prior:
                 yield ConversationStreamEvent(
@@ -224,7 +243,11 @@ class ConversationService:
                     replayed=True,
                 )
                 return
-            raise
+            # A uniqueness conflict without a replayable result means the DB
+            # is inconsistent (for example, an orphaned observation from a
+            # manual operation). Do not leak an unclassified 500 or pretend
+            # the child's response succeeded.
+            raise PersistenceError("duplicate_response_result_missing") from error
 
         if next_turn.note_update:
             profile = await self.repository.get_profile(state.learner_id)
@@ -243,8 +266,26 @@ class ConversationService:
 
     async def snapshot(self, conversation_id: str) -> SessionEnvelope:
         state = await self.repository.get_state(conversation_id)
-        turn = await self.repository.active_turn(state)
+        turn = self.engine.ensure_task_anchor(
+            state,
+            await self.repository.active_turn(state),
+        )
         return SessionEnvelope(conversation_id=conversation_id, turn=turn)
+
+    async def dictionary_card(self, conversation_id: str) -> DictionaryCardEnvelope:
+        """Return the reviewed card snapshot pinned when the conversation began."""
+
+        state = await self.repository.get_state(conversation_id)
+        try:
+            card = state.dictionary_snapshots[state.current_task_id]
+        except KeyError as error:
+            # A legacy conversation may predate dictionary snapshots. Refuse
+            # today's card rather than changing trusted content mid-session.
+            raise ValueError("conversation has no pinned dictionary snapshot") from error
+        return dictionary_card_envelope(
+            card,
+            catalog_version=state.dictionary_catalog_version,
+        )
 
 
 def response_matches_input(input_kind: InputKind, response_type: ResponseType) -> bool:

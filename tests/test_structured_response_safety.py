@@ -23,6 +23,7 @@ from mormi_api.schemas import (
     ExpressionLevel,
     HintLevel,
     InputKind,
+    InteractionIntent,
     LearnerProfile,
     ResponseCategory,
     ResponseType,
@@ -32,6 +33,7 @@ from mormi_api.schemas import (
     SessionState,
     SkillProfile,
     SlotClaim,
+    TaskRelation,
     UtteranceAnalysis,
 )
 from mormi_api.security import TextCipher
@@ -135,7 +137,7 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
 
     assert analysis.response_category is ResponseCategory.CORRECT_FULL
     assert next_state.status.value == "completed"
-    assert next_state.verified_slots["reason"] == "count_comparison"
+    assert next_state.verified_slots["reason"] is True
     assert turn.completion is not None
     assert turn.completion.outcome.value == "supported"
     assert turn.note_update is not None
@@ -675,8 +677,10 @@ async def test_repeated_observations_change_support_in_cafe_queue_too() -> None:
 
 
 @pytest.mark.asyncio
-async def test_number_count_accepts_childs_own_counting_method_without_forcing_pointing() -> None:
-    """Saying the number words in order is a valid method, not a lesser fragment."""
+async def test_number_count_accepts_a_novel_grounded_method_without_a_method_code() -> None:
+    """A valid new method satisfies meaning without expanding an alias enum."""
+
+    child_method = "센 점마다 단추를 하나씩 옆으로 옮겨 놓으면 돼"
 
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
@@ -685,9 +689,11 @@ async def test_number_count_accepts_childs_own_counting_method_without_forcing_p
         claims=[
             SlotClaim(
                 slot_id="tracking",
-                value="하나 둘 셋 하면서 세기",
+                value=None,
                 factual=True,
-                evidence_span="하나, 둘, 셋 하면서 세면 돼",
+                evidence_span=child_method,
+                supported=True,
+                support_confidence=0.94,
             ),
         ],
         confidence=1,
@@ -711,16 +717,52 @@ async def test_number_count_accepts_childs_own_counting_method_without_forcing_p
             turn_id=initial.turn_id,
             response_id=uuid4(),
             type=ResponseType.TEXT,
-            text="하나, 둘, 셋 하면서 세면 돼",
+            text=child_method,
         ),
         initial.mormi.text,
     )
 
-    assert next_state.verified_slots == {"answer": "3", "tracking": "count_each_once"}
+    assert next_state.verified_slots == {"answer": "3", "tracking": True}
     assert next_state.status.value == "completed"
     assert turn.note_update is not None
-    assert "하나, 둘, 셋 하면서 세면 돼" in turn.note_update.text
+    assert child_method in turn.note_update.text
     assert "가리키며" not in turn.note_update.text
+
+
+def test_semantic_support_rejects_an_explicitly_unsupported_internal_code() -> None:
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-count"],
+        skill_id="number-count",
+    )
+
+    verified = task.validated_slot_claims(
+        [
+            SlotClaim(
+                slot_id="tracking",
+                value="count_each_once",
+                factual=True,
+                evidence_span="그냥 해",
+                supported=False,
+                support_confidence=0.99,
+            )
+        ]
+    )
+
+    assert verified == {}
+
+
+def test_legacy_semantic_code_and_new_support_flag_are_the_same_completed_state() -> None:
+    """A deployed conversation can resume after the storage contract changes."""
+
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-count"],
+        skill_id="number-count",
+    )
+    tracking = task.slots["tracking"]
+
+    assert tracking.equivalent_state_value("count_each_once", True) is True
+    assert tracking.equivalent_state_value(True, "one_by_one_order") is True
+    assert tracking.equivalent_state_value(None, True) is False
 
 
 @pytest.mark.asyncio
@@ -871,6 +913,112 @@ async def test_unrelated_recovery_repeats_the_actionable_current_question() -> N
     assert turn.input == initial.input
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scene", [SceneType.HOME_TEACH, SceneType.CAFE])
+@pytest.mark.parametrize(
+    "reported_category",
+    [ResponseCategory.UNRELATED_RESPONSE, ResponseCategory.CONCEPTUAL_ERROR],
+)
+async def test_meta_challenge_gets_one_bounded_bridge_without_learning_mutation(
+    scene: SceneType,
+    reported_category: ResponseCategory,
+) -> None:
+    """A safe challenge is acknowledged, but never becomes learning evidence."""
+
+    child_text = "너 알면서 일부러 물어보지?"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=reported_category,
+        difficulty_class=DifficultyClass.ENGAGEMENT,
+        task_relation=TaskRelation.META_ABOUT_MORMI,
+        interaction_intent=InteractionIntent.AUTHENTICITY_CHALLENGE,
+        social_grounding_span=child_text,
+        confidence=0.96,
+    )
+    engine = ConversationEngine(  # type: ignore[arg-type]
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )
+    if scene is SceneType.HOME_TEACH:
+        state = home_state(
+            "number-count",
+            expression_level=ExpressionLevel.L4,
+            hint_level=HintLevel.H0,
+        )
+    else:
+        state = SessionState(
+            learner_id=1,
+            scene=SceneType.CAFE,
+            scenario_id="cafe_queue",
+            task_ids=[QUEUE_TASK_ID],
+            task_start_levels={QUEUE_TASK_ID: ExpressionLevel.L4},
+            scenario_data={"left_count": 3, "right_count": 5},
+            expression_level=ExpressionLevel.L4,
+            task_start_level=ExpressionLevel.L4,
+            hint_level=HintLevel.H0,
+        )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+    original_slots = dict(state.verified_slots)
+    original_subgoal = state.subgoal_id
+
+    next_state, returned_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert returned_analysis.task_relation is TaskRelation.META_ABOUT_MORMI
+    assert next_state.unrelated_count == 1
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert next_state.subgoal_id == original_subgoal
+    assert next_state.verified_slots == original_slots
+    assert turn.input == initial.input
+    assert turn.visual == initial.visual
+    assert turn.note_update is None
+    assert turn.completion is None
+    assert "진짜 몰라서" in turn.mormi.text
+    assert turn.mormi.text != initial.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_deterministic_playful_text_returns_neutrally_without_progress() -> None:
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="메롱",
+        ),
+        initial.mormi.text,
+    )
+
+    assert analysis.safety_category is SafetyCategory.PLAYFUL_OFFTOPIC
+    assert analysis.interaction_intent is InteractionIntent.PLAYFUL_TEASE
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert next_state.verified_slots == {}
+    assert turn.input == initial.input
+    assert "장난치는 거지" in turn.mormi.text
+    assert turn.note_update is None
+
+
 def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None:
     """Reviewed choices are a hard safety boundary across all 36 home lessons."""
 
@@ -913,9 +1061,7 @@ def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None
                 if is_correct:
                     continue
 
-                verified = task.validated_claims(
-                    (claim.slot_id, claim.value, claim.factual) for claim in analysis.claims
-                )
+                verified = task.validated_slot_claims(analysis.claims)
                 merged = {**state.verified_slots, **verified}
 
                 assert analysis.response_category not in {
@@ -960,6 +1106,112 @@ async def test_no_response_is_a_help_request_and_opens_the_first_help_card() -> 
     assert turn.help_card.auto_open is True
     assert turn.input.kind is InputKind.TEXT
     assert turn.status.value == "active"
+    assert "도움 카드가 나왔어" in turn.mormi.text
+    assert "도움 카드가 열렸네" not in turn.mormi.text
+    assert initial.mormi.text not in turn.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_related_vague_reply_gets_one_clarification_before_help_opens() -> None:
+    """A vague on-topic phrase is not silently turned into a help request."""
+
+    vague = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.RELATED_VAGUE,
+        difficulty_class=DifficultyClass.EXPRESSION,
+        grounding_span="잘 세봐",
+        confidence=1,
+    )
+    engine = ConversationEngine(
+        FakeGateway([vague, vague]),  # type: ignore[arg-type]
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": 3},
+    )
+    turn = engine.initial_turn(state)
+    state.current_turn_id = turn.turn_id
+
+    first_state, first_analysis, first_turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=turn.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="잘 세봐",
+        ),
+        turn.mormi.text,
+    )
+
+    assert first_analysis.response_category is ResponseCategory.RELATED_VAGUE
+    assert first_state.expression_level is ExpressionLevel.L4
+    assert first_state.hint_level is HintLevel.H0
+    assert first_state.vague_clarifications == 1
+    assert first_turn.help_card is None
+    assert "잘 세봐" in first_turn.mormi.text
+    assert "조금만 더 알려줄래" in first_turn.mormi.text
+    assert turn.mormi.text not in first_turn.mormi.text
+
+    second_state, _, second_turn = await engine.run_turn(
+        first_state,
+        ChildResponse(
+            turn_id=first_turn.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="잘 세봐",
+        ),
+        first_turn.mormi.text,
+    )
+
+    assert second_state.expression_level.rank < ExpressionLevel.L4.rank
+    assert second_state.hint_level is HintLevel.H1
+    assert second_state.vague_clarifications == 0
+    assert second_turn.help_card is not None
+    assert "카드" in second_turn.mormi.text
+    assert first_turn.mormi.text not in second_turn.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_concept_conflict_uses_safe_grounding_without_evaluating_child() -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        difficulty_class=DifficultyClass.CONCEPT,
+        grounding_span="빈칸도 같이 세면 돼",
+        confidence=1,
+    )
+    engine = ConversationEngine(
+        FakeGateway([analysis]),  # type: ignore[arg-type]
+        show_internal_pedagogy=True,
+    )
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L4,
+        hint_level=HintLevel.H0,
+        verified_slots={"answer": 3},
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="빈칸도 같이 세면 돼",
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.hint_level is HintLevel.H1
+    assert turn.help_card is not None
+    assert "빈칸도 같이 세면 돼" in turn.mormi.text
+    assert "아직 헷갈려" in turn.mormi.text
+    assert "틀렸" not in turn.mormi.text
 
 
 @pytest.mark.asyncio
@@ -1006,11 +1258,118 @@ async def test_repeated_no_response_walks_every_ladder_step_without_changing_pro
         assert turn.pedagogy is not None
         assert turn.pedagogy.expression_level is level
         assert turn.pedagogy.hint_level is hint
-        task = get_task(state.current_task_id, state.scenario_data)
-        current_question = task.step_for(level, state.verified_slots).prompt
-        assert current_question in turn.mormi.text
+        assert "도움 카드가 열렸네" not in turn.mormi.text
+        assert turn.mormi.text != ""
 
     assert state.status.value == "active"
+
+
+@pytest.mark.parametrize(
+    ("expression_level", "hint_level"),
+    [
+        (ExpressionLevel.L0, HintLevel.H0),
+        (ExpressionLevel.L0, HintLevel.H2),
+        (ExpressionLevel.L4, HintLevel.H3),
+    ],
+)
+def test_initial_turn_normalizes_every_terminal_mismatch_to_joint_h3(
+    expression_level: ExpressionLevel,
+    hint_level: HintLevel,
+) -> None:
+    """Legacy/profile state may not expose only one half of the terminal contract."""
+
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=expression_level,
+        hint_level=hint_level,
+    )
+
+    turn = engine.initial_turn(state)
+
+    assert state.expression_level is ExpressionLevel.L0
+    assert state.hint_level is HintLevel.H3
+    assert state.task_max_hint is HintLevel.H3
+    assert turn.input.kind is InputKind.JOINT
+    assert turn.help_card is not None
+    assert turn.help_card.level is HintLevel.H3
+    assert turn.pedagogy is not None
+    assert turn.pedagogy.expression_level is ExpressionLevel.L0
+    assert turn.pedagogy.hint_level is HintLevel.H3
+
+
+@pytest.mark.parametrize(
+    ("expression_level", "hint_level"),
+    [
+        (ExpressionLevel.L4, HintLevel.H2),
+        (ExpressionLevel.L1, HintLevel.H0),
+    ],
+)
+def test_nonterminal_expression_and_hint_levels_remain_independent(
+    expression_level: ExpressionLevel,
+    hint_level: HintLevel,
+) -> None:
+    """The terminal invariant must not collapse valid intermediate L/H pairs."""
+
+    engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=expression_level,
+        hint_level=hint_level,
+    )
+
+    turn = engine.initial_turn(state)
+
+    assert state.expression_level is expression_level
+    assert state.hint_level is hint_level
+    assert turn.pedagogy is not None
+    assert turn.pedagogy.expression_level is expression_level
+    assert turn.pedagogy.hint_level is hint_level
+
+
+@pytest.mark.asyncio
+async def test_expression_block_at_l1_enters_complete_joint_contract() -> None:
+    """The original asymmetric branch must not create L0-H2."""
+
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.EXPRESSION_BLOCK,
+        difficulty_class=DifficultyClass.EXPRESSION,
+        bottleneck="expression",
+        confidence=1,
+    )
+    engine = ConversationEngine(
+        FakeGateway([analysis]),
+        show_internal_pedagogy=True,
+    )  # type: ignore[arg-type]
+    state = home_state(
+        "number-count",
+        expression_level=ExpressionLevel.L1,
+        hint_level=HintLevel.H2,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, classified, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="말로 설명하기 어려워",
+        ),
+        initial.mormi.text,
+    )
+
+    assert classified.response_category is ResponseCategory.EXPRESSION_BLOCK
+    assert next_state.expression_level is ExpressionLevel.L0
+    assert next_state.hint_level is HintLevel.H3
+    assert next_state.task_max_hint is HintLevel.H3
+    assert turn.input.kind is InputKind.JOINT
+    assert turn.help_card is not None
+    assert turn.help_card.level is HintLevel.H3
+    assert turn.help_card.auto_open is True
+    assert "같이" in turn.mormi.text
 
 
 def test_unknown_or_multiple_choice_ids_are_input_errors_in_analysis() -> None:

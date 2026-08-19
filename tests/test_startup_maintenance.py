@@ -11,9 +11,32 @@ from mormi_api.settings import Settings, get_settings
 class RecordingDatabase:
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
+        self.engine = RecordingEngine(calls)
 
     async def create_schema(self) -> None:
         self.calls.append("create_schema")
+
+
+class RecordingConnection:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    async def __aenter__(self) -> RecordingConnection:
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+    async def run_sync(self, _: object) -> None:
+        self.calls.append("require_observation_schema")
+
+
+class RecordingEngine:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def connect(self) -> RecordingConnection:
+        return RecordingConnection(self.calls)
 
 
 class RecordingRepository:
@@ -22,6 +45,9 @@ class RecordingRepository:
 
     async def migrate_existing_storage_to_permanent(self) -> None:
         self.calls.append("migrate_existing_storage_to_permanent")
+
+    async def migrate_existing_storage_to_plaintext(self) -> None:
+        self.calls.append("migrate_existing_storage_to_plaintext")
 
     async def purge_expired_raw_data(self) -> None:
         self.calls.append("purge_expired_raw_data")
@@ -39,7 +65,9 @@ async def test_startup_maintenance_keeps_the_existing_write_order_by_default() -
 
     assert calls == [
         "create_schema",
+        "require_observation_schema",
         "migrate_existing_storage_to_permanent",
+        "migrate_existing_storage_to_plaintext",
         "purge_expired_raw_data",
     ]
 
@@ -67,7 +95,9 @@ async def test_read_only_startup_skips_all_startup_write_routines() -> None:
                 "gateway",
                 "repository",
                 "create_schema",
+                "require_observation_schema",
                 "migrate_existing_storage_to_permanent",
+                "migrate_existing_storage_to_plaintext",
                 "purge_expired_raw_data",
                 "engine",
                 "service",
@@ -87,6 +117,7 @@ async def test_lifespan_respects_the_startup_maintenance_setting(
     class LifespanDatabase:
         def __init__(self, _: str) -> None:
             calls.append("database")
+            self.engine = RecordingEngine(calls)
 
         async def create_schema(self) -> None:
             calls.append("create_schema")
@@ -100,6 +131,9 @@ async def test_lifespan_respects_the_startup_maintenance_setting(
 
         async def migrate_existing_storage_to_permanent(self) -> None:
             calls.append("migrate_existing_storage_to_permanent")
+
+        async def migrate_existing_storage_to_plaintext(self) -> None:
+            calls.append("migrate_existing_storage_to_plaintext")
 
         async def purge_expired_raw_data(self) -> None:
             calls.append("purge_expired_raw_data")

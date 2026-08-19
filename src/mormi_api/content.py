@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+from .copy_quality import validate_child_facing_math_copy
 from .schemas import (
     CafeMenuItem,
     CafeSessionContext,
@@ -19,6 +20,7 @@ from .schemas import (
     InputKind,
     QueueSessionContext,
     SceneType,
+    SlotClaim,
     VisualContract,
 )
 
@@ -47,6 +49,7 @@ _AMBIGUOUS_HELP_COPY = re.compile(
 HelpSupportType = Literal["attention", "guided_action", "joint_model"]
 HelpAnswerPolicy = Literal["hidden", "partial", "revealed"]
 HelpMethodPolicy = Literal["open_methods", "target_method"]
+SlotEvaluationMode = Literal["auto", "canonical_value", "semantic_support"]
 HelpSupportMode = Literal[
     "attention",
     "guided_equation",
@@ -174,6 +177,21 @@ class SlotDefinition(BaseModel):
     accepted_values: list[str | int | float | bool] = Field(default_factory=list)
     preserve_value: bool = False
     fact_sentence: str
+    # ``auto`` maps observable/result slots to deterministic values and maps
+    # method/reason/explanation slots to grounded semantic support.
+    evaluation_mode: SlotEvaluationMode = "auto"
+
+    @property
+    def resolved_evaluation_mode(self) -> Literal["canonical_value", "semantic_support"]:
+        if self.evaluation_mode != "auto":
+            return self.evaluation_mode
+        if self.semantic_role in {"method", "reason", "explanation"}:
+            return "semantic_support"
+        return "canonical_value"
+
+    @property
+    def is_semantic_support(self) -> bool:
+        return self.resolved_evaluation_mode == "semantic_support"
 
     def accepts(self, value: object) -> bool:
         if value == self.expected:
@@ -214,6 +232,33 @@ class SlotDefinition(BaseModel):
         if self.preserve_value and isinstance(value, (str, int, float, bool)):
             return value
         return self.expected
+
+    def accepted_claim_value(self, claim: SlotClaim) -> str | int | float | bool | None:
+        """Return the reviewed state value for one classifier claim.
+
+        Semantic slots store only satisfaction, not a synthetic method code.
+        ``supported=None`` remains a compatibility path for deterministic
+        button/fill claims and pre-refactor fixtures.
+        """
+
+        if not claim.factual:
+            return None
+        if self.is_semantic_support:
+            if claim.supported is True:
+                return True
+            if claim.supported is None and self.accepts(claim.value):
+                return True
+            return None
+        if self.accepts(claim.value):
+            return self.canonical(claim.value)
+        return None
+
+    def equivalent_state_value(self, left: object, right: object) -> bool:
+        if self.is_semantic_support:
+            # Older conversations persisted representative method codes.
+            # Any non-null legacy value still means this slot was satisfied.
+            return left is not None and right is not None
+        return left == right
 
 
 class StepDefinition(BaseModel):
@@ -288,6 +333,7 @@ def reviewed_help_card(
 
 class TaskDefinition(BaseModel):
     id: str
+    dictionary_card_id: str
     scene: SceneType
     stage_id: str
     skill_id: str
@@ -334,6 +380,25 @@ class TaskDefinition(BaseModel):
 
     @model_validator(mode="after")
     def validate_help_plan(self) -> TaskDefinition:
+        step_groups = list(self.steps.values())
+        if self.entry_step is not None:
+            step_groups.append([self.entry_step])
+        for steps in step_groups:
+            for step in steps:
+                unknown_slots = set(step.target_slots) - set(self.slots)
+                if unknown_slots:
+                    raise ValueError(
+                        f"{self.id}/{step.id}: unknown target slots {sorted(unknown_slots)}"
+                    )
+                declared_input_slots = [*step.target_slots, *step.optional_slots]
+                if (
+                    len(declared_input_slots) != len(set(declared_input_slots))
+                    or set(declared_input_slots) != set(step.input.target_slots)
+                ):
+                    raise ValueError(
+                        f"{self.id}/{step.id}: required/optional and input target slots "
+                        "must match"
+                    )
         required_levels = {HintLevel.H1, HintLevel.H2, HintLevel.H3}
         if set(self.hints) != required_levels:
             raise ValueError("every task needs exactly one H1, H2 and H3 help card")
@@ -425,6 +490,17 @@ class TaskDefinition(BaseModel):
             return self.step_for(ExpressionLevel.L3, verified_slots)
         return self.step_for(level, verified_slots)
 
+    def step_by_id(self, step_id: str) -> StepDefinition | None:
+        """Resolve a persisted subgoal without depending on today's ladder state."""
+
+        if self.entry_step is not None and self.entry_step.id == step_id:
+            return self.entry_step
+        for steps in self.steps.values():
+            for step in steps:
+                if step.id == step_id:
+                    return step
+        return None
+
     def missing_slots(self, verified_slots: Mapping[str, object]) -> list[str]:
         return [slot for slot in self.required_slots if slot not in verified_slots]
 
@@ -435,16 +511,29 @@ class TaskDefinition(BaseModel):
     def effective_note_slots(self) -> list[str]:
         return self.note_slots or self.required_slots
 
-    def validated_claims(
+    def validated_slot_claims(
         self,
-        claims: Iterable[tuple[str, object, bool]],
+        claims: Iterable[SlotClaim],
     ) -> dict[str, str | int | float | bool]:
+        """Validate classifier claims under each slot's evaluation contract."""
+
         verified: dict[str, str | int | float | bool] = {}
-        for slot_id, value, classifier_factual in claims:
-            slot = self.slots.get(slot_id)
-            if slot and classifier_factual and slot.accepts(value):
-                verified[slot_id] = slot.canonical(value)
+        for claim in claims:
+            slot = self.slots.get(claim.slot_id)
+            if slot is None:
+                continue
+            value = slot.accepted_claim_value(claim)
+            if value is not None:
+                verified[claim.slot_id] = value
         return verified
+
+    @property
+    def semantic_support_slots(self) -> set[str]:
+        return {
+            slot_id
+            for slot_id, slot in self.slots.items()
+            if slot.is_semantic_support
+        }
 
 
 class ScenarioDefinition(BaseModel):
@@ -542,6 +631,7 @@ class HomeTeachingSpec(BaseModel):
     """Reviewed teaching content for one frontend curriculum session."""
 
     id: str
+    dictionary_card_id: str
     subject: str
     unit: str
     title: str
@@ -770,6 +860,7 @@ class HomeTeachingSpec(BaseModel):
         ]
         if any(_VAGUE_OR_UNREVIEWED_COPY.search(text) for text in child_facing_copy):
             raise ValueError("child-facing copy contains a vague or unreviewed phrase")
+        validate_child_facing_math_copy(child_facing_copy)
         mormi_questions = [
             l4_prompt,
             *([self.entry_prompt] if self.entry_prompt else []),
@@ -824,6 +915,7 @@ def menu_items_json(items: Sequence[CafeMenuItem]) -> list[dict[str, str | int |
 
 QUEUE_TASK = TaskDefinition(
     id="cafe_queue_3_vs_5",
+    dictionary_card_id="dictionary.cafe.cafe-queue",
     scene=SceneType.CAFE,
     stage_id="queue",
     skill_id="compare_quantity_in_context",
@@ -1126,6 +1218,11 @@ def calculation_task(
     place_action = "더해" if operation == "addition" else "빼"
     return TaskDefinition(
         id=task_id,
+        dictionary_card_id=(
+            "dictionary.cafe.cafe-menu-total"
+            if operation == "addition"
+            else "dictionary.cafe.cafe-change"
+        ),
         scene=scene,
         stage_id=stage_id or ("home_teach" if scene is SceneType.HOME_TEACH else "calculation"),
         skill_id=skill_id,
@@ -1614,6 +1711,11 @@ def menu_selection_task(
     )
     return TaskDefinition(
         id=task_id,
+        dictionary_card_id=(
+            "dictionary.cafe.cafe-budget-menu"
+            if budget is not None
+            else "dictionary.cafe.cafe-menu-total"
+        ),
         scene=SceneType.CAFE,
         stage_id=stage_id,
         skill_id="choose_within_budget" if budget is not None else "choose_menu_for_calculation",
@@ -1873,6 +1975,11 @@ def simple_calculation_task(
     )
     return TaskDefinition(
         id=task_id,
+        dictionary_card_id=(
+            "dictionary.cafe.cafe-menu-total"
+            if operation == "addition"
+            else "dictionary.cafe.cafe-change"
+        ),
         scene=SceneType.CAFE,
         stage_id=stage_id,
         skill_id="add_menu_prices" if operation == "addition" else "calculate_change",
@@ -2031,6 +2138,7 @@ def home_teaching_task(
 
     task = TaskDefinition(
         id=HOME_TEACH_TASK_ID,
+        dictionary_card_id=spec.dictionary_card_id,
         scene=SceneType.HOME_TEACH,
         stage_id="home_teach",
         skill_id=skill_id,
@@ -2882,6 +2990,20 @@ def validate_content() -> None:
     for task in tasks_to_validate:
         if set(task.required_slots) - set(task.slots):
             raise ValueError(f"{task.id}: required slot is undefined")
+        for slot in task.slots.values():
+            expected_mode = (
+                "semantic_support"
+                if slot.semantic_role in {"method", "reason", "explanation"}
+                else "canonical_value"
+            )
+            if slot.resolved_evaluation_mode != expected_mode:
+                raise ValueError(
+                    f"{task.id}/{slot.id}: {slot.semantic_role} must use {expected_mode}"
+                )
+            if slot.is_semantic_support and slot.preserve_value:
+                raise ValueError(
+                    f"{task.id}/{slot.id}: semantic support cannot preserve a model value"
+                )
         if task.note_policy != "none":
             if not task.effective_note_slots:
                 raise ValueError(f"{task.id}: note-producing task needs note slots")

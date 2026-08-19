@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from conftest import FakeGateway
 from sqlalchemy import select
 
 from mormi_api.content import HOME_TEACHING_CATALOG, HomeTeachingSpec, home_teaching_task
-from mormi_api.db import ConversationRecord, Database, TurnRecord
+from mormi_api.db import (
+    ConversationRecord,
+    Database,
+    DialogueClaimRecord,
+    DialogueTaskOutcomeRecord,
+    DialogueTurnObservationRecord,
+    NoteEvidenceLinkRecord,
+    OutboxEventRecord,
+    TurnRecord,
+)
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
@@ -73,10 +84,32 @@ CURRENT_FRONTEND_HOME_SESSION_IDS = {
     "data-chance",
 }
 
+CONTENT_VERSION_8_HOME_SESSION_IDS = {
+    "number-count",
+    "number-compare",
+    "money-count",
+    "number-make-ten",
+    "number-place-value",
+    "add-pictures",
+    "money-price",
+    "sub-borrow",
+    "multiply-addition",
+    "multiply-tables",
+    "clock-basic",
+    "clock-quarter",
+    "time-calendar",
+    "measure-weight-capacity",
+    "geometry-compose",
+    "data-chance",
+}
+
 
 def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert set(HOME_TEACHING_CATALOG) == CURRENT_FRONTEND_HOME_SESSION_IDS
-    assert all(spec.content_version == 7 for spec in HOME_TEACHING_CATALOG.values())
+    assert {
+        spec.id for spec in HOME_TEACHING_CATALOG.values() if spec.content_version == 8
+    } == CONTENT_VERSION_8_HOME_SESSION_IDS
+    assert all(spec.content_version in {7, 8} for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
     assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.entry_mode != "wrong_guess" for spec in HOME_TEACHING_CATALOG.values())
@@ -125,6 +158,15 @@ def test_every_home_task_declares_semantic_roles_instead_of_relying_on_slot_name
     for spec in HOME_TEACHING_CATALOG.values():
         task = home_teaching_task(spec, skill_id=spec.id)
         assert all(slot.semantic_role for slot in task.slots.values())
+        assert all(
+            slot.resolved_evaluation_mode
+            == (
+                "semantic_support"
+                if slot.semantic_role in {"method", "reason", "explanation"}
+                else "canonical_value"
+            )
+            for slot in task.slots.values()
+        )
         assert task.slots["answer"].semantic_role == "conclusion"
         if spec.id == "number-count":
             assert task.slots["tracking"].semantic_role == "method"
@@ -201,6 +243,70 @@ async def test_every_frontend_home_session_can_create_its_first_turn(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("curriculum_session_id", sorted(CURRENT_FRONTEND_HOME_SESSION_IDS))
+async def test_every_home_support_path_persists_repeated_help_requests(
+    curriculum_session_id: str,
+    tmp_path: object,
+) -> None:
+    """Every reviewed home task must survive repeated L/H support turns.
+
+    This exercises observation and outbox writes with SQLite foreign keys
+    enabled at every support level. L0 deliberately remains in joint mode when
+    the child keeps requesting help, so this test checks durability rather than
+    forcing an artificial completion.
+    """
+
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-support-path.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway()),  # type: ignore[arg-type]
+    )
+    envelope = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id=f"support_{curriculum_session_id}",
+            practice_result_id=f"practice_support_{curriculum_session_id}",
+            practice_summary={
+                "curriculum_session_id": curriculum_session_id,
+                "skill_id": curriculum_session_id,
+                "question_count": 1,
+                "first_try_correct_count": 0,
+                "wrong_attempt_count": 1,
+                "earned_reward": 0,
+                "attempts": [
+                    {
+                        "item_id": f"{curriculum_session_id}:support",
+                        "correct": False,
+                        "latency_ms": 1000,
+                    }
+                ],
+            },
+        )
+    )
+
+    for _ in range(8):
+        envelope = await service.respond(
+            envelope.conversation_id,
+            ChildResponse(
+                turn_id=envelope.turn.turn_id,
+                response_id=uuid4(),
+                type="no_response",
+            ),
+        )
+
+    async with database.sessions() as db:
+        observations = list((await db.execute(select(DialogueTurnObservationRecord))).scalars())
+        outbox_events = list((await db.execute(select(OutboxEventRecord))).scalars())
+    assert len(observations) == 8
+    assert len(outbox_events) == 8
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("curriculum_session_id", sorted(CURRENT_FRONTEND_HOME_SESSION_IDS))
 async def test_every_home_l4_answer_only_preserves_credit_and_asks_the_missing_idea(
     curriculum_session_id: str,
     tmp_path: object,
@@ -223,9 +329,7 @@ async def test_every_home_l4_answer_only_preserves_credit_and_asks_the_missing_i
         ],
         confidence=1,
     )
-    database = Database(
-        f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-answer-only.db"
-    )
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/{curriculum_session_id}-answer-only.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
     service = ConversationService(
@@ -391,6 +495,91 @@ async def _start_money_count_conversation(
 
 
 @pytest.mark.asyncio
+async def test_persistence_uses_engine_accepted_claims_not_raw_classifier_claims(
+    tmp_path: object,
+) -> None:
+    """A speaker-safe rejection must also remain rejected in analytics.
+
+    The classifier deliberately overclaims a comparison reason from a bare
+    conclusion. The engine accepts only the answer; persistence must not apply
+    a second, weaker validation rule that upgrades the reason for reports.
+    """
+
+    child_text = "오른쪽이 더 많아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span=child_text,
+            ),
+            SlotClaim(
+                slot_id="reason",
+                value="count_comparison",
+                factual=True,
+                evidence_span=child_text,
+            ),
+        ],
+        confidence=1,
+    )
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/accepted-claim-contract.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    service = ConversationService(
+        repository,
+        ConversationEngine(FakeGateway([analysis])),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=32,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="accepted-claim-contract",
+            practice_result_id="accepted-claim-practice",
+            practice_summary={
+                "curriculum_session_id": "number-compare",
+                "skill_id": "number-compare",
+                "question_count": 1,
+                "first_try_correct_count": 1,
+            },
+        )
+    )
+
+    next_turn = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id=uuid4(),
+            type="text",
+            text=child_text,
+        ),
+    )
+    assert next_turn.turn.status.value == "active"
+    assert next_turn.turn.input.target_slots == ["reason"]
+
+    async with database.sessions() as db:
+        claims = {
+            claim.slot_id: claim
+            for claim in (await db.execute(select(DialogueClaimRecord))).scalars()
+        }
+        outbox = (await db.execute(select(OutboxEventRecord))).scalar_one()
+    assert claims["answer"].validation_status == "verified"
+    assert claims["answer"].value_json == "오른쪽"
+    assert claims["answer"].newly_verified is True
+    assert claims["reason"].validation_status == "rejected"
+    assert claims["reason"].value_json is None
+    assert claims["reason"].newly_verified is False
+    outbox_claims = {claim["slot_id"]: claim for claim in outbox.payload_json["claims"]}
+    assert outbox_claims["reason"]["validation_status"] == "rejected"
+    assert outbox_claims["reason"]["value"] is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_genuine_l4_full_answer_can_complete_in_one_response(
     tmp_path: object,
 ) -> None:
@@ -434,6 +623,127 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert completed.turn.status.value == "completed"
     assert completed.turn.note_update is not None
     assert rule_span in completed.turn.note_update.text
+    async with database.sessions() as db:
+        observation = (await db.execute(select(DialogueTurnObservationRecord))).scalar_one()
+        claims = list((await db.execute(select(DialogueClaimRecord))).scalars())
+        outcome = (await db.execute(select(DialogueTaskOutcomeRecord))).scalar_one()
+        evidence_link = (await db.execute(select(NoteEvidenceLinkRecord))).scalar_one()
+        outboxes = list((await db.execute(select(OutboxEventRecord))).scalars())
+        observation_outbox = next(
+            event
+            for event in outboxes
+            if event.event_type == "mormi.dialogue.observation.recorded"
+        )
+        star_note_outbox = next(
+            event for event in outboxes if event.event_type == "mormi.star_note.created"
+        )
+
+    assert observation.response_category == "correct_full"
+    assert observation.concept_result == "correct_full"
+    assert observation.expression_before == "L4"
+    assert observation.hint_before == "H0"
+    assert observation.dialogue_act == "session_complete"
+    assert observation.record_origin == "live"
+    assert observation.analysis_json.get("claims") is None
+    assert observation.analysis_json.get("grounding_span") is None
+    assert observation.analysis_json.get("social_grounding_span") is None
+    assert {claim.slot_id for claim in claims} == {"answer", "rule"}
+    assert all(claim.validation_status == "verified" for claim in claims)
+    assert all(
+        claim.evidence_span_encrypted
+        and claim.evidence_span_encrypted.startswith("plain:")
+        for claim in claims
+    )
+    assert outcome.completion_outcome == "taught"
+    assert outcome.evidence_observation_ids_json == [observation.observation_id]
+    assert outcome.note_id == completed.turn.note_update.note_id
+    assert evidence_link.observation_id == observation.observation_id
+    assert observation_outbox.aggregate_id == observation.observation_id
+    assert observation_outbox.payload_json["observation_version"] == 1
+    assert observation_outbox.payload_json["stage"] == observation.stage_id
+    assert observation_outbox.payload_json["bottleneck_candidate"] == observation.bottleneck
+    assert observation_outbox.payload_json["help_used"] is observation.help_card_shown
+    assert observation_outbox.payload_json["fallback_occurred"] is False
+    assert observation_outbox.payload_json["completion_outcome"] == (
+        observation.completion_outcome
+    )
+    assert observation_outbox.payload_json["observed_at"].removesuffix("+00:00") == (
+        observation.created_at.isoformat()
+    )
+    assert observation_outbox.payload_json["claims"][0].get("evidence_span") is None
+    assert star_note_outbox.aggregate_id == completed.turn.note_update.note_id
+    assert star_note_outbox.payload_json["note_id"] == completed.turn.note_update.note_id
+    assert star_note_outbox.payload_json["text"] == completed.turn.note_update.text
+    assert star_note_outbox.payload_json["attribution"] == "child"
+    assert star_note_outbox.payload_json["note_version"] == 1
+    assert star_note_outbox.payload_json["evidence_links"] == [
+        {
+            "observation_id": observation.observation_id,
+            "source_slot_ids": evidence_link.source_slot_ids_json,
+        }
+    ]
+    assert "response" not in star_note_outbox.payload_json
+    assert "evidence_span" not in star_note_outbox.payload_json
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_persistence_keeps_classifier_category_but_reports_reconciled_result(
+    tmp_path: object,
+) -> None:
+    child_text = "600원이야. 500원과 100원을 더했어"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        # Reproduce the pilot failure: the classifier says partial although it
+        # supplied valid evidence for every slot requested by the L4 turn.
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="600원",
+                factual=True,
+                evidence_span="600원이야",
+            ),
+            SlotClaim(
+                slot_id="rule",
+                factual=True,
+                supported=True,
+                support_confidence=0.98,
+                evidence_span="500원과 100원을 더했어",
+            ),
+        ],
+        confidence=0.91,
+    )
+    database, _, service, started = await _start_money_count_conversation(
+        tmp_path, [analysis], "reconciled-category"
+    )
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="741dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text=child_text,
+        ),
+    )
+
+    assert completed.turn.status.value == "completed"
+    async with database.sessions() as db:
+        observation = (await db.execute(select(DialogueTurnObservationRecord))).scalar_one()
+        answered_turn = (
+            await db.execute(
+                select(TurnRecord).where(TurnRecord.response_id.is_not(None))
+            )
+        ).scalar_one()
+
+    assert answered_turn.response_category == "correct_full"
+    assert observation.response_category == "correct_full"
+    assert observation.concept_result == "correct_full"
+    assert observation.analysis_json["classifier_response_category"] == "correct_partial"
+    assert observation.analysis_json["effective_response_category"] == "correct_full"
+    assert observation.analysis_json["response_category_reconciled"] is True
     await database.dispose()
 
 
@@ -692,10 +1002,14 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             response_category=ResponseCategory.CORRECT_FULL,
             difficulty_class=DifficultyClass.UNKNOWN,
             claims=[
-                    SlotClaim(
-                        slot_id="tracking",
-                        value="count_each_once",
-                        factual=True,
+                SlotClaim(
+                    slot_id="tracking",
+                    # The production classifier may return a reviewed method
+                    # alias rather than the slot's canonical value.  The
+                    # repository must persist the same canonical value used by
+                    # the engine so note provenance remains linkable.
+                    value="one_by_one_order",
+                    factual=True,
                     evidence_span=child_method,
                 )
             ],
@@ -770,8 +1084,41 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
     async with database.sessions() as db:
         record = await db.get(ConversationRecord, started.conversation_id)
         assert record is not None
-        assert record.state_json["_child_note_evidence_encrypted"] is True
-        assert child_method not in str(record.state_json["child_note_evidence"])
+        assert "_child_note_evidence_encrypted" not in record.state_json
+        assert record.state_json["child_note_evidence"]["tracking"] == child_method
+        tracking_claim = (
+            await db.execute(
+                select(DialogueClaimRecord).where(
+                    DialogueClaimRecord.slot_id == "tracking"
+                )
+            )
+        ).scalar_one()
+        assert tracking_claim.validation_status == "verified"
+        assert tracking_claim.value_json is True
+        assert tracking_claim.newly_verified is True
+        note_link = (
+            await db.execute(
+                select(NoteEvidenceLinkRecord).where(
+                    NoteEvidenceLinkRecord.observation_id
+                    == tracking_claim.observation_id
+                )
+            )
+        ).scalar_one()
+        assert note_link.source_slot_ids_json == ["tracking"]
+        star_note_outbox = (
+            await db.execute(
+                select(OutboxEventRecord).where(
+                    OutboxEventRecord.event_type == "mormi.star_note.created"
+                )
+            )
+        ).scalar_one()
+        assert star_note_outbox.payload_json["text"] == completed.turn.note_update.text
+        assert star_note_outbox.payload_json["evidence_links"] == [
+            {
+                "observation_id": tracking_claim.observation_id,
+                "source_slot_ids": ["tracking"],
+            }
+        ]
     restored = await repository.get_state(started.conversation_id)
     assert restored.child_note_evidence["tracking"] == child_method
     await database.dispose()
@@ -872,14 +1219,9 @@ async def test_safe_child_phrase_can_ground_a_natural_targeted_followup(
     assert "tracking" not in state.verified_slots
     assert gateway.speaker_context is not None
     assert gateway.speaker_context.child_expression == "차근차근 세어봐"
-    assert (
-        gateway.speaker_context.verification_policy
-        is SpeakerVerificationPolicy.SEMANTIC
-    )
+    assert gateway.speaker_context.verification_policy is SpeakerVerificationPolicy.SEMANTIC
     assert gateway.speaker_context.required_slot_ids == ["tracking"]
-    assert after_answer.turn.mormi.text == (
-        "아, 세 개구나! ‘차근차근 세어봐’는 어떻게 하는 거야?"
-    )
+    assert after_answer.turn.mormi.text == ("아, 세 개구나! ‘차근차근 세어봐’는 어떻게 하는 거야?")
     assert after_answer.turn.input.target_slots == ["tracking"]
     await database.dispose()
 

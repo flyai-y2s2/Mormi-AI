@@ -22,12 +22,26 @@ class Settings(BaseSettings):
     raw_data_encryption_key: str | None = None
     service_api_key: str | None = None
     skip_startup_maintenance: bool = False
+    observation_ingest_url: str | None = None
+    observation_ingest_key: str | None = None
+    star_note_events_enabled: bool = False
+    outbox_poll_interval_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    outbox_batch_size: int = Field(default=20, ge=1, le=200)
+    outbox_request_timeout_seconds: float = Field(default=5.0, ge=0.5, le=30)
+    outbox_retry_base_seconds: float = Field(default=2.0, ge=0.1, le=300)
+    outbox_retry_max_seconds: float = Field(default=300.0, ge=1, le=3600)
+    outbox_lease_seconds: float = Field(default=30.0, ge=5, le=600)
     idempotency_retention_days: int = Field(default=30, ge=1, le=90)
     cors_origins: list[str] = ["http://localhost:3000"]
     show_internal_pedagogy: bool = False
 
     @field_validator(
-        "anthropic_api_key", "raw_data_encryption_key", "service_api_key", mode="before"
+        "anthropic_api_key",
+        "raw_data_encryption_key",
+        "service_api_key",
+        "observation_ingest_url",
+        "observation_ingest_key",
+        mode="before",
     )
     @classmethod
     def empty_string_is_none(cls, value: object) -> object:
@@ -36,6 +50,10 @@ class Settings(BaseSettings):
     @property
     def production(self) -> bool:
         return self.environment.lower() == "production"
+
+    @property
+    def observation_ingest_enabled(self) -> bool:
+        return bool(self.observation_ingest_url and self.observation_ingest_key)
 
     def validate_runtime_safety(self) -> None:
         if self.skip_startup_maintenance and self.environment.lower() not in {
@@ -46,12 +64,24 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "MORMI_SKIP_STARTUP_MAINTENANCE is allowed only in local, development, or test"
             )
-        if self.production and not self.raw_data_encryption_key:
-            raise RuntimeError("MORMI_RAW_DATA_ENCRYPTION_KEY is required in production")
         if self.production and self.database_url.startswith("sqlite"):
             raise RuntimeError("A PostgreSQL database is required in production")
         if self.production and not self.service_api_key:
             raise RuntimeError("MORMI_SERVICE_API_KEY is required in production")
+        if self.observation_ingest_url and not self.observation_ingest_url.startswith(
+            ("http://", "https://")
+        ):
+            raise RuntimeError("MORMI_OBSERVATION_INGEST_URL must use http or https")
+        if self.outbox_retry_max_seconds < self.outbox_retry_base_seconds:
+            raise RuntimeError(
+                "MORMI_OUTBOX_RETRY_MAX_SECONDS must be greater than or equal to "
+                "MORMI_OUTBOX_RETRY_BASE_SECONDS"
+            )
+        if self.outbox_lease_seconds <= self.outbox_request_timeout_seconds:
+            raise RuntimeError(
+                "MORMI_OUTBOX_LEASE_SECONDS must be greater than "
+                "MORMI_OUTBOX_REQUEST_TIMEOUT_SECONDS"
+            )
 
 
 @lru_cache

@@ -10,9 +10,11 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from .content import StepDefinition, TaskDefinition, get_task
+from .dictionary_models import dictionary_reference
 from .llm import (
     ClaudeGateway,
     extract_numeric_values,
+    validate_note_contextualization,
     validate_speaker_output,
     validate_speaker_verification,
 )
@@ -26,12 +28,16 @@ from .schemas import (
     EntryStance,
     ExpressionLevel,
     HelpCardContract,
+    HelpCardEvent,
     HintLevel,
     InputContract,
     InputKind,
+    InteractionIntent,
     LearnerProfile,
     MormiContract,
     NoteAttribution,
+    NoteContextualizationContext,
+    NoteContextualizationOutput,
     NoteEvidence,
     NoteUpdate,
     PedagogicalDecision,
@@ -42,12 +48,18 @@ from .schemas import (
     SessionState,
     SessionStatus,
     SkillProfile,
+    SlotClaim,
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
     SpeakerQuestionIntent,
+    SpeakerRuntimeAudit,
     SpeakerVerification,
     SpeakerVerificationPolicy,
+    SupportTrigger,
+    TaskAnchorCompletedItem,
+    TaskAnchorContract,
+    TaskRelation,
     TurnContract,
     UtteranceAnalysis,
     VisualContract,
@@ -61,6 +73,21 @@ from .security import (
 logger = logging.getLogger(__name__)
 
 
+_INFIX_ARITHMETIC = re.compile(
+    r"(?P<left>\d[\d,]*)\s*(?:원)?\s*"
+    r"(?P<operator>\+|-|더하기|플러스|빼기|마이너스)\s*"
+    r"(?P<right>\d[\d,]*)\s*(?:원)?\s*"
+    r"(?:=|은|는|이|가|이면|이라면|해서|하면)?\s*"
+    r"(?P<result>\d[\d,]*)"
+)
+_KOREAN_ARITHMETIC = re.compile(
+    r"(?P<left>\d[\d,]*)\s*(?:원)?\s*(?:에|에서)\s*"
+    r"(?P<right>\d[\d,]*)\s*(?:원)?\s*(?:을|를)?\s*"
+    r"(?P<operator>더하면|더해서|빼면|빼서|더했더니|뺐더니)\s*"
+    r"(?P<result>\d[\d,]*)"
+)
+
+
 @dataclass(frozen=True)
 class EngineProgress:
     stage: Literal["understanding", "planning", "speaking", "validating"]
@@ -70,7 +97,10 @@ class EngineProgress:
 class EngineTurnResult:
     state: SessionState
     analysis: UtteranceAnalysis
+    classifier_response_category: ResponseCategory
     turn: TurnContract
+    runtime: SpeakerRuntimeAudit
+    accepted_claims: dict[str, str | int | float | bool]
 
 
 class ConversationGraphState(TypedDict, total=False):
@@ -78,9 +108,12 @@ class ConversationGraphState(TypedDict, total=False):
     response: dict[str, Any]
     previous_question: str
     analysis: dict[str, Any]
+    classifier_response_category: str
     decision: dict[str, Any]
     speaker_output: dict[str, Any]
     speaker_text: str
+    note_output: dict[str, Any]
+    runtime: dict[str, Any]
     turn: dict[str, Any]
 
 
@@ -117,7 +150,7 @@ class ConversationEngine:
         builder.add_edge("orchestrate", "speak")
         builder.add_edge("speak", "validate_and_compose")
         builder.add_edge("validate_and_compose", END)
-        # Canonical state is committed atomically to the encrypted application
+        # Canonical state is committed atomically to the access-controlled application
         # database after this per-turn graph succeeds. We deliberately do not
         # checkpoint raw child text inside LangGraph.
         return builder.compile()
@@ -144,6 +177,8 @@ class ConversationEngine:
     ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
         """Expose safe graph milestones without leaking unvalidated model text."""
 
+        normalized_state = state.model_copy(deep=True)
+        self._normalize_terminal_support(normalized_state)
         final_values: dict[str, Any] | None = None
         node_stages: dict[str, EngineProgress] = {
             "understand": EngineProgress("understanding"),
@@ -153,7 +188,7 @@ class ConversationEngine:
         }
         async for mode, payload in self.graph.astream(
             {
-                "session": state.model_dump(mode="json"),
+                "session": normalized_state.model_dump(mode="json"),
                 "response": response.model_dump(mode="json"),
                 "previous_question": previous_question,
             },
@@ -169,14 +204,21 @@ class ConversationEngine:
 
         if final_values is None or "turn" not in final_values:
             raise RuntimeError("Conversation graph produced no final turn")
+        decision = PedagogicalDecision.model_validate(final_values["decision"])
         yield EngineTurnResult(
             state=SessionState.model_validate(final_values["session"]),
             analysis=UtteranceAnalysis.model_validate(final_values["analysis"]),
+            classifier_response_category=ResponseCategory(
+                final_values["classifier_response_category"]
+            ),
             turn=TurnContract.model_validate(final_values["turn"]),
+            runtime=SpeakerRuntimeAudit.model_validate(final_values["runtime"]),
+            accepted_claims=decision.accepted_claims,
         )
 
     def initial_turn(self, state: SessionState) -> TurnContract:
         task = get_task(state.current_task_id, state.scenario_data)
+        self._normalize_terminal_support(state)
         step = task.active_step(
             state.expression_level,
             state.verified_slots,
@@ -193,7 +235,7 @@ class ConversationEngine:
             task,
             text=step.prompt,
             input_contract=step.input,
-            visual=task.base_visual,
+            visual=self._visual_for(task, state.hint_level),
             help_card=self._help_card(task, state.hint_level),
             mood="curious",
         )
@@ -212,10 +254,11 @@ class ConversationEngine:
                 safety_category=SafetyCategory.NORMAL,
                 response_category=ResponseCategory.HELP_REQUEST,
                 difficulty_class=DifficultyClass.EXPRESSION,
+                task_relation=TaskRelation.CURRENT_TASK,
                 bottleneck="expression",
                 confidence=1,
             )
-            return {"analysis": analysis.model_dump(mode="json")}
+            return self._understanding_result(analysis)
 
         text = response.text or self._response_as_text(response)
         deterministic_category = deterministic_safety(text)
@@ -229,9 +272,18 @@ class ConversationEngine:
                 safety_category=deterministic_category,
                 response_category=category,
                 difficulty_class=DifficultyClass.ENGAGEMENT,
+                task_relation=TaskRelation.OFF_TOPIC,
+                interaction_intent=(
+                    InteractionIntent.PLAYFUL_TEASE
+                    if deterministic_category is SafetyCategory.PLAYFUL_OFFTOPIC
+                    else InteractionIntent.NONE
+                ),
+                social_grounding_span=(
+                    text if deterministic_category is SafetyCategory.PLAYFUL_OFFTOPIC else ""
+                ),
                 confidence=1,
             )
-            return {"analysis": analysis.model_dump(mode="json")}
+            return self._understanding_result(analysis)
 
         if response.type is ResponseType.TEXT:
             analysis = await self.gateway.classify(
@@ -244,10 +296,19 @@ class ConversationEngine:
             # stricter but can never downgrade an explicit local match.
             if analysis.safety_category is SafetyCategory.UNKNOWN:
                 analysis.safety_category = SafetyCategory.NORMAL
-            return {"analysis": analysis.model_dump(mode="json")}
+            return self._understanding_result(analysis)
 
         analysis = self._deterministic_analysis(state, task, response)
-        return {"analysis": analysis.model_dump(mode="json")}
+        return self._understanding_result(analysis)
+
+    @staticmethod
+    def _understanding_result(analysis: UtteranceAnalysis) -> dict[str, Any]:
+        """Keep the understanding model's label before code reconciliation."""
+
+        return {
+            "analysis": analysis.model_dump(mode="json"),
+            "classifier_response_category": analysis.response_category.value,
+        }
 
     async def _orchestrate_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
         state = SessionState.model_validate(graph_state["session"])
@@ -263,6 +324,10 @@ class ConversationEngine:
         )
         return {
             "session": decision.state.model_dump(mode="json"),
+            # ``_decide`` may reconcile correctness from validated slot claims.
+            # Put that effective analysis back into graph state while keeping
+            # the classifier's original label in its own audit field.
+            "analysis": analysis.model_dump(mode="json"),
             "decision": decision.model_dump(mode="json"),
         }
 
@@ -271,7 +336,6 @@ class ConversationEngine:
         context = decision.speaker_context
         if decision.dialogue_act in {
             "unsafe_redirect",
-            "show_help_card",
             "joint_mode",
             # These two turns are also rendered beside a star-note update.
             # Their reviewed fallback deliberately contains no mathematical
@@ -280,17 +344,62 @@ class ConversationEngine:
             "session_complete",
             "task_transition",
         }:
-            return {"speaker_text": context.fallback_text}
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="reviewed_fallback",
+                verifier_status="not_required",
+            )
+            result: dict[str, Any] = {
+                "speaker_text": context.fallback_text,
+                "runtime": runtime.model_dump(mode="json"),
+            }
+            note_context = decision.note_contextualization
+            if note_context is not None:
+                try:
+                    async with asyncio.timeout(min(self.speaker_timeout_seconds, 4.0)):
+                        note_output = await self.gateway.contextualize_note(note_context)
+                    result["note_output"] = note_output.model_dump(mode="json")
+                except Exception as error:
+                    # The reviewed deterministic note is always safe to show.
+                    # A note-language failure must never fail or delay the
+                    # completed learning turn beyond the bounded timeout.
+                    logger.warning(
+                        "note_contextualization_fallback error_type=%s",
+                        type(error).__name__,
+                    )
+            return result
         try:
             async with asyncio.timeout(self.speaker_timeout_seconds):
                 output = await self.gateway.speak(context)
-            return {"speaker_output": output.model_dump(mode="json")}
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="llm",
+                verifier_status=(
+                    "disabled"
+                    if context.verification_policy is SpeakerVerificationPolicy.SEMANTIC
+                    and not self.semantic_verifier_enabled
+                    else "not_required"
+                ),
+            )
+            return {
+                "speaker_output": output.model_dump(mode="json"),
+                "runtime": runtime.model_dump(mode="json"),
+            }
         except Exception as error:
             logger.warning(
                 "speaker_fallback stage=generation error_type=%s",
                 type(error).__name__,
             )
-            return {"speaker_text": context.fallback_text}
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="generation_fallback",
+                verifier_status="not_required",
+                fallback_reason=type(error).__name__,
+            )
+            return {
+                "speaker_text": context.fallback_text,
+                "runtime": runtime.model_dump(mode="json"),
+            }
 
     async def _validate_and_compose_node(
         self,
@@ -299,14 +408,23 @@ class ConversationEngine:
         decision = PedagogicalDecision.model_validate(graph_state["decision"])
         task = get_task(decision.state.current_task_id, decision.state.scenario_data)
         guard = self._speaker_guard(task, decision.state, decision.speaker_context)
+        runtime = SpeakerRuntimeAudit.model_validate(graph_state["runtime"])
         text = graph_state.get("speaker_text")
         if not text and graph_state.get("speaker_output"):
             output = SpeakerOutput.model_validate(graph_state["speaker_output"])
             text = validate_speaker_output(output, decision.speaker_context, guard)
+            if not text:
+                runtime = runtime.model_copy(
+                    update={
+                        "speaker_source": "deterministic_validation_fallback",
+                        "fallback_reason": "speaker_contract_rejected",
+                    }
+                )
             if (
                 text
                 and decision.speaker_context.verification_policy
                 is SpeakerVerificationPolicy.SEMANTIC
+                and self.semantic_verifier_enabled
             ):
                 try:
                     async with asyncio.timeout(self.verifier_timeout_seconds):
@@ -323,18 +441,46 @@ class ConversationEngine:
                         output,
                     ):
                         text = None
+                        runtime = runtime.model_copy(
+                            update={
+                                "speaker_source": "semantic_verification_fallback",
+                                "verifier_status": "rejected",
+                                "fallback_reason": verified.reason_code,
+                            }
+                        )
                         logger.info(
                             "speaker_fallback stage=semantic reason=%s dialogue_act=%s",
                             verified.reason_code,
                             decision.dialogue_act,
                         )
+                    else:
+                        runtime = runtime.model_copy(update={"verifier_status": "approved"})
                 except Exception as error:
                     text = None
+                    runtime = runtime.model_copy(
+                        update={
+                            "speaker_source": "semantic_verification_fallback",
+                            "verifier_status": "error",
+                            "fallback_reason": type(error).__name__,
+                        }
+                    )
                     logger.warning(
                         "speaker_fallback stage=verification error_type=%s",
                         type(error).__name__,
                     )
         text = text or decision.speaker_context.fallback_text
+        note_update = decision.note_update
+        note_context = decision.note_contextualization
+        if note_update is not None and note_context is not None and graph_state.get("note_output"):
+            note_output = NoteContextualizationOutput.model_validate(graph_state["note_output"])
+            contextualized = validate_note_contextualization(note_output, note_context)
+            if contextualized:
+                note_update = note_update.model_copy(update={"text": contextualized})
+            else:
+                logger.info(
+                    "note_contextualization_fallback reason=contract_rejected skill_id=%s",
+                    note_context.skill_id,
+                )
         turn = self._turn_contract(
             decision.state,
             task,
@@ -343,12 +489,13 @@ class ConversationEngine:
             visual=decision.visual,
             help_card=decision.help_card,
             mood=decision.mood,
-            note=decision.note_update,
+            note=note_update,
         )
         decision.state.current_turn_id = turn.turn_id
         return {
             "session": decision.state.model_dump(mode="json"),
             "turn": turn.model_dump(mode="json"),
+            "runtime": runtime.model_dump(mode="json"),
         }
 
     def _decide(
@@ -360,6 +507,7 @@ class ConversationEngine:
         previous_question: str,
     ) -> PedagogicalDecision:
         next_state = state.model_copy(deep=True)
+        self._normalize_terminal_support(next_state)
         next_state.state_version += 1
         next_state.current_turn_id = None
         entry_active = (
@@ -384,11 +532,15 @@ class ConversationEngine:
                 return self._decision_for_current_step(
                     next_state,
                     task,
-                    dialogue_act="context_return",
-                    fallback=safety_redirect(analysis.safety_category),
-                    child_text=None,
+                    dialogue_act="brief_ack_and_redirect",
+                    fallback=self._social_bridge_fallback(
+                        InteractionIntent.PLAYFUL_TEASE,
+                        next_state.unrelated_count,
+                    ),
+                    child_text=response.text,
                     analysis=analysis,
                     previous_question=previous_question,
+                    must_reframe=True,
                 )
             return self._decision_for_current_step(
                 next_state,
@@ -400,10 +552,55 @@ class ConversationEngine:
                 previous_question=previous_question,
             )
 
+        # Conversational relation is independent of mathematical correctness.
+        # Route a safely grounded social intent before any ladder or claim
+        # logic so a classifier's secondary correctness label cannot turn a
+        # meta remark into a concept failure or learning evidence.
+        social_grounding = self._safe_social_grounding_span(
+            response.text,
+            analysis,
+            allowed_numbers=extract_numeric_values(
+                " ".join(
+                    [
+                        previous_question,
+                        *(str(value) for value in task.visible_facts.values()),
+                    ]
+                )
+            ),
+        )
+        if (
+            social_grounding
+            and analysis.interaction_intent is not InteractionIntent.NONE
+            and analysis.task_relation
+            in {TaskRelation.META_ABOUT_MORMI, TaskRelation.OFF_TOPIC}
+        ):
+            next_state.unrelated_count += 1
+            meta_turn = analysis.task_relation is TaskRelation.META_ABOUT_MORMI
+            return self._decision_for_current_step(
+                next_state,
+                task,
+                dialogue_act=(
+                    "acknowledge_meta_and_reask"
+                    if meta_turn
+                    else "brief_ack_and_redirect"
+                ),
+                fallback=self._social_bridge_fallback(
+                    analysis.interaction_intent,
+                    next_state.unrelated_count,
+                ),
+                child_text=response.text,
+                analysis=analysis,
+                previous_question=previous_question,
+                must_reframe=True,
+            )
+
         # Accepting a reviewed wrong guess is concept evidence, never a
         # successful conversational answer.  Conversely, rejecting it is only
         # a stance: it cannot fill answer/reason slots or enter the star note.
-        if entry_active and analysis.entry_stance is EntryStance.ACCEPT_WRONG_GUESS:
+        accepted_wrong_entry_guess = (
+            entry_active and analysis.entry_stance is EntryStance.ACCEPT_WRONG_GUESS
+        )
+        if accepted_wrong_entry_guess:
             analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
             analysis.difficulty_class = DifficultyClass.CONCEPT
 
@@ -441,23 +638,14 @@ class ConversationEngine:
                 )
                 return decision
 
-        successful_categories = {
-            ResponseCategory.CORRECT_FULL,
-            ResponseCategory.CORRECT_PARTIAL,
-            ResponseCategory.SELF_CORRECTION,
-        }
-        # Completion requires two independent gates: the understanding stage
-        # must call the response successful, and every accepted claim must
-        # match reviewed curriculum facts.  An error analysis can therefore
-        # never fill a slot even if a malformed model/client supplies a value.
-        grounded_claims = (
-            task.validated_claims(
-                (claim.slot_id, claim.value, claim.factual)
-                for claim in analysis.claims
-            )
-            if analysis.response_category in successful_categories
-            else {}
-        )
+        # The model proposes claims and an initial label; code owns the final
+        # correctness label.  Validate every safe, task-directed claim against
+        # the reviewed slot contracts first, so an inconsistent model label
+        # cannot turn a complete answer into ``correct_partial`` or block a
+        # valid answer from advancing the session.
+        if response.type is ResponseType.TEXT and response.text:
+            self._ground_text_numeric_claims(task, response.text, analysis)
+        grounded_claims = task.validated_slot_claims(analysis.claims)
         if response.type is ResponseType.TEXT and response.text:
             grounded_claims = self._filter_text_explanation_claims(
                 task,
@@ -474,10 +662,26 @@ class ConversationEngine:
             for slot_id, value in grounded_claims.items()
             if slot_id in interpreted_slots
         }
+        if not accepted_wrong_entry_guess:
+            self._reconcile_response_category(
+                analysis,
+                task,
+                interpreted_step,
+                accepted_claims,
+                grounded_claims,
+            )
+        successful_categories = {
+            ResponseCategory.CORRECT_FULL,
+            ResponseCategory.CORRECT_PARTIAL,
+            ResponseCategory.SELF_CORRECTION,
+        }
         understood_claims = {
             slot_id: value
             for slot_id, value in grounded_claims.items()
-            if state.verified_slots.get(slot_id) == value
+            if task.slots[slot_id].equivalent_state_value(
+                state.verified_slots.get(slot_id),
+                value,
+            )
         }
         understood_claims.update(accepted_claims)
         # A repeated fact is still understood, but it is not new learning
@@ -486,7 +690,10 @@ class ConversationEngine:
         newly_verified = {
             slot_id: value
             for slot_id, value in accepted_claims.items()
-            if next_state.verified_slots.get(slot_id) != value
+            if not task.slots[slot_id].equivalent_state_value(
+                next_state.verified_slots.get(slot_id),
+                value,
+            )
         }
         next_state.verified_slots.update(newly_verified)
         if (
@@ -511,6 +718,7 @@ class ConversationEngine:
         if (entry_active or open_followup_active or targeted_followup_active) and newly_verified:
             next_state.entry_phase = EntryPhase.RESOLVED
         if newly_verified:
+            next_state.vague_clarifications = 0
             self._record_note_provenance(
                 next_state,
                 task,
@@ -530,6 +738,7 @@ class ConversationEngine:
                     analysis,
                     response.text,
                     previous_question,
+                    accepted_claims=understood_claims,
                 )
             next_step = task.step_for(
                 next_state.expression_level,
@@ -564,6 +773,7 @@ class ConversationEngine:
                 analysis=analysis,
                 previous_question=previous_question,
                 newly_verified=newly_verified,
+                accepted_claims=understood_claims,
             )
 
         # A colloquial answer can be meaningfully related while still being
@@ -610,9 +820,70 @@ class ConversationEngine:
                 analysis=analysis,
                 previous_question=previous_question,
                 newly_verified=understood_claims,
+                accepted_claims=understood_claims,
             )
 
         category = analysis.response_category
+        if category is ResponseCategory.RELATED_VAGUE:
+            if entry_active or open_followup_active or targeted_followup_active:
+                next_state.entry_phase = EntryPhase.RESOLVED
+            next_state.expression_failures += 1
+            # The first on-topic but vague reply gets one conversational
+            # clarification at the same L/H level.  It is not a request for
+            # conceptual help and must not open a card by itself.
+            first_clarification = next_state.vague_clarifications == 0
+            next_state.vague_clarifications += 1
+            help_event = HelpCardEvent.NONE
+            if not first_clarification:
+                next_state.vague_clarifications = 0
+                self._lower_until_visible_contract_changes(
+                    next_state,
+                    task,
+                    interpreted_step,
+                )
+                previous_hint = next_state.hint_level
+                if next_state.expression_level is ExpressionLevel.L0:
+                    next_state.hint_level = HintLevel.H3
+                elif next_state.hint_level is HintLevel.H0:
+                    next_state.hint_level = HintLevel.H1
+                help_event = self._help_card_event(
+                    previous_hint,
+                    next_state.hint_level,
+                )
+                next_state.task_max_hint = max_hint(
+                    next_state.task_max_hint,
+                    next_state.hint_level,
+                )
+            step = task.step_for(
+                next_state.expression_level,
+                next_state.verified_slots,
+            )
+            grounding = self._safe_grounding_for_step(
+                task,
+                next_state,
+                step,
+                response.text,
+                analysis,
+            )
+            return self._decision_for_current_step(
+                next_state,
+                task,
+                dialogue_act=(
+                    "clarify_vague_response" if first_clarification else "support_vague_response"
+                ),
+                fallback=self._support_transition_fallback(
+                    SupportTrigger.RELATED_VAGUE,
+                    help_event,
+                    grounding,
+                ),
+                child_text=response.text,
+                analysis=analysis,
+                previous_question=previous_question,
+                support_trigger=SupportTrigger.RELATED_VAGUE,
+                help_card_event=help_event,
+                must_reframe=True,
+            )
+
         if category in {
             ResponseCategory.EXPRESSION_BLOCK,
             ResponseCategory.NO_RESPONSE,
@@ -620,22 +891,39 @@ class ConversationEngine:
             if entry_active or open_followup_active or targeted_followup_active:
                 next_state.entry_phase = EntryPhase.RESOLVED
             next_state.expression_failures += 1
+            next_state.vague_clarifications = 0
             next_state.expression_level = next_state.expression_level.lower()
+            previous_hint = next_state.hint_level
+            self._normalize_terminal_support(next_state)
+            joint_mode = next_state.expression_level is ExpressionLevel.L0
+            help_event = self._help_card_event(previous_hint, next_state.hint_level)
             return self._decision_for_current_step(
                 next_state,
                 task,
-                dialogue_act="reduce_expression_load",
-                fallback=self._smooth_ladder_fallback(next_state, task),
+                dialogue_act="joint_mode" if joint_mode else "reduce_expression_load",
+                fallback=(
+                    self._support_transition_fallback(
+                        SupportTrigger.EXPRESSION_BLOCK,
+                        help_event,
+                    )
+                    if joint_mode
+                    else self._smooth_ladder_fallback(next_state, task)
+                ),
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
+                support_trigger=SupportTrigger.EXPRESSION_BLOCK,
+                help_card_event=help_event,
+                must_reframe=not joint_mode,
             )
 
         if category is ResponseCategory.HELP_REQUEST:
             if entry_active or open_followup_active or targeted_followup_active:
                 next_state.entry_phase = EntryPhase.RESOLVED
             next_state.expression_failures += 1
+            next_state.vague_clarifications = 0
             next_state.expression_level = next_state.expression_level.lower()
+            previous_hint = next_state.hint_level
             if next_state.hint_level is HintLevel.H0:
                 next_state.hint_level = HintLevel.H1
             elif next_state.hint_level is HintLevel.H1:
@@ -650,20 +938,21 @@ class ConversationEngine:
             if joint_mode:
                 next_state.hint_level = HintLevel.H3
                 next_state.task_max_hint = HintLevel.H3
+            help_event = self._help_card_event(previous_hint, next_state.hint_level)
             decision = self._decision_for_current_step(
                 next_state,
                 task,
                 dialogue_act="joint_mode" if joint_mode else "accept_help_request",
-                fallback=self._preface_question(
-                    "도움 카드가 열렸네.",
-                    task.step_for(
-                        next_state.expression_level,
-                        next_state.verified_slots,
-                    ).prompt,
+                fallback=self._support_transition_fallback(
+                    SupportTrigger.EXPLICIT_HELP_REQUEST,
+                    help_event,
                 ),
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
+                support_trigger=SupportTrigger.EXPLICIT_HELP_REQUEST,
+                help_card_event=help_event,
+                must_reframe=not joint_mode,
             )
             # A help request changes the amount of support, never the problem
             # the child is looking at.  Hint visuals remain available inside
@@ -678,6 +967,8 @@ class ConversationEngine:
             if entry_active or open_followup_active or targeted_followup_active:
                 next_state.entry_phase = EntryPhase.RESOLVED
             next_state.concept_failures += 1
+            next_state.vague_clarifications = 0
+            previous_hint = next_state.hint_level
             next_state.task_max_hint = max_hint(
                 next_state.task_max_hint, next_state.hint_level.increase()
             )
@@ -691,20 +982,40 @@ class ConversationEngine:
                 next_state.expression_level = ExpressionLevel.L0
                 next_state.hint_level = HintLevel.H3
                 next_state.task_max_hint = HintLevel.H3
+            help_event = self._help_card_event(previous_hint, next_state.hint_level)
+            step = task.step_for(
+                next_state.expression_level,
+                next_state.verified_slots,
+            )
+            grounding = self._safe_grounding_for_step(
+                task,
+                next_state,
+                step,
+                response.text,
+                analysis,
+            )
+            support_trigger = (
+                SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT
+                if next_state.concept_failures > 1
+                else SupportTrigger.CONCEPTUAL_CONFLICT
+            )
             return self._decision_for_current_step(
                 next_state,
                 task,
                 dialogue_act="joint_mode"
                 if next_state.hint_level is HintLevel.H3
                 else "show_help_card",
-                fallback=(
-                    "도움 카드 순서대로 나와 같이 해볼까?"
-                    if next_state.hint_level is HintLevel.H3
-                    else "도움 카드가 열렸네. 같이 살펴볼까?"
+                fallback=self._support_transition_fallback(
+                    support_trigger,
+                    help_event,
+                    grounding,
                 ),
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
+                support_trigger=support_trigger,
+                help_card_event=help_event,
+                must_reframe=next_state.hint_level is not HintLevel.H3,
             )
 
         if category is ResponseCategory.RECOGNITION_OR_INPUT_ERROR:
@@ -729,6 +1040,104 @@ class ConversationEngine:
             previous_question=previous_question,
         )
 
+    @staticmethod
+    def _reconcile_response_category(
+        analysis: UtteranceAnalysis,
+        task: TaskDefinition,
+        step: StepDefinition,
+        accepted_claims: Mapping[str, str | int | float | bool],
+        grounded_claims: Mapping[str, str | int | float | bool],
+    ) -> None:
+        """Derive effective correctness from reviewed claims, not model prose.
+
+        Safety, input failures and explicit help requests describe interaction
+        state rather than mathematical completeness, so they remain protected.
+        For an assessable learning response, current-turn target coverage is the
+        canonical source of ``correct_full`` versus ``correct_partial``.
+        """
+
+        protected_categories = {
+            ResponseCategory.HELP_REQUEST,
+            ResponseCategory.EXPRESSION_BLOCK,
+            ResponseCategory.CONCEPTUAL_BLOCK,
+            ResponseCategory.NO_RESPONSE,
+            ResponseCategory.RECOGNITION_OR_INPUT_ERROR,
+        }
+        if analysis.response_category in protected_categories or (
+            analysis.response_category is ResponseCategory.UNRELATED_RESPONSE
+            and analysis.task_relation is TaskRelation.OFF_TOPIC
+        ):
+            return
+
+        target_slots = set(step.target_slots)
+        accepted_slots = set(accepted_claims)
+        accepted_targets = target_slots.intersection(accepted_slots)
+        accepted_optional = set(step.optional_slots).intersection(accepted_slots)
+        rejected_target_claim = any(
+            claim.slot_id in target_slots
+            and task.slots[claim.slot_id].accepted_claim_value(claim) is None
+            for claim in analysis.claims
+            if claim.slot_id in task.slots
+        )
+
+        if target_slots and target_slots.issubset(accepted_slots):
+            analysis.response_category = (
+                ResponseCategory.SELF_CORRECTION
+                if analysis.response_category is ResponseCategory.SELF_CORRECTION
+                else ResponseCategory.CORRECT_FULL
+            )
+            analysis.difficulty_class = DifficultyClass.UNKNOWN
+            analysis.misconception_tag = None
+            analysis.bottleneck = "unknown"
+            return
+
+        if accepted_targets or accepted_optional:
+            analysis.response_category = ResponseCategory.CORRECT_PARTIAL
+            # A response can contain a verified part and a conflicting part.
+            # Keep concept difficulty for analytics while still preserving and
+            # acknowledging the part the child genuinely supplied.
+            if rejected_target_claim:
+                analysis.difficulty_class = DifficultyClass.CONCEPT
+                analysis.bottleneck = "concept"
+                if analysis.misconception_tag is None and task.misconception_tags:
+                    analysis.misconception_tag = task.misconception_tags[0]
+            elif analysis.difficulty_class not in {
+                DifficultyClass.CONCEPT,
+                DifficultyClass.BOTH,
+            }:
+                analysis.difficulty_class = DifficultyClass.UNKNOWN
+                analysis.bottleneck = "unknown"
+            return
+
+        if rejected_target_claim:
+            analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
+            analysis.difficulty_class = DifficultyClass.CONCEPT
+            analysis.bottleneck = "concept"
+            if analysis.misconception_tag is None and task.misconception_tags:
+                analysis.misconception_tag = task.misconception_tags[0]
+            return
+
+        # The child may naturally repeat an already verified fact while the
+        # current turn asks for a missing reason or method.  It is understood
+        # but makes no new progress, so keep it as a partial response.  The
+        # existing no-progress policy will then lower support instead of
+        # repeating the same open question forever.
+        if grounded_claims:
+            analysis.response_category = ResponseCategory.CORRECT_PARTIAL
+            analysis.difficulty_class = DifficultyClass.UNKNOWN
+            analysis.misconception_tag = None
+            analysis.bottleneck = "unknown"
+            return
+
+        if analysis.response_category in {
+            ResponseCategory.CORRECT_FULL,
+            ResponseCategory.SELF_CORRECTION,
+        }:
+            analysis.response_category = ResponseCategory.RELATED_VAGUE
+            analysis.difficulty_class = DifficultyClass.EXPRESSION
+            analysis.misconception_tag = None
+            analysis.bottleneck = "expression"
+
     def _complete_task(
         self,
         state: SessionState,
@@ -736,8 +1145,11 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
         child_text: str | None,
         previous_question: str,
+        *,
+        accepted_claims: Mapping[str, str | int | float | bool],
     ) -> PedagogicalDecision:
         note, direct = self._note_from_provenance(state, task)
+        note_contextualization = self._note_contextualization_context(state, task, note)
         if task.note_policy != "none":
             state.all_tasks_direct = state.all_tasks_direct and direct
         # The speaker may celebrate only what the note provenance permits.
@@ -754,10 +1166,12 @@ class ConversationEngine:
             state.task_start_level = state.expression_level
             state.hint_level = HintLevel.H0
             state.task_max_hint = HintLevel.H0
+            self._normalize_terminal_support(state)
             state.subgoal_id = "initial"
             state.verified_slots = {}
             state.expression_failures = 0
             state.concept_failures = 0
+            state.vague_clarifications = 0
             state.child_note_evidence = {}
             state.supported_note_slots = []
             next_task = get_task(state.current_task_id, state.scenario_data)
@@ -773,15 +1187,18 @@ class ConversationEngine:
                 state.verified_slots,
                 entry_active=state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE,
             )
+            state.subgoal_id = next_step.id
             fallback = self._success_then_question(contribution, next_step.prompt)
             return PedagogicalDecision(
                 state=state,
                 dialogue_act="task_transition",
+                accepted_claims=dict(accepted_claims),
                 required_question=next_step.prompt,
                 input=next_step.input,
-                visual=next_task.base_visual,
-                help_card=None,
+                visual=self._visual_for(next_task, state.hint_level),
+                help_card=self._help_card(next_task, state.hint_level),
                 note_update=note,
+                note_contextualization=note_contextualization,
                 mood="relieved",
                 speaker_context=self._speaker_context(
                     task=next_task,
@@ -807,11 +1224,13 @@ class ConversationEngine:
         return PedagogicalDecision(
             state=state,
             dialogue_act="session_complete",
+            accepted_claims=dict(accepted_claims),
             required_question=None,
             input=InputContract(kind=InputKind.NONE),
             visual=VisualContract(type="success", data={"task": task.id}),
             help_card=None,
             note_update=note,
+            note_contextualization=note_contextualization,
             mood="celebrating",
             speaker_context=self._speaker_context(
                 task=task,
@@ -819,9 +1238,7 @@ class ConversationEngine:
                 dialogue_act="session_complete",
                 previous_question=previous_question,
                 required_question=None,
-                verified_facts=(
-                    {"completion_contribution": contribution} if contribution else {}
-                ),
+                verified_facts=({"completion_contribution": contribution} if contribution else {}),
                 analysis=analysis,
                 child_text=child_text,
                 fallback=fallback,
@@ -839,9 +1256,12 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
         previous_question: str,
         newly_verified: Mapping[str, object] | None = None,
+        accepted_claims: Mapping[str, str | int | float | bool] | None = None,
+        support_trigger: SupportTrigger = SupportTrigger.NONE,
+        help_card_event: HelpCardEvent = HelpCardEvent.NONE,
+        must_reframe: bool = False,
     ) -> PedagogicalDecision:
-        if state.hint_level is HintLevel.H3:
-            state.expression_level = ExpressionLevel.L0
+        self._normalize_terminal_support(state)
         step = task.active_step(
             state.expression_level,
             state.verified_slots,
@@ -851,34 +1271,61 @@ class ConversationEngine:
         state.subgoal_id = step.id
         help_card = self._help_card(task, state.hint_level)
         visual = self._visual_for(task, state.hint_level)
-        verified_facts = {
-            slot: task.slots[slot].fact_sentence for slot in (newly_verified or {})
-        }
-        if dialogue_act == "show_help_card":
-            fallback = self._preface_question("도움 카드가 열렸네.", step.prompt)
-        elif dialogue_act == "joint_mode":
-            fallback = self._preface_question("도움 카드 순서대로 보자.", step.prompt)
-        fallback = self._ensure_required_question(fallback, step.prompt)
+        verified_facts = {slot: task.slots[slot].fact_sentence for slot in (newly_verified or {})}
+        # Support branches provide a complete, reason-specific fallback.
+        # Never overwrite it with a generic prefix + the previous catalog
+        # question; that was the source of robotic semantic repetition.
+        context = self._speaker_context(
+            task=task,
+            state=state,
+            dialogue_act=dialogue_act,
+            previous_question=previous_question,
+            required_question=step.prompt,
+            verified_facts=verified_facts,
+            analysis=analysis,
+            child_text=child_text,
+            fallback=self._fit_50(fallback),
+            support_trigger=support_trigger,
+            help_card_event=help_card_event,
+            must_reframe=must_reframe,
+        )
+        if (
+            not must_reframe
+            or context.verification_policy is SpeakerVerificationPolicy.DETERMINISTIC
+        ):
+            context.fallback_text = self._ensure_required_question(fallback, step.prompt)
         return PedagogicalDecision(
             state=state,
             dialogue_act=dialogue_act,
+            accepted_claims=dict(accepted_claims or {}),
             required_question=step.prompt,
             input=step.input,
             visual=visual,
             help_card=help_card,
             mood="thinking" if help_card else "listening",
-            speaker_context=self._speaker_context(
-                task=task,
-                state=state,
-                dialogue_act=dialogue_act,
-                previous_question=previous_question,
-                required_question=step.prompt,
-                verified_facts=verified_facts,
-                analysis=analysis,
-                child_text=child_text,
-                fallback=self._fit_50(fallback),
-            ),
+            speaker_context=context,
         )
+
+    @staticmethod
+    def _normalize_terminal_support(state: SessionState) -> None:
+        """Keep the terminal expression and hint contracts as one safe pair.
+
+        L and H remain independent above the terminal state.  L0, however,
+        uses a reviewed joint-performance input whose completion values can
+        finish the task, while H3 is the matching fully revealed help card.
+        Allowing only one side to reach its terminal value would either expose
+        a joint answer without the H3 explanation or reveal H3 while still
+        asking the child for an independent response.
+        """
+
+        if (
+            state.expression_level is not ExpressionLevel.L0
+            and state.hint_level is not HintLevel.H3
+        ):
+            return
+        state.expression_level = ExpressionLevel.L0
+        state.hint_level = HintLevel.H3
+        state.task_max_hint = HintLevel.H3
 
     def _speaker_context(
         self,
@@ -892,6 +1339,9 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
         child_text: str | None,
         fallback: str,
+        support_trigger: SupportTrigger = SupportTrigger.NONE,
+        help_card_event: HelpCardEvent = HelpCardEvent.NONE,
+        must_reframe: bool = False,
     ) -> SpeakerContext:
         active_step = task.active_step(
             state.expression_level,
@@ -908,15 +1358,22 @@ class ConversationEngine:
             slot: task.slots[slot].description for slot in required_slot_ids
         }
         allowed_numbers = sorted(
-            extract_numeric_values(
-                " ".join([*verified_facts.values(), required_question or ""])
-            )
+            extract_numeric_values(" ".join([*verified_facts.values(), required_question or ""]))
         )
         expression = self._safe_grounding_span(
             child_text,
             analysis,
             allowed_numbers=set(allowed_numbers),
         )
+        if dialogue_act in {
+            "acknowledge_meta_and_reask",
+            "brief_ack_and_redirect",
+        }:
+            expression = self._safe_social_grounding_span(
+                child_text,
+                analysis,
+                allowed_numbers=set(allowed_numbers),
+            )
         mode: Literal["none", "quote_safe"] = "quote_safe" if expression else "none"
         question_intent = SpeakerQuestionIntent(
             operation=task.skill_id,
@@ -936,6 +1393,12 @@ class ConversationEngine:
         )
         return SpeakerContext(
             dialogue_act=dialogue_act,
+            task_relation=analysis.task_relation,
+            interaction_intent=analysis.interaction_intent,
+            interaction_repeat_count=state.unrelated_count,
+            support_trigger=support_trigger,
+            help_card_event=help_card_event,
+            must_reframe=must_reframe,
             previous_question=previous_question,
             required_question=required_question,
             verified_facts=dict(verified_facts),
@@ -999,9 +1462,16 @@ class ConversationEngine:
             return SpeakerVerificationPolicy.DETERMINISTIC
         explanation_slots = set(task.text_explanation_slots)
         semantic_dialogue_acts = {
+            "acknowledge_meta_and_reask",
             "acknowledge_partial",
             "acknowledge_unstructured_partial",
+            "accept_help_request",
+            "brief_ack_and_redirect",
+            "clarify_vague_response",
             "entry_rejection_followup",
+            "reduce_expression_load",
+            "show_help_card",
+            "support_vague_response",
         }
         if (
             has_child_grounding
@@ -1031,6 +1501,85 @@ class ConversationEngine:
         return span
 
     @staticmethod
+    def _safe_social_grounding_span(
+        child_text: str | None,
+        analysis: UtteranceAnalysis,
+        *,
+        allowed_numbers: set[str],
+    ) -> str | None:
+        """Return an exact safe social quote without treating it as learning proof."""
+
+        if (
+            analysis.safety_category
+            not in {
+                SafetyCategory.NORMAL,
+                SafetyCategory.PLAYFUL_OFFTOPIC,
+            }
+            or not child_text
+        ):
+            return None
+        span = re.sub(r"\s+", " ", analysis.social_grounding_span).strip()
+        source = re.sub(r"\s+", " ", child_text).strip()
+        if not span or len(span) > 30 or span not in source:
+            return None
+        if deterministic_safety(span) not in {
+            SafetyCategory.NORMAL,
+            SafetyCategory.PLAYFUL_OFFTOPIC,
+        }:
+            return None
+        if not extract_numeric_values(span).issubset(allowed_numbers):
+            return None
+        return span
+
+    @staticmethod
+    def _social_bridge_fallback(
+        intent: InteractionIntent,
+        repeat_count: int,
+    ) -> str:
+        """Reviewed bridge copy used only if the bounded speaker path fails."""
+
+        repeated = repeat_count >= 2
+        if intent is InteractionIntent.AUTHENTICITY_CHALLENGE:
+            return (
+                "나 아직 진짜 헷갈려... 이것만 알려주면 안 돼?"
+                if repeated
+                else "나 진짜 몰라서 물어본 거야... 조금만 알려주면 안 돼?"
+            )
+        if intent is InteractionIntent.PLAYFUL_TEASE:
+            return (
+                "응, 들었어. 나는 아직 이게 헷갈려... 알려줄래?"
+                if repeated
+                else "장난치는 거지? 나는 아직 이게 헷갈려... 알려줄래?"
+            )
+        if intent is InteractionIntent.FRUSTRATION:
+            return "내가 자꾸 물어서 답답했구나... 이것만 알려줄래?"
+        if intent is InteractionIntent.REFUSAL:
+            return "지금은 말하기 싫구나... 이것만 같이 볼까?"
+        return "그 말도 들었어. 나는 아직 이게 궁금해... 알려줄래?"
+
+    @classmethod
+    def _safe_grounding_for_step(
+        cls,
+        task: TaskDefinition,
+        state: SessionState,
+        step: StepDefinition,
+        child_text: str | None,
+        analysis: UtteranceAnalysis,
+    ) -> str | None:
+        fact_sentences = [
+            task.slots[slot].fact_sentence for slot in state.verified_slots if slot in task.slots
+        ]
+        visible_facts = [str(value) for value in task.visible_facts.values()]
+        allowed_numbers = extract_numeric_values(
+            " ".join([step.prompt, *fact_sentences, *visible_facts])
+        )
+        return cls._safe_grounding_span(
+            child_text,
+            analysis,
+            allowed_numbers=allowed_numbers,
+        )
+
+    @staticmethod
     def _speaker_guard(
         task: TaskDefinition,
         state: SessionState,
@@ -1054,9 +1603,7 @@ class ConversationEngine:
         return SpeakerGuardContract(
             forbidden_answer_forms=list(dict.fromkeys(forbidden)),
             child_expression_source=(
-                context.child_expression
-                if context.child_expression_mode == "quote_safe"
-                else None
+                context.child_expression if context.child_expression_mode == "quote_safe" else None
             ),
         )
 
@@ -1108,6 +1655,86 @@ class ConversationEngine:
                 else None
             ),
             pedagogy=pedagogy,
+            task_anchor=self._task_anchor(state, task, input_contract),
+            dictionary_ref=(
+                dictionary_reference(state.dictionary_snapshots[task.id])
+                if task.id in state.dictionary_snapshots
+                else None
+            ),
+        )
+
+    def ensure_task_anchor(
+        self,
+        state: SessionState,
+        turn: TurnContract,
+    ) -> TurnContract:
+        """Backfill the additive anchor contract for an active legacy turn."""
+
+        if turn.task_anchor is not None or turn.status is not SessionStatus.ACTIVE:
+            return turn
+        task = get_task(state.current_task_id, state.scenario_data)
+        anchor = self._task_anchor(state, task, turn.input)
+        return turn.model_copy(update={"task_anchor": anchor})
+
+    @staticmethod
+    def _task_anchor_label(task: TaskDefinition, slot_id: str) -> str:
+        slot = task.slots[slot_id]
+        if len(slot.description) <= 24:
+            return slot.description
+        return {
+            "observation": "확인한 것",
+            "conclusion": "알아낸 답",
+            "operation": "계산",
+            "method": "알려준 방법",
+            "reason": "알려준 이유",
+            "explanation": "알려준 설명",
+            "selection": "고른 것",
+        }[slot.semantic_role]
+
+    def _task_anchor(
+        self,
+        state: SessionState,
+        task: TaskDefinition,
+        input_contract: InputContract,
+    ) -> TaskAnchorContract | None:
+        """Build the visible reminder from reviewed content and verified state only."""
+
+        if state.status is not SessionStatus.ACTIVE or input_contract.kind is InputKind.NONE:
+            return None
+        step = task.step_by_id(state.subgoal_id)
+        if step is None:
+            step = task.active_step(
+                state.expression_level,
+                state.verified_slots,
+                entry_active=(state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE),
+                targeted_followup=(
+                    state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
+                ),
+            )
+        target_slots = [
+            slot_id
+            for slot_id in input_contract.target_slots
+            if slot_id not in state.verified_slots
+        ]
+        # L0 joint performance can intentionally revisit already verified
+        # pieces. Keep the contract usable without inventing another target.
+        if not target_slots:
+            target_slots = list(input_contract.target_slots)
+        completed_items = [
+            TaskAnchorCompletedItem(
+                slot_id=slot_id,
+                label=self._task_anchor_label(task, slot_id),
+                value=state.verified_slots[slot_id],
+                display_text=task.slots[slot_id].fact_sentence,
+            )
+            for slot_id in task.slots
+            if slot_id in state.verified_slots and slot_id not in target_slots
+        ]
+        return TaskAnchorContract(
+            anchor_id=f"{task.id}:{state.subgoal_id}",
+            prompt=step.prompt,
+            completed_items=completed_items,
+            target_slots=target_slots,
         )
 
     @staticmethod
@@ -1165,12 +1792,17 @@ class ConversationEngine:
         for slot_id, value in candidate_values.items():
             slot = task.slots.get(slot_id)
             if slot and slot_id in interpreted_slots:
+                factual = slot.accepts(value)
                 claims.append(
                     {
                         "slot_id": slot_id,
                         "value": value,
-                        "factual": slot.accepts(value),
+                        "factual": factual,
                         "evidence_span": str(value),
+                        "supported": factual if slot.is_semantic_support else None,
+                        "support_confidence": (
+                            1.0 if factual and slot.is_semantic_support else None
+                        ),
                     }
                 )
         if not claims and selected_labels:
@@ -1225,6 +1857,56 @@ class ConversationEngine:
             visual_type=hint.visual_type,
             visual_data=hint.visual_data,
         )
+
+    @staticmethod
+    def _help_card_event(before: HintLevel, after: HintLevel) -> HelpCardEvent:
+        if after is HintLevel.H3:
+            return HelpCardEvent.JOINT
+        if before is HintLevel.H0 and after is not HintLevel.H0:
+            return HelpCardEvent.OPENED
+        if before is not after:
+            return HelpCardEvent.STRENGTHENED
+        return HelpCardEvent.NONE
+
+    @classmethod
+    def _support_transition_fallback(
+        cls,
+        trigger: SupportTrigger,
+        event: HelpCardEvent,
+        grounding: str | None = None,
+    ) -> str:
+        """Build a coherent reviewed line for each support reason."""
+
+        if event is HelpCardEvent.JOINT:
+            return "이제 도움 카드대로 나랑 같이 해보자."
+        if trigger is SupportTrigger.RELATED_VAGUE:
+            if event is HelpCardEvent.NONE:
+                if grounding:
+                    return cls._fit_50(
+                        f"그런데 ‘{grounding}’가 어떻게 하는 건지 모르겠어... 조금만 더 알려줄래?"
+                    )
+                return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
+            if grounding:
+                return cls._fit_50(f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?")
+            return "카드에 도움이 나왔어. 이걸 보고 조금 더 알려줄래?"
+        if trigger is SupportTrigger.EXPLICIT_HELP_REQUEST:
+            if event is HelpCardEvent.OPENED:
+                return "오, 도움 카드가 나왔어! 이걸 보고 다시 알려줄래?"
+            if event is HelpCardEvent.STRENGTHENED:
+                return "카드에 다른 도움도 나왔어. 이걸로 다시 알려줄래?"
+            return "이걸 보고 나한테 다시 알려줄래?"
+        if trigger in {
+            SupportTrigger.CONCEPTUAL_CONFLICT,
+            SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT,
+        }:
+            if grounding:
+                return cls._fit_50(
+                    f"‘{grounding}’라는 거야? 나는 아직 헷갈려... 카드를 보고 다시 알려줄래?"
+                )
+            if event is HelpCardEvent.STRENGTHENED:
+                return "나는 아직 헷갈려... 카드에 나온 다른 도움도 같이 볼까?"
+            return "나는 아직 헷갈려... 도움 카드를 보고 다시 알려줄래?"
+        return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
 
     @staticmethod
     def _visual_for(task: TaskDefinition, level: HintLevel) -> VisualContract:
@@ -1410,6 +2092,115 @@ class ConversationEngine:
             return None
         return cls._safe_child_note_text(task, span)
 
+    @staticmethod
+    def _exact_child_evidence_text(
+        child_text: str,
+        evidence_span: str,
+    ) -> str | None:
+        """Return an exact, bounded clause from the child's own utterance.
+
+        Open method/reason/explanation slots are semantically judged by the
+        classifier.  Their evidence may legitimately contain a derived number
+        that is not printed on screen (for example, ``5와 3의 차이는 2``).
+        Reusing the note-specific visible-number allowlist here used to erase
+        such valid explanations and leave the classifier's ``correct_partial``
+        label uncorrected.  Exact-substring provenance keeps model-authored
+        wording out without reducing open mathematical reasoning to a finite
+        number or phrase list.
+        """
+
+        span = re.sub(r"\s+", " ", evidence_span).strip()
+        source = re.sub(r"\s+", " ", child_text).strip()
+        if not span or span not in source or len(span) > 120:
+            return None
+        if re.search(r"(틀렸|맞았|정답|오답)", span):
+            return None
+        return span
+
+    @staticmethod
+    def _claim_numeric_value(claim: SlotClaim) -> int | None:
+        """Return one normalized integer that the classifier says the child claimed."""
+
+        if isinstance(claim.value, bool) or claim.value is None:
+            return None
+        if isinstance(claim.value, int):
+            return claim.value
+        if isinstance(claim.value, float):
+            return int(claim.value) if claim.value.is_integer() else None
+        values = extract_numeric_values(str(claim.value))
+        if len(values) != 1:
+            return None
+        return int(next(iter(values)))
+
+    @classmethod
+    def _ground_text_numeric_claims(
+        cls,
+        task: TaskDefinition,
+        child_text: str,
+        analysis: UtteranceAnalysis,
+    ) -> None:
+        """Bind numeric claims to the child's evidence before correctness checks.
+
+        The classifier interprets Korean wording and common typos, but it may
+        never replace the child's wrong number with the reviewed answer.  Clear
+        numbers are checked deterministically.  Only an exact, otherwise
+        unparseable evidence span can use a high-confidence model
+        interpretation, which preserves support for forms such as a typo in a
+        Korean number word without trusting model-authored arithmetic.
+        """
+
+        for claim in analysis.claims:
+            slot = task.slots.get(claim.slot_id)
+            if (
+                slot is None
+                or slot.is_semantic_support
+                or isinstance(slot.expected, bool)
+                or not isinstance(slot.expected, (int, float))
+            ):
+                continue
+
+            evidence = cls._exact_child_evidence_text(child_text, claim.evidence_span)
+            claimed_value = cls._claim_numeric_value(claim)
+            if evidence is None or claimed_value is None:
+                claim.factual = False
+                continue
+
+            evidence_values = {int(value) for value in extract_numeric_values(evidence)}
+            if evidence_values:
+                # The normalized claim must be one of the quantities the child
+                # actually said.  This blocks expected=1700/evidence=1800 even
+                # if the model incorrectly reports value=1700.
+                if claimed_value not in evidence_values:
+                    claim.factual = False
+                continue
+
+            # Reviewed aliases such as "셋" are deterministic evidence even
+            # when the general Korean-number parser intentionally stays narrow.
+            if slot.accepts(evidence) and slot.accepts(claimed_value):
+                continue
+
+            if (claim.interpretation_confidence or 0) < 0.85:
+                claim.factual = False
+
+    @staticmethod
+    def _has_false_explicit_arithmetic(text: str) -> bool:
+        """Detect clear, locally checkable false addition/subtraction claims."""
+
+        for pattern in (_INFIX_ARITHMETIC, _KOREAN_ARITHMETIC):
+            for match in pattern.finditer(text.replace(" ", "")):
+                left = int(match.group("left").replace(",", ""))
+                right = int(match.group("right").replace(",", ""))
+                result = int(match.group("result").replace(",", ""))
+                operator = match.group("operator")
+                expected = (
+                    left + right
+                    if operator in {"+", "더하기", "플러스", "더하면", "더해서", "더했더니"}
+                    else left - right
+                )
+                if result != expected:
+                    return True
+        return False
+
     @classmethod
     def _filter_text_explanation_claims(
         cls,
@@ -1427,15 +2218,30 @@ class ConversationEngine:
         """
 
         filtered = dict(verified)
-        for slot_id in task.text_explanation_slots:
+        for slot_id in task.semantic_support_slots | set(task.text_explanation_slots):
             if slot_id not in filtered:
                 continue
-            supported = any(
-                claim.factual
-                and claim.slot_id == slot_id
-                and cls._claim_evidence_text(task, child_text, claim.evidence_span)
-                for claim in analysis.claims
-            )
+            supported = False
+            for claim in analysis.claims:
+                if not claim.factual or claim.slot_id != slot_id:
+                    continue
+                evidence = cls._exact_child_evidence_text(child_text, claim.evidence_span)
+                if evidence is not None and cls._has_false_explicit_arithmetic(evidence):
+                    claim.factual = False
+                    claim.supported = False
+                    continue
+                if claim.supported is True and evidence is not None:
+                    supported = True
+                    break
+                # Compatibility for deterministic responses and old test
+                # fixtures that predate the semantic-support contract.
+                if claim.supported is None and cls._claim_evidence_text(
+                    task,
+                    child_text,
+                    claim.evidence_span,
+                ):
+                    supported = True
+                    break
             if not supported:
                 filtered.pop(slot_id, None)
         return filtered
@@ -1464,10 +2270,18 @@ class ConversationEngine:
                 # No inferred fallback: missing or rewritten evidence fails
                 # closed.  Task completion may still proceed, but it cannot
                 # produce a direct-attribution note without an exact source.
-                evidence = cls._claim_evidence_text(
-                    task,
-                    response.text,
-                    claim.evidence_span,
+                slot = task.slots[slot_id]
+                evidence = (
+                    cls._exact_child_evidence_text(
+                        response.text,
+                        claim.evidence_span,
+                    )
+                    if slot.is_semantic_support and claim.supported is True
+                    else cls._claim_evidence_text(
+                        task,
+                        response.text,
+                        claim.evidence_span,
+                    )
                 )
                 if evidence:
                     state.child_note_evidence[slot_id] = evidence
@@ -1530,6 +2344,53 @@ class ConversationEngine:
         # emitting the curriculum line would attribute knowledge the child
         # never expressed.
         return None, False
+
+    @staticmethod
+    def _note_contextualization_context(
+        state: SessionState,
+        task: TaskDefinition,
+        note: NoteUpdate | None,
+    ) -> NoteContextualizationContext | None:
+        """Build the only context an LLM may use to complete a direct note.
+
+        Semantic method/reason fact sentences are intentionally excluded:
+        those sentences can contain a curriculum-preferred strategy that the
+        child never used.  The reviewed note context and canonical fact slots
+        are enough to resolve scene-bound references without importing one.
+        """
+
+        if note is None or note.attribution is not NoteAttribution.CHILD:
+            return None
+        source_fragments = {
+            slot_id: state.child_note_evidence[slot_id]
+            for slot_id in task.effective_note_slots
+            if slot_id in state.child_note_evidence
+        }
+        if not source_fragments:
+            return None
+        reviewed_facts = {"note_context": task.note_context}
+        for slot_id in task.effective_note_slots:
+            slot = task.slots[slot_id]
+            if not slot.is_semantic_support and slot_id in state.verified_slots:
+                reviewed_facts[f"slot:{slot_id}"] = slot.fact_sentence
+        allowed_numbers = sorted(
+            extract_numeric_values(
+                " ".join(
+                    [
+                        *source_fragments.values(),
+                        *reviewed_facts.values(),
+                    ]
+                )
+            )
+        )
+        return NoteContextualizationContext(
+            skill_id=task.skill_id,
+            note_context=task.note_context,
+            source_fragments=source_fragments,
+            reviewed_facts=reviewed_facts,
+            allowed_numbers=allowed_numbers,
+            fallback_text=note.text,
+        )
 
 
 def max_hint(left: HintLevel, right: HintLevel) -> HintLevel:

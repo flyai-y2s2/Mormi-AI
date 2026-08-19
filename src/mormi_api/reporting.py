@@ -188,10 +188,10 @@ def _raw_response_is_available(state: SessionState, *, now: datetime) -> bool:
 def _decrypt_report_response(repository: Repository, payload: str) -> str | None:
     """Fail closed for raw text while preserving non-sensitive turn evidence."""
 
-    if not repository.cipher.has_key:
+    if not repository.text_codec.has_key:
         return None
     try:
-        return repository.cipher.decrypt(payload)
+        return repository.text_codec.load(payload)
     except ValueError:
         return None
 

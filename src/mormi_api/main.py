@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
@@ -14,11 +15,22 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from .db import Database
+from .dictionary_catalog import (
+    DictionaryCardNotFoundError,
+    DictionaryVersionMismatchError,
+    dictionary_card_envelope,
+    get_dictionary_card,
+    validate_dictionary_catalog,
+)
+from .dictionary_models import DictionaryCardEnvelope
 from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
+from .migrations import require_observation_schema
+from .outbox import OutboxDispatcher, OutboxStore
 from .reporting import validate_report_summary
 from .repository import (
     ConversationNotFoundError,
+    PersistenceError,
     Repository,
     StaleConversationError,
 )
@@ -36,9 +48,11 @@ from .schemas import (
     SkillProfilesResponse,
     StarNotesResponse,
 )
-from .security import TextCipher
+from .security import StoredTextCodec
 from .service import ConversationService
 from .settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 async def run_startup_maintenance(
@@ -50,19 +64,29 @@ async def run_startup_maintenance(
     if skip:
         return
     await database.create_schema()
+    # ``create_all`` creates missing tables but cannot repair an existing
+    # observation table with a missing FK, column, or index.
+    async with database.engine.connect() as connection:
+        await connection.run_sync(require_observation_schema)
     await repository.migrate_existing_storage_to_permanent()
+    await repository.migrate_existing_storage_to_plaintext()
     await repository.purge_expired_raw_data()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Trusted reference content is a startup contract, not a best-effort
+    # runtime fallback. Invalid, stale or incomplete catalogs cannot be served.
+    validate_dictionary_catalog()
     settings = get_settings()
     database = Database(settings.database_url)
     gateway = ClaudeGateway(settings)
     repository = Repository(
         database,
-        TextCipher(settings.raw_data_encryption_key),
+        StoredTextCodec(settings.raw_data_encryption_key),
         idempotency_retention_days=settings.idempotency_retention_days,
+        classifier_model=settings.classifier_model,
+        speaker_model=settings.speaker_model,
     )
     await run_startup_maintenance(
         database,
@@ -81,8 +105,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gateway = gateway
     app.state.repository = repository
     app.state.service = ConversationService(repository, engine)
-    yield
-    await database.dispose()
+    dispatcher: OutboxDispatcher | None = None
+    dispatcher_task: asyncio.Task[None] | None = None
+    if settings.observation_ingest_enabled:
+        assert settings.observation_ingest_url is not None
+        assert settings.observation_ingest_key is not None
+        dispatcher = OutboxDispatcher(
+            OutboxStore(database, lease_seconds=settings.outbox_lease_seconds),
+            endpoint_url=settings.observation_ingest_url,
+            service_key=settings.observation_ingest_key,
+            poll_interval_seconds=settings.outbox_poll_interval_seconds,
+            batch_size=settings.outbox_batch_size,
+            request_timeout_seconds=settings.outbox_request_timeout_seconds,
+            retry_base_seconds=settings.outbox_retry_base_seconds,
+            retry_max_seconds=settings.outbox_retry_max_seconds,
+            star_note_events_enabled=settings.star_note_events_enabled,
+        )
+        dispatcher_task = asyncio.create_task(
+            dispatcher.run_forever(),
+            name="observation-outbox-dispatcher",
+        )
+        app.state.outbox_dispatcher = dispatcher
+    elif settings.observation_ingest_url or settings.observation_ingest_key:
+        logger.warning(
+            "observation_outbox_dispatcher_disabled reason=incomplete_configuration"
+        )
+    try:
+        yield
+    finally:
+        if dispatcher is not None:
+            await dispatcher.stop()
+        if dispatcher_task is not None:
+            await dispatcher_task
+        if dispatcher is not None:
+            await dispatcher.close()
+        await database.dispose()
 
 
 app = FastAPI(
@@ -291,6 +348,71 @@ async def save_practice_result(
     return await conversation.save_practice(body)
 
 
+@app.get(
+    "/v1/content/dictionary-cards/{curriculum_session_id}",
+    response_model=DictionaryCardEnvelope,
+    responses={
+        404: {"description": "No reviewed dictionary card is registered."},
+        409: {"description": "The caller expected another content version."},
+    },
+    tags=["dictionary content"],
+)
+async def read_dictionary_card(
+    curriculum_session_id: str,
+    _: Auth,
+    expected_content_version: int | None = None,
+) -> DictionaryCardEnvelope:
+    """Read one approved catalog card without invoking an LLM."""
+
+    try:
+        card = get_dictionary_card(
+            curriculum_session_id,
+            expected_content_version=expected_content_version,
+        )
+    except DictionaryCardNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "dictionary_card_not_found"},
+        ) from error
+    except DictionaryVersionMismatchError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "dictionary_version_mismatch",
+                "expected_content_version": error.expected,
+                "current_content_version": error.actual,
+            },
+        ) from error
+    return dictionary_card_envelope(card)
+
+
+@app.get(
+    "/v1/conversations/{conversation_id}/dictionary-card",
+    response_model=DictionaryCardEnvelope,
+    responses={
+        404: {"description": "Conversation not found."},
+        409: {"description": "The legacy conversation has no pinned card."},
+    },
+    tags=["dictionary content"],
+)
+async def read_conversation_dictionary_card(
+    conversation_id: str,
+    _: Auth,
+    conversation: Service,
+) -> DictionaryCardEnvelope:
+    """Read the exact card snapshot pinned to the conversation's active task."""
+
+    try:
+        return await conversation.dictionary_card(conversation_id)
+    except ConversationNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found") from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "dictionary_snapshot_unavailable"},
+        ) from error
+
+
 @app.post(
     "/v1/conversations",
     response_model=SessionEnvelope,
@@ -355,6 +477,13 @@ async def respond(
             detail={"code": code, "issues": []},
             headers=_diagnostic_headers(code),
         ) from error
+    except PersistenceError as error:
+        code = "persistence_failed"
+        raise HTTPException(
+            status_code=503,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        ) from error
 
 
 def _sse(event: str, data: dict[str, object], *, event_id: str | None = None) -> str:
@@ -367,6 +496,40 @@ def _sse(event: str, data: dict[str, object], *, event_id: str | None = None) ->
 
 def _text_chunks(text: str, size: int = 8) -> list[str]:
     return [text[index : index + size] for index in range(0, len(text), size)]
+
+
+async def _turn_sse_events(
+    envelope: SessionEnvelope,
+    *,
+    replayed: bool,
+) -> AsyncIterator[str]:
+    """Serialize one committed turn with metadata before visible text deltas."""
+
+    turn_id = envelope.turn.turn_id
+    yield _sse(
+        "mormi.start",
+        {"turn_id": turn_id, "replayed": replayed},
+        event_id=turn_id,
+    )
+    yield _sse(
+        "turn.metadata",
+        {
+            "turn_id": turn_id,
+            "task_anchor": envelope.turn.task_anchor.model_dump(mode="json")
+            if envelope.turn.task_anchor is not None
+            else None,
+        },
+    )
+    for delta in _text_chunks(envelope.turn.mormi.text):
+        yield _sse("mormi.delta", {"turn_id": turn_id, "delta": delta})
+        # Yield control so ASGI can flush each already-validated chunk.
+        await asyncio.sleep(0)
+    yield _sse(
+        "turn.completed",
+        envelope.model_dump(mode="json"),
+        event_id=turn_id,
+    )
+    yield _sse("done", {"turn_id": turn_id})
 
 
 @app.post(
@@ -406,24 +569,11 @@ async def respond_stream(
                     continue
                 if event.envelope is None:
                     continue
-
-                envelope = event.envelope
-                turn_id = envelope.turn.turn_id
-                yield _sse(
-                    "mormi.start",
-                    {"turn_id": turn_id, "replayed": event.replayed},
-                    event_id=turn_id,
-                )
-                for delta in _text_chunks(envelope.turn.mormi.text):
-                    yield _sse("mormi.delta", {"turn_id": turn_id, "delta": delta})
-                    # Yield control so ASGI can flush each already-validated chunk.
-                    await asyncio.sleep(0)
-                yield _sse(
-                    "turn.completed",
-                    envelope.model_dump(mode="json"),
-                    event_id=turn_id,
-                )
-                yield _sse("done", {"turn_id": turn_id})
+                async for chunk in _turn_sse_events(
+                    event.envelope,
+                    replayed=event.replayed,
+                ):
+                    yield chunk
         except ConversationNotFoundError:
             yield _sse(
                 "error",
@@ -438,6 +588,11 @@ async def respond_stream(
             yield _sse(
                 "error",
                 {"code": _model_error_code(error), "retryable": True},
+            )
+        except PersistenceError:
+            yield _sse(
+                "error",
+                {"code": "persistence_failed", "retryable": True},
             )
 
     return StreamingResponse(

@@ -7,6 +7,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
+from .dictionary_models import DictionaryCard, DictionaryReference
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -84,6 +86,10 @@ class ResponseType(StrEnum):
 class ResponseCategory(StrEnum):
     CORRECT_FULL = "correct_full"
     CORRECT_PARTIAL = "correct_partial"
+    # The response is on-topic but too underspecified to support a factual
+    # claim (for example, "잘 세봐" when a counting method was requested).
+    # It is neither a help request nor evidence of a misconception.
+    RELATED_VAGUE = "related_vague"
     EXPRESSION_BLOCK = "expression_block"
     CONCEPTUAL_ERROR = "conceptual_error"
     CONCEPTUAL_BLOCK = "conceptual_block"
@@ -92,6 +98,22 @@ class ResponseCategory(StrEnum):
     UNRELATED_RESPONSE = "unrelated_response"
     HELP_REQUEST = "help_request"
     SELF_CORRECTION = "self_correction"
+
+
+class SupportTrigger(StrEnum):
+    NONE = "none"
+    RELATED_VAGUE = "related_vague"
+    EXPLICIT_HELP_REQUEST = "explicit_help_request"
+    EXPRESSION_BLOCK = "expression_block"
+    CONCEPTUAL_CONFLICT = "conceptual_conflict"
+    REPEATED_CONCEPTUAL_CONFLICT = "repeated_conceptual_conflict"
+
+
+class HelpCardEvent(StrEnum):
+    NONE = "none"
+    OPENED = "opened"
+    STRENGTHENED = "strengthened"
+    JOINT = "joint"
 
 
 class EntryStance(StrEnum):
@@ -124,6 +146,26 @@ class DifficultyClass(StrEnum):
     INPUT = "input"
     ENGAGEMENT = "engagement"
     UNKNOWN = "unknown"
+
+
+class TaskRelation(StrEnum):
+    """How a safe utterance relates to the current learning conversation."""
+
+    CURRENT_TASK = "current_task"
+    META_ABOUT_MORMI = "meta_about_mormi"
+    OFF_TOPIC = "off_topic"
+    UNKNOWN = "unknown"
+
+
+class InteractionIntent(StrEnum):
+    """Social intent kept separate from mathematical correctness."""
+
+    NONE = "none"
+    AUTHENTICITY_CHALLENGE = "authenticity_challenge"
+    PLAYFUL_TEASE = "playful_tease"
+    FRUSTRATION = "frustration"
+    REFUSAL = "refusal"
+    OTHER_SAFE_SOCIAL = "other_safe_social"
 
 
 class SafetyCategory(StrEnum):
@@ -187,7 +229,7 @@ class PracticeAttempt(BaseModel):
     # Practice summaries are service telemetry, not dialogue transcripts.
     # Keep only a non-linguistic answer value (for example, a count, equation
     # result, or selected choice IDs). Free-text child utterances belong only
-    # in ChildResponse, where consent-controlled encrypted storage applies.
+    # in ChildResponse, where consent-controlled plaintext storage applies.
     response: int | float | list[str] | None = None
     misconception_tag: str | None = Field(default=None, max_length=80)
     latency_ms: int | None = Field(default=None, ge=0, le=600_000)
@@ -293,7 +335,7 @@ class SessionCreate(BaseModel):
     cafe_context: CafeSessionContext | None = None
     queue_context: QueueSessionContext | None = None
     # 파일럿 참여자는 사전에 원문 저장 동의를 완료한다. 별도 필드를 보내지
-    # 않는 호출도 질문·아이 원문·선택 응답을 암호화해 영구 보존한다.
+    # 않는 호출도 질문·아이 원문·선택 응답을 평문으로 영구 보존한다.
     conversation_storage_consent: bool = True
     retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT
 
@@ -332,8 +374,7 @@ class SessionCreate(BaseModel):
             budget = self.cafe_context.budget
             assert budget is not None
             if not any(
-                item.id != self.cafe_context.mormi_menu_id
-                and mormi_price + item.price <= budget
+                item.id != self.cafe_context.mormi_menu_id and mormi_price + item.price <= budget
                 for item in self.cafe_context.menu_items
             ):
                 raise ValueError("budget must allow at least one child menu")
@@ -369,12 +410,28 @@ class SlotClaim(BaseModel):
     value: str | int | float | bool | None = None
     factual: bool = False
     evidence_span: str = ""
+    # For canonical values the classifier must normalize what the child
+    # actually said, not copy the reviewed answer.  This confidence is used
+    # only when a Korean number or typo cannot be parsed deterministically;
+    # clear Arabic/Korean quantities are always checked against evidence in
+    # code regardless of the model's confidence.
+    interpretation_confidence: float | None = Field(default=None, ge=0, le=1)
+    # Open-ended method/reason/explanation slots cannot be enumerated as a
+    # finite list of canonical answer codes. The classifier instead states
+    # whether the child's exact evidence semantically supports the reviewed
+    # slot contract. Closed-value slots leave this field unset.
+    supported: bool | None = None
+    support_confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class UtteranceAnalysis(BaseModel):
     safety_category: SafetyCategory = SafetyCategory.UNKNOWN
     response_category: ResponseCategory = ResponseCategory.RECOGNITION_OR_INPUT_ERROR
     difficulty_class: DifficultyClass = DifficultyClass.UNKNOWN
+    # These fields describe the conversational job of a safe utterance.  They
+    # never verify a mathematical claim or change a ladder by themselves.
+    task_relation: TaskRelation = TaskRelation.UNKNOWN
+    interaction_intent: InteractionIntent = InteractionIntent.NONE
     entry_stance: EntryStance = EntryStance.NOT_APPLICABLE
     claims: list[SlotClaim] = Field(default_factory=list)
     misconception_tag: str | None = None
@@ -383,6 +440,9 @@ class UtteranceAnalysis(BaseModel):
     # for a natural acknowledgement or clarification.  The orchestrator checks
     # that it really occurs in the raw response before a speaker can quote it.
     grounding_span: str = ""
+    # A separate exact substring for a safe social bridge.  Keeping this out
+    # of grounding_span prevents a meta remark from becoming learning proof.
+    social_grounding_span: str = ""
     note_candidate: str = ""
     confidence: float = Field(default=0, ge=0, le=1)
 
@@ -455,6 +515,28 @@ class PedagogySnapshot(BaseModel):
     bottleneck: str | None = None
 
 
+class TaskAnchorCompletedItem(BaseModel):
+    """One child-provided fact that the current task no longer asks for."""
+
+    slot_id: str
+    label: str
+    value: str | int | float | bool
+    # Reviewed context for clients that cannot render an internal canonical
+    # value such as ``right`` on its own. This sentence is exposed only after
+    # the corresponding value has been verified from the child's response.
+    display_text: str
+
+
+class TaskAnchorContract(BaseModel):
+    """Stable, non-LLM reminder of what the child should answer right now."""
+
+    anchor_id: str
+    title: str = "지금 모르미에게 알려줄 것"
+    prompt: str = Field(min_length=1, max_length=50)
+    completed_items: list[TaskAnchorCompletedItem] = Field(default_factory=list)
+    target_slots: list[str] = Field(min_length=1)
+
+
 class TurnContract(BaseModel):
     turn_id: str = Field(default_factory=lambda: new_id("turn"))
     scene: SceneType
@@ -471,6 +553,12 @@ class TurnContract(BaseModel):
     state_version: int
     completion: CompletionContract | None = None
     pedagogy: PedagogySnapshot | None = None
+    # Optional only for backward compatibility with turns persisted before
+    # this contract existed. Every newly generated active turn includes it.
+    task_anchor: TaskAnchorContract | None = None
+    # The card itself is pinned in SessionState. Turns expose only its stable
+    # identity so clients never derive dictionary copy from help-card text.
+    dictionary_ref: DictionaryReference | None = None
 
 
 class SessionState(BaseModel):
@@ -481,6 +569,10 @@ class SessionState(BaseModel):
     scenario_id: str
     task_ids: list[str]
     scenario_data: dict[str, Any] = Field(default_factory=dict)
+    dictionary_catalog_version: int | None = None
+    # Immutable-by-conversation snapshots keep reference material stable when
+    # the catalog is deployed while a child is still in the same lesson.
+    dictionary_snapshots: dict[str, DictionaryCard] = Field(default_factory=dict)
     task_start_levels: dict[str, ExpressionLevel] = Field(default_factory=dict)
     task_index: int = 0
     expression_level: ExpressionLevel
@@ -497,6 +589,10 @@ class SessionState(BaseModel):
     state_version: int = 1
     expression_failures: int = 0
     concept_failures: int = 0
+    # One clarification is allowed for a safe, related-but-vague response.
+    # A repeated vague response must change the visible support contract so
+    # the child can never be trapped in the same free-text question.
+    vague_clarifications: int = 0
     unrelated_count: int = 0
     task_start_level: ExpressionLevel | None = None
     task_max_hint: HintLevel = HintLevel.H0
@@ -545,8 +641,44 @@ class SpeakerGuardContract(BaseModel):
     child_expression_source: str | None = None
 
 
+class NoteContextualizationContext(BaseModel):
+    """Closed-world input for turning child evidence into a standalone note.
+
+    The child wording remains the source of the mathematical idea.  Reviewed
+    context may only resolve omitted subjects, demonstratives and scene-bound
+    references such as ``둘이`` or ``오른쪽``.
+    """
+
+    skill_id: str
+    note_context: str
+    source_fragments: dict[str, str] = Field(min_length=1)
+    reviewed_facts: dict[str, str] = Field(default_factory=dict)
+    allowed_numbers: list[str] = Field(default_factory=list)
+    fallback_text: str
+
+
+class NoteContextualizationOutput(BaseModel):
+    """Auditable note rewrite produced under the closed-world contract."""
+
+    text: str
+    source_slots_used: list[str] = Field(default_factory=list)
+    source_spans_used: list[str] = Field(default_factory=list)
+    fact_refs_used: list[str] = Field(default_factory=list)
+    meaning_preserved: bool = False
+    self_contained: bool = False
+    introduced_math_content: bool = False
+
+
 class SpeakerContext(BaseModel):
     dialogue_act: str
+    task_relation: TaskRelation = TaskRelation.UNKNOWN
+    interaction_intent: InteractionIntent = InteractionIntent.NONE
+    interaction_repeat_count: int = 0
+    support_trigger: SupportTrigger = SupportTrigger.NONE
+    help_card_event: HelpCardEvent = HelpCardEvent.NONE
+    # When true, adding a generic preface to the previous question is not a
+    # valid response. The speaker must acknowledge the transition and reframe.
+    must_reframe: bool = False
     previous_question: str | None = None
     required_question: str | None = None
     # Slot id -> reviewed fact sentence.  Missing-slot answers are never sent
@@ -558,20 +690,23 @@ class SpeakerContext(BaseModel):
     child_expression_mode: Literal["none", "quote_safe"] = "none"
     child_expression: str | None = None
     allowed_numbers: list[str] = Field(default_factory=list)
-    verification_policy: SpeakerVerificationPolicy = (
-        SpeakerVerificationPolicy.DETERMINISTIC
-    )
+    verification_policy: SpeakerVerificationPolicy = SpeakerVerificationPolicy.DETERMINISTIC
     fallback_text: str
 
 
 class PedagogicalDecision(BaseModel):
     state: SessionState
     dialogue_act: str
+    # Canonical claims that the deterministic engine actually accepted from
+    # this response. Persistence must use this decision output rather than
+    # re-validating the classifier's raw claims with a weaker rule.
+    accepted_claims: dict[str, str | int | float | bool] = Field(default_factory=dict)
     required_question: str | None
     input: InputContract
     visual: VisualContract
     help_card: HelpCardContract | None = None
     note_update: NoteUpdate | None = None
+    note_contextualization: NoteContextualizationContext | None = None
     mood: Literal["curious", "listening", "thinking", "relieved", "celebrating"]
     speaker_context: SpeakerContext
 
@@ -594,6 +729,9 @@ class SpeakerVerification(BaseModel):
     only_allowed_math_used: bool = False
     child_not_evaluated: bool = False
     character_consistent: bool = False
+    meaningfully_reframed: bool = False
+    interaction_intent_acknowledged: bool = False
+    task_returned_without_reward: bool = False
     detected_dialogue_act: str = ""
     detected_asked_slot_ids: list[str] = Field(default_factory=list)
     question_evidence_span: str = ""
@@ -610,6 +748,32 @@ class SpeakerVerification(BaseModel):
         "character_break",
         "other",
     ] = "other"
+
+
+class SpeakerRuntimeAudit(BaseModel):
+    """Non-linguistic audit trail for the line that reached the child.
+
+    Generated candidate text is already stored as the next turn's plaintext
+    question.  This object records *how* that text was selected without
+    duplicating the child's or Mormi's raw language in analytics columns.
+    """
+
+    dialogue_act: str
+    speaker_source: Literal[
+        "reviewed_fallback",
+        "llm",
+        "generation_fallback",
+        "deterministic_validation_fallback",
+        "semantic_verification_fallback",
+    ]
+    verifier_status: Literal[
+        "not_required",
+        "disabled",
+        "approved",
+        "rejected",
+        "error",
+    ] = "not_required"
+    fallback_reason: str | None = Field(default=None, max_length=120)
 
 
 class SessionEnvelope(BaseModel):

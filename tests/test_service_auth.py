@@ -26,3 +26,14 @@ def test_service_key_rejects_a_different_backend_key() -> None:
         require_service_key(request_with_key("shared-secret"), "different-secret")
 
     assert raised.value.status_code == 401
+
+
+def test_production_runtime_does_not_require_a_legacy_encryption_key() -> None:
+    settings = Settings(
+        environment="production",
+        database_url="postgresql+asyncpg://user:password@database:5432/mormi",
+        service_api_key="shared-secret",
+        raw_data_encryption_key=None,
+    )
+
+    settings.validate_runtime_safety()

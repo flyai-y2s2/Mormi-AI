@@ -476,7 +476,7 @@ async def seed_completed_conversation(
                 },
                 response_id=f"response_{learner_id}",
                 response_type="text",
-                response_raw_encrypted=repository.cipher.encrypt(response_text),
+                response_raw_encrypted=repository.text_codec.store(response_text),
                 response_category="correct_full",
                 expression_level="L2",
                 hint_level="H1",
