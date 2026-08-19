@@ -48,6 +48,7 @@ from .schemas import (
     SessionState,
     SessionStatus,
     SkillProfile,
+    SlotClaim,
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
@@ -70,6 +71,21 @@ from .security import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_INFIX_ARITHMETIC = re.compile(
+    r"(?P<left>\d[\d,]*)\s*(?:원)?\s*"
+    r"(?P<operator>\+|-|더하기|플러스|빼기|마이너스)\s*"
+    r"(?P<right>\d[\d,]*)\s*(?:원)?\s*"
+    r"(?:=|은|는|이|가|이면|이라면|해서|하면)?\s*"
+    r"(?P<result>\d[\d,]*)"
+)
+_KOREAN_ARITHMETIC = re.compile(
+    r"(?P<left>\d[\d,]*)\s*(?:원)?\s*(?:에|에서)\s*"
+    r"(?P<right>\d[\d,]*)\s*(?:원)?\s*(?:을|를)?\s*"
+    r"(?P<operator>더하면|더해서|빼면|빼서|더했더니|뺐더니)\s*"
+    r"(?P<result>\d[\d,]*)"
+)
 
 
 @dataclass(frozen=True)
@@ -627,6 +643,8 @@ class ConversationEngine:
         # the reviewed slot contracts first, so an inconsistent model label
         # cannot turn a complete answer into ``correct_partial`` or block a
         # valid answer from advancing the session.
+        if response.type is ResponseType.TEXT and response.text:
+            self._ground_text_numeric_claims(task, response.text, analysis)
         grounded_claims = task.validated_slot_claims(analysis.claims)
         if response.type is ResponseType.TEXT and response.text:
             grounded_claims = self._filter_text_explanation_claims(
@@ -1055,6 +1073,12 @@ class ConversationEngine:
         accepted_slots = set(accepted_claims)
         accepted_targets = target_slots.intersection(accepted_slots)
         accepted_optional = set(step.optional_slots).intersection(accepted_slots)
+        rejected_target_claim = any(
+            claim.slot_id in target_slots
+            and task.slots[claim.slot_id].accepted_claim_value(claim) is None
+            for claim in analysis.claims
+            if claim.slot_id in task.slots
+        )
 
         if target_slots and target_slots.issubset(accepted_slots):
             analysis.response_category = (
@@ -1072,17 +1096,19 @@ class ConversationEngine:
             # A response can contain a verified part and a conflicting part.
             # Keep concept difficulty for analytics while still preserving and
             # acknowledging the part the child genuinely supplied.
-            if analysis.difficulty_class not in {DifficultyClass.CONCEPT, DifficultyClass.BOTH}:
+            if rejected_target_claim:
+                analysis.difficulty_class = DifficultyClass.CONCEPT
+                analysis.bottleneck = "concept"
+                if analysis.misconception_tag is None and task.misconception_tags:
+                    analysis.misconception_tag = task.misconception_tags[0]
+            elif analysis.difficulty_class not in {
+                DifficultyClass.CONCEPT,
+                DifficultyClass.BOTH,
+            }:
                 analysis.difficulty_class = DifficultyClass.UNKNOWN
                 analysis.bottleneck = "unknown"
             return
 
-        rejected_target_claim = any(
-            claim.slot_id in target_slots
-            and task.slots[claim.slot_id].accepted_claim_value(claim) is None
-            for claim in analysis.claims
-            if claim.slot_id in task.slots
-        )
         if rejected_target_claim:
             analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
             analysis.difficulty_class = DifficultyClass.CONCEPT
@@ -2091,6 +2117,90 @@ class ConversationEngine:
             return None
         return span
 
+    @staticmethod
+    def _claim_numeric_value(claim: SlotClaim) -> int | None:
+        """Return one normalized integer that the classifier says the child claimed."""
+
+        if isinstance(claim.value, bool) or claim.value is None:
+            return None
+        if isinstance(claim.value, int):
+            return claim.value
+        if isinstance(claim.value, float):
+            return int(claim.value) if claim.value.is_integer() else None
+        values = extract_numeric_values(str(claim.value))
+        if len(values) != 1:
+            return None
+        return int(next(iter(values)))
+
+    @classmethod
+    def _ground_text_numeric_claims(
+        cls,
+        task: TaskDefinition,
+        child_text: str,
+        analysis: UtteranceAnalysis,
+    ) -> None:
+        """Bind numeric claims to the child's evidence before correctness checks.
+
+        The classifier interprets Korean wording and common typos, but it may
+        never replace the child's wrong number with the reviewed answer.  Clear
+        numbers are checked deterministically.  Only an exact, otherwise
+        unparseable evidence span can use a high-confidence model
+        interpretation, which preserves support for forms such as a typo in a
+        Korean number word without trusting model-authored arithmetic.
+        """
+
+        for claim in analysis.claims:
+            slot = task.slots.get(claim.slot_id)
+            if (
+                slot is None
+                or slot.is_semantic_support
+                or isinstance(slot.expected, bool)
+                or not isinstance(slot.expected, (int, float))
+            ):
+                continue
+
+            evidence = cls._exact_child_evidence_text(child_text, claim.evidence_span)
+            claimed_value = cls._claim_numeric_value(claim)
+            if evidence is None or claimed_value is None:
+                claim.factual = False
+                continue
+
+            evidence_values = {int(value) for value in extract_numeric_values(evidence)}
+            if evidence_values:
+                # The normalized claim must be one of the quantities the child
+                # actually said.  This blocks expected=1700/evidence=1800 even
+                # if the model incorrectly reports value=1700.
+                if claimed_value not in evidence_values:
+                    claim.factual = False
+                continue
+
+            # Reviewed aliases such as "셋" are deterministic evidence even
+            # when the general Korean-number parser intentionally stays narrow.
+            if slot.accepts(evidence) and slot.accepts(claimed_value):
+                continue
+
+            if (claim.interpretation_confidence or 0) < 0.85:
+                claim.factual = False
+
+    @staticmethod
+    def _has_false_explicit_arithmetic(text: str) -> bool:
+        """Detect clear, locally checkable false addition/subtraction claims."""
+
+        for pattern in (_INFIX_ARITHMETIC, _KOREAN_ARITHMETIC):
+            for match in pattern.finditer(text.replace(" ", "")):
+                left = int(match.group("left").replace(",", ""))
+                right = int(match.group("right").replace(",", ""))
+                result = int(match.group("result").replace(",", ""))
+                operator = match.group("operator")
+                expected = (
+                    left + right
+                    if operator in {"+", "더하기", "플러스", "더하면", "더해서", "더했더니"}
+                    else left - right
+                )
+                if result != expected:
+                    return True
+        return False
+
     @classmethod
     def _filter_text_explanation_claims(
         cls,
@@ -2111,30 +2221,27 @@ class ConversationEngine:
         for slot_id in task.semantic_support_slots | set(task.text_explanation_slots):
             if slot_id not in filtered:
                 continue
-            supported = any(
-                claim.factual
-                and claim.slot_id == slot_id
-                and (
-                    (
-                        claim.supported is True
-                        and cls._exact_child_evidence_text(
-                            child_text,
-                            claim.evidence_span,
-                        )
-                    )
-                    # Compatibility for deterministic responses and old test
-                    # fixtures that predate the semantic-support contract.
-                    or (
-                        claim.supported is None
-                        and cls._claim_evidence_text(
-                            task,
-                            child_text,
-                            claim.evidence_span,
-                        )
-                    )
-                )
-                for claim in analysis.claims
-            )
+            supported = False
+            for claim in analysis.claims:
+                if not claim.factual or claim.slot_id != slot_id:
+                    continue
+                evidence = cls._exact_child_evidence_text(child_text, claim.evidence_span)
+                if evidence is not None and cls._has_false_explicit_arithmetic(evidence):
+                    claim.factual = False
+                    claim.supported = False
+                    continue
+                if claim.supported is True and evidence is not None:
+                    supported = True
+                    break
+                # Compatibility for deterministic responses and old test
+                # fixtures that predate the semantic-support contract.
+                if claim.supported is None and cls._claim_evidence_text(
+                    task,
+                    child_text,
+                    claim.evidence_span,
+                ):
+                    supported = True
+                    break
             if not supported:
                 filtered.pop(slot_id, None)
         return filtered
