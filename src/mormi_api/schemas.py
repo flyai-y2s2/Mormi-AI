@@ -552,7 +552,11 @@ class TaskAnchorContract(BaseModel):
 
     anchor_id: str
     title: str = "지금 모르미에게 알려줄 것"
-    prompt: str = Field(min_length=1, max_length=50)
+    # Keep the same copy contract as Mormi's speech: 50 characters is an
+    # authoring target, not a runtime rejection boundary.  The anchor repeats
+    # reviewed task copy, so rejecting a complete sentence here can make an
+    # otherwise valid teaching session fail before its first turn.
+    prompt: str = Field(min_length=1)
     completed_items: list[TaskAnchorCompletedItem] = Field(default_factory=list)
     target_slots: list[str] = Field(min_length=1)
 

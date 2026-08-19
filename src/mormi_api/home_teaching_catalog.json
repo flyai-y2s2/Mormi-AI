@@ -160,7 +160,7 @@
     },
     "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 어느 쪽이 더 많은지랑 두 수를 어떻게 보는지 헷갈려... 알려줄 수 있어?",
+    "l4_prompt": "나 왼쪽과 오른쪽 중에 더 많은 쪽이 어디인지 모르겠어... 어디가 더 많은지랑, 왜 그런건지 알려줄 수 있어?",
     "help_method_policy": "open_methods",
     "accepted_methods": [
       "왼쪽은 3개고 오른쪽은 5개라서 오른쪽이 더 많아",
@@ -186,7 +186,7 @@
       "빼서",
       "가려서"
     ],
-    "short_prompt": "500원과 100원을 모두 세려면 어떻게 할까?",
+    "short_prompt": "500원과 100원을 모은 값을 구하려면 어떻게 하면 돼?",
     "short_correct": "각 돈에 적힌 금액을 더하기",
     "short_options": [
       "각 돈에 적힌 금액을 더하기",
@@ -244,7 +244,7 @@
     },
     "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 모두 얼마인지랑 돈을 어떻게 더하는지 헷갈려. 알려줄 수 있어?",
+    "l4_prompt": "나 전체 금액이 얼마인지랑, 그걸 어떻게 구하는 건지 잘 모르겠어... 알려줄 수 있어?",
     "help_method_policy": "open_methods",
     "accepted_methods": [
       "돈에 적힌 금액을 모두 더하면 전체 금액을 알 수 있어!"
@@ -270,7 +270,7 @@
       "채운 칸",
       "전체 칸"
     ],
-    "short_prompt": "6과 몇을 모으면 10인지 어떻게 찾을까?",
+    "short_prompt": "6과 합했을 때 10이 되는 수는 어떻게 찾을까?",
     "short_correct": "10칸에서 빈칸 수를 세기",
     "short_options": [
       "10칸에서 빈칸 수를 세기",
@@ -325,10 +325,11 @@
     },
     "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 6이랑 몇을 모아야 10이 되는지 헷갈려... 어떻게 찾으면 돼?",
+    "l4_prompt": "나 6이랑 몇을 더해야 10이 되는지 헷갈려... 어떻게 찾으면 돼?",
     "help_method_policy": "target_method",
     "accepted_methods": [
       "10칸에서 빈칸 수를 세기",
+      "10에서 채운 칸의 수를 빼기",
       "10칸에서 채운 칸과 빈칸을 함께 보면 10을 만들 수 있어!"
     ]
   },
@@ -352,7 +353,7 @@
       "3을",
       "300을"
     ],
-    "short_prompt": "34에서 십의 자리 숫자 3은 얼마를 나타낼까?",
+    "short_prompt": "34에서 숫자 3은 얼마를 나타내는 거야?",
     "short_correct": "30을 나타내",
     "short_options": [
       "30을 나타내",
@@ -418,7 +419,7 @@
     },
     "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 34에서 십의 자리 숫자 3이 얼마인지 헷갈려... 알려줄 수 있어?",
+    "l4_prompt": "나 34에서 숫자 3이 얼마를 나타내는 건지 헷갈려... 알려줄 수 있어?",
     "help_method_policy": "target_method",
     "accepted_methods": [
       "34의 십의 자리 숫자 3은 30을 나타내기",
@@ -517,7 +518,7 @@
     "subject": "money",
     "unit": "돈 계산",
     "title": "물건값을 더해요",
-    "learned_line": "두 물건을 사면 두 물건의 가격을 더해!",
+    "learned_line": "두 물건을 사고 계산할때는 두 물건의 가격을 더해!",
     "note_context": "700원과 500원의 전체 가격을 구하는 방법",
     "fill_before": "두 물건을 사면 두 물건의 가격을",
     "fill_after": "",
@@ -527,7 +528,7 @@
       "빼",
       "그대로 둬"
     ],
-    "short_prompt": "700원과 500원을 함께 내려면 어떻게 계산할까?",
+    "short_prompt": "700원짜리 주스랑 500원짜리 빵을 함께 살 때 필요한 돈은 어떻게 계산해야해?",
     "short_correct": "700원과 500원을 더하기",
     "short_options": [
       "700원과 500원을 더하기",
@@ -589,7 +590,7 @@
     },
     "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 모두 얼마인지랑 돈을 어떻게 더하는지 헷갈려. 알려줄 수 있어?",
+    "l4_prompt": "나 주스랑 빵을 사려면 총 얼마를 내야하는지랑, 그걸 어떻게 계산해야 하는지 잘 모르겠어... 알려줄 수 있어?",
     "help_method_policy": "open_methods",
     "accepted_methods": [
       "두 물건을 사면 두 물건의 가격을 더해!"
@@ -615,7 +616,7 @@
       "1",
       "12"
     ],
-    "short_prompt": "12와 5를 세로로 놓을 때 5는 어디에 둘까?",
+    "short_prompt": "12와 5를 세로로 놓을 때 5는 어디에 두어야 해?",
     "short_correct": "12의 2 아래에 놓기",
     "short_options": [
       "12의 2 아래에 놓기",
@@ -782,7 +783,7 @@
       "모든",
       "처음"
     ],
-    "short_prompt": "5개에서 2개를 빼고 답을 찾으려면 무엇을 셀까?",
+    "short_prompt": "5개에서 2개를 뺐을 때 남은 개수를 찾으려면 무엇을 세야 해?",
     "short_correct": "남아 있는 3개를 세기",
     "short_options": [
       "남아 있는 3개를 세기",
@@ -839,7 +840,7 @@
     },
     "content_version": 7,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 몇 개가 남는지랑 어떻게 세야 하는지 헷갈려. 알려줄 수 있어?",
+    "l4_prompt": "나 몇 개가 남는지랑, 그걸 어떻게 세야 하는지 헷갈려. 알려줄 수 있어?",
     "help_method_policy": "open_methods",
     "accepted_methods": [
       "뺄셈은 덜어 내고 남은 수를 찾는 거야!"
@@ -854,7 +855,7 @@
     "subject": "money",
     "unit": "돈 계산",
     "title": "내 돈으로 살 수 있어요",
-    "learned_line": "남는 돈은 낸 돈에서 물건값을 빼!",
+    "learned_line": "남는 돈을 구할 때는 낸 돈에서 물건값을 빼!",
     "note_context": "2,000원에서 1,800원을 쓰고 남은 돈을 구하는 방법",
     "fill_before": "남는 돈은 낸 돈에서 물건값을",
     "fill_after": "",
@@ -864,7 +865,7 @@
       "더해",
       "두 번 세어"
     ],
-    "short_prompt": "2,000원을 내고 1,800원어치를 사면 어떤 계산을 할까?",
+    "short_prompt": "2,000원을 내고 1,800원어치를 샀을 때 남은 돈은 어떻게 구하는거야?",
     "short_correct": "2,000원에서 1,800원 빼기",
     "short_options": [
       "2,000원에서 1,800원 빼기",
@@ -925,7 +926,7 @@
     },
     "content_version": 7,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 얼마가 남는지랑 어떻게 계산하는지 헷갈려. 알려줄 수 있어?",
+    "l4_prompt": "나 이렇게 샀을 때 얼마가 남는지랑, 그걸 어떻게 계산하는지 헷갈려... 알려줄 수 있어?",
     "help_method_policy": "open_methods",
     "accepted_methods": [
       "남는 돈은 낸 돈에서 물건값을 빼!"
@@ -1092,7 +1093,7 @@
     },
     "content_version": 8,
     "entry_mode": "incomplete_attempt",
-    "l4_prompt": "나 12에서 5를 빼려는데 2에서 5를 못 빼겠어... 어떻게 하면 돼?",
+    "l4_prompt": "나 12에서 5를 빼려는데 2에서는 5를 못 빼잖아... 이럴 때는 어떻게 하면 돼?",
     "help_method_policy": "target_method",
     "accepted_methods": [
       "십의 자리에서 1을 가져와 낱개 10개로 바꾸기",
@@ -1287,7 +1288,7 @@
       "가리고",
       "두 번 빼고"
     ],
-    "short_prompt": "두 물건을 사고 남은 돈을 어떤 순서로 계산할까?",
+    "short_prompt": "두 물건을 사고 남은 돈을 구하려면 어떤 순서로 계산해야 해?",
     "short_correct": "1,200+800을 먼저 하고 5,000에서 빼기",
     "short_options": [
       "1,200+800을 먼저 하고 5,000에서 빼기",

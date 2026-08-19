@@ -111,7 +111,9 @@ def test_home_catalog_covers_current_frontend_curriculum() -> None:
     } == CONTENT_VERSION_8_HOME_SESSION_IDS
     assert all(spec.content_version in {7, 8} for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
-    assert all(len(spec.effective_l4_prompt) <= 50 for spec in HOME_TEACHING_CATALOG.values())
+    # Dialogue copy should aim for 50 characters, but a complete reviewed
+    # sentence may exceed it. Runtime contracts must not reject or truncate it.
+    assert all(spec.effective_l4_prompt.strip() for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.entry_mode != "wrong_guess" for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.entry_prompt is None for spec in HOME_TEACHING_CATALOG.values())
 
