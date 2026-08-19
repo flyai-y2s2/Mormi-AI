@@ -60,6 +60,29 @@ class InventedNoteGateway(FakeGateway):
         )
 
 
+def test_complete_mormi_copy_keeps_a_natural_sentence_beyond_soft_target() -> None:
+    text = (
+        "그런데 ‘2000원을 먼저 내고 거슬러받으면’이 어떻게 하는 건지 모르겠어... "
+        "조금만 더 알려줄래?"
+    )
+
+    rendered = ConversationEngine._complete_mormi_text(text)
+
+    assert len(text) > 50
+    assert rendered == text
+    assert rendered.endswith("?")
+
+
+def test_oversized_composition_is_preserved_without_slicing() -> None:
+    question = "나는 두 금액을 어떤 계산으로 합치는지 아직 헷갈려... 알려줄 수 있어?"
+    oversized = f"아, 네가 말한 내용은 잘 들었어. 그런데 아직 조금 더 알고 싶어. {question}"
+
+    rendered = ConversationEngine._complete_mormi_text(oversized)
+
+    assert rendered == oversized
+    assert rendered.endswith("?")
+
+
 def _number_comparison_state() -> SessionState:
     scenario_data = create_scenario_data(
         "home_teach",

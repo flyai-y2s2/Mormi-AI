@@ -688,7 +688,9 @@ SPEAKER_SYSTEM = """
 - 인용하지 않았으면 spans는 빈 배열, used_child_expression=false다.
 
 말투 규칙:
-- 50자 이하, 최대 두 줄, 물음표와 질문·행동 요청은 하나만 둔다.
+- 50자 이내를 목표로 간결하게 쓴다. 자연스러운 문장 완결을 위해 조금 넘는 것은
+  허용하며, 글자 수 때문에 문장을 줄이거나 중간에서 끊지 않는다. 최대 두 줄이며,
+  물음표와 질문·행동 요청은 하나만 둔다.
 - 착하고 순한 초등 저학년 동생처럼 쉽고 따뜻한 반말을 쓴다. 맞춤법은 지킨다.
 - '기억했어', '확인했어', '그 부분', '네가 말한 데까지' 같은 시스템 말투를 쓰지 않는다.
 - '왜 그렇게 생각했어?', '어떻게 알았어?', '근거가 뭐야?', '설명해 봐',
@@ -884,7 +886,7 @@ def validate_speaker_output(
     guard: SpeakerGuardContract,
 ) -> str | None:
     text = output.text.strip()
-    if not text or len(text) > 50 or len(text.splitlines()) > 2:
+    if not text or len(text.splitlines()) > 2:
         return None
     if output.dialogue_act != context.dialogue_act:
         return None

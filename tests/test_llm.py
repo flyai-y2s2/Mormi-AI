@@ -178,6 +178,35 @@ def speaker_output(text: str, context: SpeakerContext) -> SpeakerOutput:
     )
 
 
+def test_speaker_accepts_complete_sentence_over_soft_target() -> None:
+    text = (
+        "그런데 ‘2000원을 먼저 내고 거슬러받으면’이 어떻게 하는 건지 모르겠어... "
+        "조금만 더 알려줄래?"
+    )
+    context = SpeakerContext(
+        dialogue_act="clarify_child_expression",
+        required_question=text,
+        required_slot_ids=["method"],
+        required_slot_descriptions={"method": "거스름돈을 구하는 방법"},
+        allowed_numbers=["2000"],
+        fallback_text=text,
+    )
+
+    assert len(text) > 50
+    assert validate_speaker_output(speaker_output(text, context), context, speaker_guard()) == text
+
+    longer_complete_text = f"아, 아직 조금 헷갈려. {text}"
+    assert len(longer_complete_text) > 60
+    assert (
+        validate_speaker_output(
+            speaker_output(longer_complete_text, context),
+            context,
+            speaker_guard(),
+        )
+        == longer_complete_text
+    )
+
+
 def speaker_guard() -> SpeakerGuardContract:
     return SpeakerGuardContract()
 

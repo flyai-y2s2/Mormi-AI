@@ -1602,3 +1602,21 @@ async def test_inline_home_practice_starts_full_turn_and_retries_keep_first_snap
     assert stored.curriculum_session_id == "money-count"
     assert stored.skill_id == "money_count"
     await database.dispose()
+def test_home_teaching_dialogue_copy_may_exceed_fifty_characters() -> None:
+    current = HOME_TEACHING_CATALOG["number-count"].model_dump(mode="json")
+    l4_question = (
+        "나는 가끔 점을 세다가 어디까지 셌는지 헷갈릴 때가 있어... "
+        "혹시 네가 세는 방법을 조금 더 자세히 알려줄 수 있어?"
+    )
+    short_question = (
+        "한꺼번에 물어봐서 미안해... 세는 방법은 그다음에 물어볼게. "
+        "색칠된 점이 몇 개인지만 먼저 짧게 알려주면 안 될까?"
+    )
+    current["l4_prompt"] = l4_question
+    current["short_prompt"] = short_question
+
+    spec = HomeTeachingSpec.model_validate(current)
+
+    assert all(len(text) > 50 for text in (l4_question, short_question))
+    assert spec.l4_prompt == l4_question
+    assert spec.short_prompt == short_question

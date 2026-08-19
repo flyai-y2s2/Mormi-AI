@@ -263,12 +263,13 @@ class SlotDefinition(BaseModel):
 
 class StepDefinition(BaseModel):
     id: str
-    prompt: str = Field(max_length=50)
+    # Dialogue copy targets 50 characters, but complete reviewed sentences may exceed it.
+    prompt: str = Field(min_length=1)
     target_slots: list[str]
     optional_slots: list[str] = Field(default_factory=list)
     input: InputContract
     choice_effects: dict[str, dict[str, str | int | float | bool]] = Field(default_factory=dict)
-    fallback_text: str = Field(max_length=50)
+    fallback_text: str = Field(min_length=1)
 
 
 class HelpPlanStep(BaseModel):
@@ -644,16 +645,16 @@ class HomeTeachingSpec(BaseModel):
     entry_mode: Literal["wrong_guess", "incomplete_attempt", "genuine_question"] = (
         "genuine_question"
     )
-    entry_prompt: str | None = Field(default=None, max_length=50)
-    l4_prompt: str | None = Field(default=None, max_length=50)
-    misconception_prompt: str | None = Field(default=None, max_length=50)
+    entry_prompt: str | None = Field(default=None, min_length=1)
+    l4_prompt: str | None = Field(default=None, min_length=1)
+    misconception_prompt: str | None = Field(default=None, min_length=1)
     learned_line: str = Field(max_length=120)
     note_context: str = Field(min_length=1, max_length=80)
     fill_before: str
     fill_after: str
     fill_correct: str
     fill_options: list[str] = Field(min_length=2, max_length=6)
-    short_prompt: str = Field(max_length=50)
+    short_prompt: str = Field(min_length=1)
     short_correct: str
     short_options: list[str] = Field(min_length=2, max_length=6)
     help_plan: HomeHelpPlan

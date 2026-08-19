@@ -479,7 +479,9 @@ class VisualContract(BaseModel):
 
 
 class MormiContract(BaseModel):
-    text: str = Field(max_length=50)
+    # 50 characters is an authoring target, not a runtime rejection boundary.
+    # A complete sentence is safer and more natural than truncated child-facing copy.
+    text: str = Field(min_length=1)
     mood: Literal["curious", "listening", "thinking", "relieved", "celebrating"]
     max_lines: Literal[1, 2] = 2
 

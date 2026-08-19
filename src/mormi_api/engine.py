@@ -1225,7 +1225,7 @@ class ConversationEngine:
             CompletionOutcome.TAUGHT if state.all_tasks_direct else CompletionOutcome.SUPPORTED
         )
         state.teach_reward_eligible = True
-        fallback = self._fit_50("네가 알려준 방법으로 내가 끝까지 해냈어!")
+        fallback = self._complete_mormi_text("네가 알려준 방법으로 내가 끝까지 해냈어!")
         return PedagogicalDecision(
             state=state,
             dialogue_act="session_complete",
@@ -1289,7 +1289,7 @@ class ConversationEngine:
             verified_facts=verified_facts,
             analysis=analysis,
             child_text=child_text,
-            fallback=self._fit_50(fallback),
+            fallback=self._complete_mormi_text(fallback),
             support_trigger=support_trigger,
             help_card_event=help_card_event,
             must_reframe=must_reframe,
@@ -1643,7 +1643,7 @@ class ConversationEngine:
             task_id=task.id,
             stage_id=task.stage_id,
             task_index=state.task_index,
-            mormi=MormiContract(text=self._fit_50(text), mood=mood),  # type: ignore[arg-type]
+            mormi=MormiContract(text=self._complete_mormi_text(text), mood=mood),  # type: ignore[arg-type]
             input=input_contract,
             visual=visual,
             help_card=help_card,
@@ -1887,12 +1887,14 @@ class ConversationEngine:
         if trigger is SupportTrigger.RELATED_VAGUE:
             if event is HelpCardEvent.NONE:
                 if grounding:
-                    return cls._fit_50(
+                    return cls._complete_mormi_text(
                         f"그런데 ‘{grounding}’가 어떻게 하는 건지 모르겠어... 조금만 더 알려줄래?"
                     )
                 return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
             if grounding:
-                return cls._fit_50(f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?")
+                return cls._complete_mormi_text(
+                    f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?"
+                )
             return "카드에 도움이 나왔어. 이걸 보고 조금 더 알려줄래?"
         if trigger is SupportTrigger.EXPLICIT_HELP_REQUEST:
             if event is HelpCardEvent.OPENED:
@@ -1905,7 +1907,7 @@ class ConversationEngine:
             SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT,
         }:
             if grounding:
-                return cls._fit_50(
+                return cls._complete_mormi_text(
                     f"‘{grounding}’라는 거야? 나는 아직 헷갈려... 카드를 보고 다시 알려줄래?"
                 )
             if event is HelpCardEvent.STRENGTHENED:
@@ -1981,7 +1983,7 @@ class ConversationEngine:
         ):
             if "answer" in newly_verified:
                 acknowledgement = "아, 세 개구나!"
-            return ConversationEngine._fit_50(f"{acknowledgement} {step.prompt}")
+            return ConversationEngine._preface_question(acknowledgement, step.prompt)
         return ConversationEngine._preface_question(acknowledgement, step.prompt)
 
     @staticmethod
@@ -2004,7 +2006,7 @@ class ConversationEngine:
         normalized_fallback = re.sub(r"\s+", "", fallback)
         normalized_question = re.sub(r"\s+", "", question)
         if normalized_question in normalized_fallback:
-            return ConversationEngine._fit_50(fallback)
+            return ConversationEngine._complete_mormi_text(fallback)
         return ConversationEngine._preface_question(fallback, question)
 
     @staticmethod
@@ -2016,7 +2018,7 @@ class ConversationEngine:
             return ConversationEngine._preface_question("말로만 들으려니 헷갈려.", step.prompt)
         if state.expression_level is ExpressionLevel.L1:
             return ConversationEngine._preface_question("어디부터 볼지 몰랐네.", step.prompt)
-        return ConversationEngine._fit_50("도움 카드 순서대로 나와 같이 해볼까?")
+        return ConversationEngine._complete_mormi_text("도움 카드 순서대로 나와 같이 해볼까?")
 
     @staticmethod
     def _success_then_question(fact: str, question: str) -> str:
@@ -2029,14 +2031,18 @@ class ConversationEngine:
         return str(response.values)
 
     @staticmethod
-    def _fit_50(text: str) -> str:
-        normalized = re.sub(r"\s+", " ", text).strip()
-        return normalized if len(normalized) <= 50 else normalized[:49].rstrip() + "…"
+    def _complete_mormi_text(text: str) -> str:
+        """Normalize child-facing copy without imposing a character limit.
+
+        The speaker is prompted to target 50 characters, but runtime code must
+        never reject or slice an otherwise valid complete sentence by length.
+        """
+
+        return re.sub(r"\s+", " ", text).strip()
 
     @staticmethod
     def _preface_question(preface: str, question: str) -> str:
-        combined = re.sub(r"\s+", " ", f"{preface} {question}").strip()
-        return combined if len(combined) <= 50 else ConversationEngine._fit_50(question)
+        return ConversationEngine._complete_mormi_text(f"{preface} {question}")
 
     @staticmethod
     def _safe_child_note_text(
