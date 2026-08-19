@@ -79,8 +79,42 @@
 }
 ```
 
-Spring 수신 API가 확정되기 전까지 이벤트는 `pending`으로 남는다. 전송기는
-`event_id`를 멱등 키로 사용해야 하며, 수신 API 작업 없이 임의의 URL로 보내지 않는다.
+AI 프로세스의 백그라운드 전송기는 대화 응답 경로와 분리되어 `pending` 또는 재시도
+시각이 지난 `retry` 이벤트를 Spring으로 전달한다.
+
+```text
+POST {MORMI_OBSERVATION_INGEST_URL}
+X-Mormi-Service-Key: {MORMI_OBSERVATION_INGEST_KEY}
+```
+
+```json
+{
+  "event_id": "event_...",
+  "schema_version": 1,
+  "event_type": "dialogue_observation",
+  "observation": { "observation_id": "observation_..." }
+}
+```
+
+`event_id`가 멱등 키이므로 응답 유실 뒤 같은 이벤트를 다시 보내도 안전하다. 상태 전이는
+다음과 같다.
+
+| 결과 | Outbox 처리 |
+|---|---|
+| `200` (`duplicate: true` 포함) | `sent`, 전달 시각 기록 |
+| `409 unknown_conversation` | 지수 백오프 뒤 `retry` |
+| `429`, `5xx`, timeout·network error | 지수 백오프 뒤 `retry` |
+| `422` 및 재시도로 해결되지 않는 `4xx` | `failed`, 자동 재시도 중단 |
+| `401`/`403` | 현재 이벤트를 `retry`로 돌리고 worker 중단; 설정 수정 후 재시작 |
+
+여러 AI 인스턴스가 동시에 떠도 `FOR UPDATE SKIP LOCKED`로 이벤트를 한 worker만
+가져간다. `processing` 상태의 `available_at`은 lease 만료 시각이며, worker가 전송 중
+죽으면 다른 worker가 만료 이벤트를 다시 회수한다. attempt 번호를 세대 토큰으로 검사해
+늦게 돌아온 이전 worker가 새 처리 결과를 덮어쓰지 못하게 한다.
+
+전송 로그에는 이벤트 ID, attempt, 상태, 안전한 오류 코드만 남기며 서비스 키, 아이 원문,
+전체 payload는 기록하지 않는다. `MORMI_OBSERVATION_INGEST_URL`과
+`MORMI_OBSERVATION_INGEST_KEY`가 모두 설정된 경우에만 worker가 시작된다.
 
 ## 기존 데이터 보존과 마이그레이션
 
