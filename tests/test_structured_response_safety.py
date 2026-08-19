@@ -29,6 +29,8 @@ from mormi_api.schemas import (
     ResponseType,
     SafetyCategory,
     SceneType,
+    SemanticEvidenceKind,
+    SemanticVerdict,
     SessionCreate,
     SessionState,
     SkillProfile,
@@ -145,8 +147,8 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
 
 
 @pytest.mark.asyncio
-async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> None:
-    """The orchestrator requires both a success verdict and canonical facts."""
+async def test_error_label_without_a_contradictory_claim_cannot_complete_or_diagnose() -> None:
+    """A top-level model label alone is neither success nor misconception evidence."""
 
     contradictory_analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
@@ -178,7 +180,8 @@ async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> Non
         initial.mormi.text,
     )
 
-    assert analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
+    assert analysis.response_category is ResponseCategory.RELATED_VAGUE
+    assert analysis.difficulty_class is DifficultyClass.UNKNOWN
     assert "reason" not in next_state.verified_slots
     assert next_state.status.value == "active"
     assert turn.note_update is None
@@ -1180,6 +1183,17 @@ async def test_concept_conflict_uses_safe_grounding_without_evaluating_child() -
         safety_category=SafetyCategory.NORMAL,
         response_category=ResponseCategory.CONCEPTUAL_ERROR,
         difficulty_class=DifficultyClass.CONCEPT,
+        claims=[
+            SlotClaim(
+                slot_id="tracking",
+                factual=False,
+                evidence_span="빈칸도 같이 세면 돼",
+                supported=False,
+                semantic_verdict=SemanticVerdict.CONTRADICTS,
+                evidence_kind=SemanticEvidenceKind.PROCEDURE,
+                resolved_meaning="색칠되지 않은 빈칸까지 세는 방법",
+            )
+        ],
         grounding_span="빈칸도 같이 세면 돼",
         confidence=1,
     )

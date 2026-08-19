@@ -19,6 +19,7 @@ from .llm import (
     validate_speaker_verification,
 )
 from .schemas import (
+    MORMI_TEXT_HARD_MAX,
     CafeMenuItem,
     ChildResponse,
     CompletionContract,
@@ -33,6 +34,7 @@ from .schemas import (
     InputContract,
     InputKind,
     InteractionIntent,
+    InterpretationBasis,
     LearnerProfile,
     MormiContract,
     NoteAttribution,
@@ -45,6 +47,8 @@ from .schemas import (
     ResponseCategory,
     ResponseType,
     SafetyCategory,
+    SemanticEvidenceKind,
+    SemanticVerdict,
     SessionState,
     SessionStatus,
     SkillProfile,
@@ -86,6 +90,29 @@ _KOREAN_ARITHMETIC = re.compile(
     r"(?P<operator>더하면|더해서|빼면|빼서|더했더니|뺐더니)\s*"
     r"(?P<result>\d[\d,]*)"
 )
+_KOREAN_PAIR_ARITHMETIC = re.compile(
+    r"(?P<left>\d[\d,]*)\s*(?:원)?\s*(?:과|와|랑|하고)\s*"
+    r"(?P<right>\d[\d,]*)\s*(?:원)?\s*(?:을|를)?\s*"
+    r"(?P<operator>더하면|더해서|더했더니|빼면|빼서|뺐더니)\s*"
+    r"(?P<result>\d[\d,]*)"
+)
+_SEMANTIC_SUPPORT_MIN_CONFIDENCE = 0.72
+
+
+@dataclass(frozen=True)
+class ArithmeticRelation:
+    left: int
+    right: int
+    result: int
+    operation: Literal["addition", "subtraction"]
+    evidence: str
+
+    @property
+    def valid(self) -> bool:
+        expected = (
+            self.left + self.right if self.operation == "addition" else self.left - self.right
+        )
+        return self.result == expected
 
 
 @dataclass(frozen=True)
@@ -571,8 +598,7 @@ class ConversationEngine:
         if (
             social_grounding
             and analysis.interaction_intent is not InteractionIntent.NONE
-            and analysis.task_relation
-            in {TaskRelation.META_ABOUT_MORMI, TaskRelation.OFF_TOPIC}
+            and analysis.task_relation in {TaskRelation.META_ABOUT_MORMI, TaskRelation.OFF_TOPIC}
         ):
             next_state.unrelated_count += 1
             meta_turn = analysis.task_relation is TaskRelation.META_ABOUT_MORMI
@@ -580,9 +606,7 @@ class ConversationEngine:
                 next_state,
                 task,
                 dialogue_act=(
-                    "acknowledge_meta_and_reask"
-                    if meta_turn
-                    else "brief_ack_and_redirect"
+                    "acknowledge_meta_and_reask" if meta_turn else "brief_ack_and_redirect"
                 ),
                 fallback=self._social_bridge_fallback(
                     analysis.interaction_intent,
@@ -645,6 +669,18 @@ class ConversationEngine:
         # valid answer from advancing the session.
         if response.type is ResponseType.TEXT and response.text:
             self._ground_text_numeric_claims(task, response.text, analysis)
+            self._ground_true_explicit_arithmetic_support(
+                task,
+                response.text,
+                analysis,
+                target_slot_ids=set(interpreted_slots),
+            )
+            self._validate_semantic_claim_meanings(
+                task,
+                state.verified_slots,
+                response.text,
+                analysis,
+            )
         grounded_claims = task.validated_slot_claims(analysis.claims)
         if response.type is ResponseType.TEXT and response.text:
             grounded_claims = self._filter_text_explanation_claims(
@@ -1073,14 +1109,42 @@ class ConversationEngine:
         accepted_slots = set(accepted_claims)
         accepted_targets = target_slots.intersection(accepted_slots)
         accepted_optional = set(step.optional_slots).intersection(accepted_slots)
-        rejected_target_claim = any(
-            claim.slot_id in target_slots
-            and task.slots[claim.slot_id].accepted_claim_value(claim) is None
-            for claim in analysis.claims
-            if claim.slot_id in task.slots
-        )
+        contradicted_target_claim = False
+        incomplete_target_claim = False
+        for claim in analysis.claims:
+            if claim.slot_id not in target_slots or claim.slot_id not in task.slots:
+                continue
+            slot = task.slots[claim.slot_id]
+            if slot.accepted_claim_value(claim) is not None:
+                continue
+            if not slot.is_semantic_support:
+                contradicted_target_claim = True
+                continue
+            if claim.semantic_verdict is SemanticVerdict.CONTRADICTS:
+                contradicted_target_claim = True
+            elif claim.semantic_verdict in {
+                SemanticVerdict.INSUFFICIENT,
+                SemanticVerdict.UNRESOLVED,
+            }:
+                incomplete_target_claim = True
+            elif (
+                claim.semantic_verdict is SemanticVerdict.NOT_APPLICABLE
+                and analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
+            ):
+                # Compatibility for older classifier payloads that only used
+                # supported=false and relied on the top-level category.
+                contradicted_target_claim = True
+            else:
+                incomplete_target_claim = True
 
-        if target_slots and target_slots.issubset(accepted_slots):
+        if (
+            target_slots
+            and target_slots.issubset(accepted_slots)
+            and (
+                not contradicted_target_claim
+                or analysis.response_category is ResponseCategory.SELF_CORRECTION
+            )
+        ):
             analysis.response_category = (
                 ResponseCategory.SELF_CORRECTION
                 if analysis.response_category is ResponseCategory.SELF_CORRECTION
@@ -1096,25 +1160,33 @@ class ConversationEngine:
             # A response can contain a verified part and a conflicting part.
             # Keep concept difficulty for analytics while still preserving and
             # acknowledging the part the child genuinely supplied.
-            if rejected_target_claim:
+            if contradicted_target_claim:
                 analysis.difficulty_class = DifficultyClass.CONCEPT
                 analysis.bottleneck = "concept"
                 if analysis.misconception_tag is None and task.misconception_tags:
                     analysis.misconception_tag = task.misconception_tags[0]
-            elif analysis.difficulty_class not in {
-                DifficultyClass.CONCEPT,
-                DifficultyClass.BOTH,
-            }:
+            else:
+                # A missing or unresolved explanation is not evidence of a
+                # misconception.  The model's initial difficulty label cannot
+                # survive when the reviewed claims only show incompleteness.
                 analysis.difficulty_class = DifficultyClass.UNKNOWN
+                analysis.misconception_tag = None
                 analysis.bottleneck = "unknown"
             return
 
-        if rejected_target_claim:
+        if contradicted_target_claim:
             analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
             analysis.difficulty_class = DifficultyClass.CONCEPT
             analysis.bottleneck = "concept"
             if analysis.misconception_tag is None and task.misconception_tags:
                 analysis.misconception_tag = task.misconception_tags[0]
+            return
+
+        if incomplete_target_claim:
+            analysis.response_category = ResponseCategory.RELATED_VAGUE
+            analysis.difficulty_class = DifficultyClass.UNKNOWN
+            analysis.misconception_tag = None
+            analysis.bottleneck = "unknown"
             return
 
         # The child may naturally repeat an already verified fact while the
@@ -1124,6 +1196,25 @@ class ConversationEngine:
         # repeating the same open question forever.
         if grounded_claims:
             analysis.response_category = ResponseCategory.CORRECT_PARTIAL
+            analysis.difficulty_class = DifficultyClass.UNKNOWN
+            analysis.misconception_tag = None
+            analysis.bottleneck = "unknown"
+            return
+
+        if analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR:
+            # Concept errors require a reviewed contradictory claim.  A model
+            # label without claim-level evidence is merely unresolved and must
+            # not open a stronger hint or record a misconception.
+            analysis.response_category = ResponseCategory.RELATED_VAGUE
+            analysis.difficulty_class = DifficultyClass.UNKNOWN
+            analysis.misconception_tag = None
+            analysis.bottleneck = "unknown"
+            return
+
+        if analysis.response_category is ResponseCategory.CORRECT_PARTIAL:
+            # ``correct_partial`` without a claim is retained only as an
+            # on-topic conversational signal.  It cannot verify a slot or
+            # complete a task, and it must not carry a concept-error label.
             analysis.difficulty_class = DifficultyClass.UNKNOWN
             analysis.misconception_tag = None
             analysis.bottleneck = "unknown"
@@ -1220,7 +1311,7 @@ class ConversationEngine:
             CompletionOutcome.TAUGHT if state.all_tasks_direct else CompletionOutcome.SUPPORTED
         )
         state.teach_reward_eligible = True
-        fallback = self._fit_50("네가 알려준 방법으로 내가 끝까지 해냈어!")
+        fallback = self._complete_mormi_text("네가 알려준 방법으로 내가 끝까지 해냈어!")
         return PedagogicalDecision(
             state=state,
             dialogue_act="session_complete",
@@ -1284,7 +1375,7 @@ class ConversationEngine:
             verified_facts=verified_facts,
             analysis=analysis,
             child_text=child_text,
-            fallback=self._fit_50(fallback),
+            fallback=self._complete_mormi_text(fallback),
             support_trigger=support_trigger,
             help_card_event=help_card_event,
             must_reframe=must_reframe,
@@ -1616,7 +1707,7 @@ class ConversationEngine:
         input_contract: InputContract,
         visual: VisualContract,
         help_card: HelpCardContract | None,
-        mood: str,
+        mood: Literal["curious", "listening", "thinking", "relieved", "celebrating"],
         note: NoteUpdate | None = None,
     ) -> TurnContract:
         turn_id = state.current_turn_id or new_id("turn")
@@ -1638,7 +1729,10 @@ class ConversationEngine:
             task_id=task.id,
             stage_id=task.stage_id,
             task_index=state.task_index,
-            mormi=MormiContract(text=self._fit_50(text), mood=mood),  # type: ignore[arg-type]
+            mormi=MormiContract(
+                text=self._complete_mormi_text(text),
+                mood=mood,
+            ),
             input=input_contract,
             visual=visual,
             help_card=help_card,
@@ -1707,9 +1801,7 @@ class ConversationEngine:
                 state.expression_level,
                 state.verified_slots,
                 entry_active=(state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE),
-                targeted_followup=(
-                    state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
-                ),
+                targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
             )
         target_slots = [
             slot_id
@@ -1882,12 +1974,14 @@ class ConversationEngine:
         if trigger is SupportTrigger.RELATED_VAGUE:
             if event is HelpCardEvent.NONE:
                 if grounding:
-                    return cls._fit_50(
+                    return cls._complete_mormi_text(
                         f"그런데 ‘{grounding}’가 어떻게 하는 건지 모르겠어... 조금만 더 알려줄래?"
                     )
                 return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
             if grounding:
-                return cls._fit_50(f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?")
+                return cls._complete_mormi_text(
+                    f"‘{grounding}’가 아직 헷갈려... 카드도 보고 조금 더 알려줄래?"
+                )
             return "카드에 도움이 나왔어. 이걸 보고 조금 더 알려줄래?"
         if trigger is SupportTrigger.EXPLICIT_HELP_REQUEST:
             if event is HelpCardEvent.OPENED:
@@ -1900,7 +1994,7 @@ class ConversationEngine:
             SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT,
         }:
             if grounding:
-                return cls._fit_50(
+                return cls._complete_mormi_text(
                     f"‘{grounding}’라는 거야? 나는 아직 헷갈려... 카드를 보고 다시 알려줄래?"
                 )
             if event is HelpCardEvent.STRENGTHENED:
@@ -1976,7 +2070,7 @@ class ConversationEngine:
         ):
             if "answer" in newly_verified:
                 acknowledgement = "아, 세 개구나!"
-            return ConversationEngine._fit_50(f"{acknowledgement} {step.prompt}")
+            return ConversationEngine._preface_question(acknowledgement, step.prompt)
         return ConversationEngine._preface_question(acknowledgement, step.prompt)
 
     @staticmethod
@@ -1999,7 +2093,7 @@ class ConversationEngine:
         normalized_fallback = re.sub(r"\s+", "", fallback)
         normalized_question = re.sub(r"\s+", "", question)
         if normalized_question in normalized_fallback:
-            return ConversationEngine._fit_50(fallback)
+            return ConversationEngine._complete_mormi_text(fallback)
         return ConversationEngine._preface_question(fallback, question)
 
     @staticmethod
@@ -2011,7 +2105,7 @@ class ConversationEngine:
             return ConversationEngine._preface_question("말로만 들으려니 헷갈려.", step.prompt)
         if state.expression_level is ExpressionLevel.L1:
             return ConversationEngine._preface_question("어디부터 볼지 몰랐네.", step.prompt)
-        return ConversationEngine._fit_50("도움 카드 순서대로 나와 같이 해볼까?")
+        return ConversationEngine._complete_mormi_text("도움 카드 순서대로 나와 같이 해볼까?")
 
     @staticmethod
     def _success_then_question(fact: str, question: str) -> str:
@@ -2024,14 +2118,42 @@ class ConversationEngine:
         return str(response.values)
 
     @staticmethod
-    def _fit_50(text: str) -> str:
+    def _complete_mormi_text(text: str) -> str:
+        """Normalize copy without ever cutting through a Korean sentence.
+
+        Static prompts target 50 characters, while the turn contract allows a
+        small amount of headroom for a natural ending.  If an unexpected
+        deterministic composition still exceeds the hard UI limit, keep one
+        complete sentence (prefer the actual question) instead of slicing raw
+        characters and showing an unfinished utterance to a child.
+        """
+
         normalized = re.sub(r"\s+", " ", text).strip()
-        return normalized if len(normalized) <= 50 else normalized[:49].rstrip() + "…"
+        if len(normalized) <= MORMI_TEXT_HARD_MAX:
+            return normalized
+
+        # An ellipsis is hesitation inside a Korean utterance, not a sentence
+        # boundary.  Preserve the clause before ``...`` together with its
+        # question instead of reducing it to the final few words.
+        sentences = [
+            part.strip()
+            for part in re.split(r"(?<=[!?])\s+|(?<!\.)\.(?!\.)\s+", normalized)
+            if part.strip()
+        ]
+        for sentence in reversed(sentences):
+            if sentence.endswith("?") and len(sentence) <= MORMI_TEXT_HARD_MAX:
+                return sentence
+        for sentence in sentences:
+            if len(sentence) <= MORMI_TEXT_HARD_MAX:
+                return sentence
+        return "조금만 더 알려줄래?"
 
     @staticmethod
     def _preface_question(preface: str, question: str) -> str:
         combined = re.sub(r"\s+", " ", f"{preface} {question}").strip()
-        return combined if len(combined) <= 50 else ConversationEngine._fit_50(question)
+        if len(combined) <= MORMI_TEXT_HARD_MAX:
+            return combined
+        return ConversationEngine._complete_mormi_text(question)
 
     @staticmethod
     def _safe_child_note_text(
@@ -2183,23 +2305,258 @@ class ConversationEngine:
                 claim.factual = False
 
     @staticmethod
-    def _has_false_explicit_arithmetic(text: str) -> bool:
+    def _arithmetic_operation(operator: str) -> Literal["addition", "subtraction"]:
+        if operator in {
+            "+",
+            "더하기",
+            "플러스",
+            "더하면",
+            "더해서",
+            "더했더니",
+        }:
+            return "addition"
+        return "subtraction"
+
+    @classmethod
+    def _explicit_arithmetic_relations(cls, text: str) -> list[ArithmeticRelation]:
+        """Extract locally checkable arithmetic while preserving exact evidence."""
+
+        relations: list[ArithmeticRelation] = []
+        seen: set[tuple[int, int, int, str, str]] = set()
+        for pattern in (_INFIX_ARITHMETIC, _KOREAN_ARITHMETIC, _KOREAN_PAIR_ARITHMETIC):
+            for match in pattern.finditer(text):
+                relation = ArithmeticRelation(
+                    left=int(match.group("left").replace(",", "")),
+                    right=int(match.group("right").replace(",", "")),
+                    result=int(match.group("result").replace(",", "")),
+                    operation=cls._arithmetic_operation(match.group("operator")),
+                    evidence=match.group(0).strip(),
+                )
+                key = (
+                    relation.left,
+                    relation.right,
+                    relation.result,
+                    relation.operation,
+                    relation.evidence,
+                )
+                if key not in seen:
+                    relations.append(relation)
+                    seen.add(key)
+        return relations
+
+    @staticmethod
+    def _expected_numeric_results(task: TaskDefinition) -> set[int]:
+        results: set[int] = set()
+        for slot in task.slots.values():
+            if slot.semantic_role != "conclusion":
+                continue
+            values = extract_numeric_values(str(slot.expected))
+            results.update(int(value) for value in values)
+            if isinstance(slot.expected, int) and not isinstance(slot.expected, bool):
+                results.add(slot.expected)
+        return results
+
+    @staticmethod
+    def _reviewed_arithmetic_operands(
+        task: TaskDefinition,
+        operation: Literal["addition", "subtraction"],
+    ) -> set[tuple[int, int]]:
+        """Read operands from reviewed structured facts, never from distractor copy."""
+
+        operands: set[tuple[int, int]] = set()
+        facts = task.visible_facts
+        if isinstance(facts.get("left"), int) and isinstance(facts.get("right"), int):
+            declared = str(facts.get("operation", ""))
+            if declared in {operation, "+" if operation == "addition" else "-"}:
+                operands.add((int(facts["left"]), int(facts["right"])))
+
+        sample = facts.get("sample_problem")
+        if not isinstance(sample, dict):
+            return operands
+        visual = sample.get("visual")
+        if not isinstance(visual, dict):
+            return operands
+        declared = str(visual.get("operation", ""))
+        if declared and declared not in {operation, "+" if operation == "addition" else "-"}:
+            return operands
+        amounts = visual.get("amounts")
+        if (
+            isinstance(amounts, list)
+            and len(amounts) == 2
+            and all(isinstance(value, int) and not isinstance(value, bool) for value in amounts)
+        ):
+            operands.add((int(amounts[0]), int(amounts[1])))
+        if isinstance(visual.get("left"), int) and isinstance(visual.get("right"), int):
+            operands.add((int(visual["left"]), int(visual["right"])))
+        return operands
+
+    @classmethod
+    def _relation_matches_task(
+        cls,
+        task: TaskDefinition,
+        relation: ArithmeticRelation,
+    ) -> bool:
+        if not relation.valid or relation.operation not in task.help_skills:
+            return False
+        operands = cls._reviewed_arithmetic_operands(task, relation.operation)
+        if relation.operation == "addition":
+            operand_match = any(
+                sorted((relation.left, relation.right)) == sorted(reviewed) for reviewed in operands
+            )
+        else:
+            operand_match = (relation.left, relation.right) in operands
+        return operand_match and relation.result in cls._expected_numeric_results(task)
+
+    @classmethod
+    def _ground_true_explicit_arithmetic_support(
+        cls,
+        task: TaskDefinition,
+        child_text: str,
+        analysis: UtteranceAnalysis,
+        *,
+        target_slot_ids: set[str],
+    ) -> None:
+        """Recover one explicit, task-bound equation the classifier omitted.
+
+        This is a positive deterministic check, not a phrase whitelist.  It is
+        limited to the one open method/reason/explanation slot currently being
+        asked and to operands/results declared in reviewed structured facts.
+        """
+
+        target_slots = [
+            slot_id
+            for slot_id in target_slot_ids
+            if (slot := task.slots.get(slot_id)) is not None
+            and slot.is_semantic_support
+            and slot.semantic_role in {"method", "reason", "explanation"}
+        ]
+        if len(target_slots) != 1:
+            return
+        relation = next(
+            (
+                candidate
+                for candidate in cls._explicit_arithmetic_relations(child_text)
+                if cls._relation_matches_task(task, candidate)
+            ),
+            None,
+        )
+        if relation is None:
+            return
+        slot_id = target_slots[0]
+        if any(
+            claim.slot_id == slot_id
+            and claim.factual
+            and claim.supported is True
+            and cls._exact_child_evidence_text(child_text, claim.evidence_span) is not None
+            for claim in analysis.claims
+        ):
+            return
+        analysis.claims.append(
+            SlotClaim(
+                slot_id=slot_id,
+                value=None,
+                factual=True,
+                evidence_span=relation.evidence,
+                supported=True,
+                support_confidence=1,
+                semantic_verdict=SemanticVerdict.SUPPORTS,
+                interpretation_basis=InterpretationBasis.EXPLICIT,
+                evidence_kind=SemanticEvidenceKind.RELATION,
+                resolved_meaning=(
+                    f"{relation.left}과 {relation.right}의 {relation.operation} 결과는 "
+                    f"{relation.result}"
+                ),
+            )
+        )
+
+    @classmethod
+    def _validate_semantic_claim_meanings(
+        cls,
+        task: TaskDefinition,
+        verified_slots: Mapping[str, object],
+        child_text: str,
+        analysis: UtteranceAnalysis,
+    ) -> None:
+        """Fail soft on ambiguity and fail closed on invented semantic support.
+
+        The model may resolve omitted referents from reviewed context, but it
+        cannot use that context as a substitute for the child's predicate or
+        promote a bare result into a method/reason.  Older deterministic test
+        fixtures retain their pre-contract compatibility path.
+        """
+
+        valid_context_refs = set(task.context_reference_catalog(verified_slots))
+        allowed_evidence: dict[str, set[SemanticEvidenceKind]] = {
+            "method": {
+                SemanticEvidenceKind.ACTION,
+                SemanticEvidenceKind.PROCEDURE,
+                SemanticEvidenceKind.RELATION,
+            },
+            "reason": {SemanticEvidenceKind.RELATION},
+            "explanation": {
+                SemanticEvidenceKind.ACTION,
+                SemanticEvidenceKind.PROCEDURE,
+                SemanticEvidenceKind.RELATION,
+            },
+        }
+
+        for claim in analysis.claims:
+            slot = task.slots.get(claim.slot_id)
+            if slot is None or not slot.is_semantic_support:
+                continue
+
+            if claim.semantic_verdict is SemanticVerdict.NOT_APPLICABLE:
+                # Compatibility for turns classified or persisted before this
+                # richer contract.  Structured-output calls made after this
+                # change are instructed to return an explicit verdict.
+                if claim.supported is True or (
+                    claim.supported is None and slot.accepts(claim.value)
+                ):
+                    continue
+                claim.semantic_verdict = SemanticVerdict.INSUFFICIENT
+
+            evidence = cls._exact_child_evidence_text(child_text, claim.evidence_span)
+            invalid_refs = set(claim.context_refs) - valid_context_refs
+            needs_context = claim.interpretation_basis in {
+                InterpretationBasis.CONTEXTUAL,
+                InterpretationBasis.MIXED,
+            }
+            support_confidence = claim.support_confidence or 0
+
+            if claim.semantic_verdict is SemanticVerdict.SUPPORTS:
+                if (
+                    not claim.factual
+                    or evidence is None
+                    or not claim.resolved_meaning.strip()
+                    or invalid_refs
+                    or (needs_context and not claim.context_refs)
+                    or support_confidence < _SEMANTIC_SUPPORT_MIN_CONFIDENCE
+                ):
+                    claim.semantic_verdict = SemanticVerdict.UNRESOLVED
+                    claim.supported = False
+                    continue
+                if cls._has_false_explicit_arithmetic(evidence):
+                    claim.semantic_verdict = SemanticVerdict.CONTRADICTS
+                    claim.factual = False
+                    claim.supported = False
+                    continue
+                expected_kinds = allowed_evidence.get(slot.semantic_role)
+                if expected_kinds is not None and claim.evidence_kind not in expected_kinds:
+                    claim.semantic_verdict = SemanticVerdict.INSUFFICIENT
+                    claim.supported = False
+                    continue
+                claim.supported = True
+                continue
+
+            claim.supported = False
+            if claim.semantic_verdict is SemanticVerdict.CONTRADICTS:
+                claim.factual = False
+
+    @classmethod
+    def _has_false_explicit_arithmetic(cls, text: str) -> bool:
         """Detect clear, locally checkable false addition/subtraction claims."""
 
-        for pattern in (_INFIX_ARITHMETIC, _KOREAN_ARITHMETIC):
-            for match in pattern.finditer(text.replace(" ", "")):
-                left = int(match.group("left").replace(",", ""))
-                right = int(match.group("right").replace(",", ""))
-                result = int(match.group("result").replace(",", ""))
-                operator = match.group("operator")
-                expected = (
-                    left + right
-                    if operator in {"+", "더하기", "플러스", "더하면", "더해서", "더했더니"}
-                    else left - right
-                )
-                if result != expected:
-                    return True
-        return False
+        return any(not relation.valid for relation in cls._explicit_arithmetic_relations(text))
 
     @classmethod
     def _filter_text_explanation_claims(
@@ -2229,6 +2586,7 @@ class ConversationEngine:
                 if evidence is not None and cls._has_false_explicit_arithmetic(evidence):
                     claim.factual = False
                     claim.supported = False
+                    claim.semantic_verdict = SemanticVerdict.CONTRADICTS
                     continue
                 if claim.supported is True and evidence is not None:
                     supported = True

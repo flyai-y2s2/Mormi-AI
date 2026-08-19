@@ -9,6 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from .content import SlotDefinition, TaskDefinition
 from .schemas import (
+    MORMI_TEXT_HARD_MAX,
     ChildResponse,
     EntryPhase,
     InteractionIntent,
@@ -312,9 +313,7 @@ class ClaudeGateway:
         contract["evaluation_mode"] = slot.resolved_evaluation_mode
         if slot.is_semantic_support:
             reviewed_examples = [
-                value
-                for value in [*slot.aliases, *slot.accepted_values]
-                if str(value).strip()
+                value for value in [*slot.aliases, *slot.accepted_values] if str(value).strip()
             ]
             contract.pop("expected", None)
             contract.pop("aliases", None)
@@ -325,6 +324,15 @@ class ClaudeGateway:
                 "value": None,
                 "supported": True,
                 "evidence_span": "exact_child_substring",
+                "semantic_verdict": (
+                    "supports | contradicts | insufficient | unresolved"
+                ),
+                "interpretation_basis": "explicit | contextual | mixed | none",
+                "evidence_kind": (
+                    "action | relation | procedure | result_only | observation_only | none"
+                ),
+                "context_refs": "zero_or_more_refs_from_context_reference_catalog",
+                "resolved_meaning": "short_candidate_meaning_not_child_evidence",
             }
         else:
             contract["claim_contract"] = {
@@ -378,6 +386,9 @@ class ClaudeGateway:
             "required_slots_for_this_question": step.target_slots,
             "optional_partial_slots_for_this_question": step.optional_slots,
             "already_verified_slots": state.verified_slots,
+            "context_reference_catalog": task.context_reference_catalog(
+                state.verified_slots
+            ),
             "known_misconceptions": task.misconception_tags,
             "method_acceptance_contract": {
                 "policy": task.help_method_policy,
@@ -448,15 +459,52 @@ class ClaudeGateway:
                 (
                     "evaluation_mode=semantic_support 슬롯은 내부 대표 코드로 정규화하지 "
                     "않는다. 아이 원문이 description의 의미를 실제로 충족하면 value=null, "
-                    "supported=true, support_confidence와 정확한 evidence_span을 반환한다."
+                    "semantic_verdict=supports, supported=true, support_confidence와 정확한 "
+                    "evidence_span을 반환한다."
                 ),
                 (
                     "semantic_support 슬롯의 예시 목록은 유한한 정답 목록이 아니다. 새롭지만 "
                     "수학적으로 타당하고 화면 사실에 맞는 설명도 supported=true로 인정한다."
                 ),
                 (
-                    "semantic_support가 불충분하거나 틀리면 supported=false인 claim을 만들거나 "
-                    "claim을 생략한다. 원문에 없는 의미를 보충해 supported=true로 만들지 않는다."
+                    "semantic_support가 틀리면 semantic_verdict=contradicts, 관련은 있지만 "
+                    "정보가 부족하면 insufficient, 현재 맥락으로 한 가지 뜻을 안전하게 "
+                    "정할 수 없으면 unresolved로 구분한다. 모두 supported=false다."
+                ),
+                (
+                    "아이가 화면 숫자나 '덧셈' 같은 교과 용어를 다시 말하지 않아도 된다. "
+                    "'둘', '오른쪽', '큰 돈'처럼 생략한 대상은 context_reference_catalog 안의 "
+                    "참조만 사용해 해석하고, 사용한 키를 context_refs에 넣는다."
+                ),
+                (
+                    "context_refs는 생략된 대상·수치·방향을 풀기 위한 포인터일 뿐 아이가 "
+                    "말한 근거가 아니다. 맥락으로 아이가 말하지 않은 행동·관계·풀이법을 "
+                    "새로 만들지 않는다."
+                ),
+                (
+                    "아이 말만으로 의미가 충분하면 interpretation_basis=explicit, 맥락의 "
+                    "대상 해소가 필요하면 contextual 또는 mixed를 사용한다. contextual/mixed는 "
+                    "유효한 context_refs가 없으면 supports로 판정하지 않는다."
+                ),
+                (
+                    "evidence_kind는 아이 원문이 실제로 한 일을 표시한다. 답만 말했으면 "
+                    "result_only, 화면 관찰만 말했으면 observation_only다. method에는 action 또는 "
+                    "procedure, reason에는 relation, explanation에는 action/relation/procedure가 "
+                    "있어야 한다. 결과만으로 방법·이유·설명을 채우지 않는다."
+                ),
+                (
+                    "resolved_meaning은 검증을 위한 짧은 후보 해석이며 원문 증거가 아니다. "
+                    "원문 predicate는 유지하고 생략된 지시 대상만 검수된 맥락으로 풀어 쓴다."
+                ),
+                (
+                    "'500더하기 100은 600이므로'처럼 참인 계산 관계를 이미 완결해서 "
+                    "말했다면, 문장이 연결어(-이므로/-니까/-라서)로 끝나도 해당 "
+                    "method·reason·explanation의 근거로 인정한다."
+                ),
+                (
+                    "예: 화면에 500원과 100원이 있을 때 '둘을 합치면 600원이야'는 원문의 "
+                    "합친다는 관계와 유효한 두 context_refs가 있어 explanation을 지지할 수 "
+                    "있다. 반면 '600원이야'만 말하면 conclusion일 뿐 설명은 insufficient다."
                 ),
                 (
                     "아이의 숫자 표현은 쉼표나 단위를 제거해 같은 수로 정규화한다. "
@@ -584,13 +632,26 @@ social_grounding_span은 안전한 메타·사회적 반응에 쓸 정확한 원
   말했다면 value=1800, evidence_span='1800원이야'다.
 - semantic_role=method는 실제 행동이나 절차, reason은 사실 사이의 관계,
   explanation은 검수된 수학 관계나 해결 절차가 원문에 있어야 한다.
+- '500더하기 100은 600이므로'처럼 참인 수학 관계가 완결되어 있으면, 발화가
+  연결어(-이므로/-니까/-라서)로 끝났다는 이유만으로 불완전하거나 오답으로 보지 않는다.
 - evaluation_mode=canonical_value는 value에 아이의 실제 주장값을 정규화해 넣고
   supported는 null로 둔다. expected는 factual 판단의 참고값이지 claim으로 복사할 값이 아니다.
 - canonical_value의 evidence_span은 실제 주장값이 나온 정확한 원문이고,
   interpretation_confidence는 원문을 그 값으로 읽은 확신도다. 원문에 없는 값을 만들지 않는다.
 - evaluation_mode=semantic_support는 가능한 말을 코드값 목록으로 열거하지 않는다.
-  아이 원문이 슬롯 설명을 실제로 뒷받침하면 value=null, supported=true,
-  support_confidence와 정확한 evidence_span을 반환한다.
+  아이 원문이 슬롯 설명을 실제로 뒷받침하면 value=null, semantic_verdict=supports,
+  supported=true, support_confidence와 정확한 evidence_span을 반환한다.
+- semantic_verdict는 supports, contradicts, insufficient, unresolved를 구분한다. 관련 있지만
+  정보가 부족한 말은 insufficient, 현재 맥락으로 하나의 뜻을 안전하게 확정할 수 없는 말은
+  unresolved다. 둘 다 오답이 아니며 supported=false다.
+- 아이는 화면 숫자나 교과 용어를 반드시 반복할 필요가 없다. '둘', '오른쪽', '큰 돈'처럼
+  생략된 대상은 context_reference_catalog의 키로만 해소하고 그 키를 context_refs에 넣는다.
+  카탈로그는 생략된 대상을 푸는 데만 쓰며 아이가 말하지 않은 행동·관계·방법을 보충하지 않는다.
+- interpretation_basis=contextual 또는 mixed이면 유효한 context_refs가 반드시 필요하다.
+  resolved_meaning은 후보 해석일 뿐 evidence_span이나 별노트 원문을 대신하지 않는다.
+- evidence_kind는 원문의 실제 의미 역할이다. result_only와 observation_only를 method, reason,
+  explanation으로 승격하지 않는다. method는 action/procedure, reason은 relation,
+  explanation은 action/relation/procedure 근거가 있어야 한다.
 - semantic_support의 reviewed_examples는 의미 경계를 보여주는 예시일 뿐 완전한 정답
   목록이 아니다. 예시에 없는 창의적인 방법도 수학적으로 타당하면 인정한다.
 - method_acceptance_contract가 open_methods면 예시 목록 밖의 수학적으로 타당한 방법도
@@ -643,7 +704,8 @@ SPEAKER_SYSTEM = """
 - 인용하지 않았으면 spans는 빈 배열, used_child_expression=false다.
 
 말투 규칙:
-- 50자 이하, 최대 두 줄, 물음표와 질문·행동 요청은 하나만 둔다.
+- 가능하면 50자 안팎으로 쓰고 최대 60자를 넘지 않는다. 최대 두 줄이며,
+  물음표와 질문·행동 요청은 하나만 둔다. 문장을 중간에서 끊지 않는다.
 - 착하고 순한 초등 저학년 동생처럼 쉽고 따뜻한 반말을 쓴다. 맞춤법은 지킨다.
 - '기억했어', '확인했어', '그 부분', '네가 말한 데까지' 같은 시스템 말투를 쓰지 않는다.
 - '왜 그렇게 생각했어?', '어떻게 알았어?', '근거가 뭐야?', '설명해 봐',
@@ -839,7 +901,7 @@ def validate_speaker_output(
     guard: SpeakerGuardContract,
 ) -> str | None:
     text = output.text.strip()
-    if not text or len(text) > 50 or len(text.splitlines()) > 2:
+    if not text or len(text) > MORMI_TEXT_HARD_MAX or len(text.splitlines()) > 2:
         return None
     if output.dialogue_act != context.dialogue_act:
         return None

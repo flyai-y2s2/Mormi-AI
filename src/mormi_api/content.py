@@ -20,6 +20,7 @@ from .schemas import (
     InputKind,
     QueueSessionContext,
     SceneType,
+    SemanticVerdict,
     SlotClaim,
     VisualContract,
 )
@@ -244,7 +245,17 @@ class SlotDefinition(BaseModel):
         if not claim.factual:
             return None
         if self.is_semantic_support:
-            if claim.supported is True:
+            if (
+                claim.semantic_verdict is SemanticVerdict.SUPPORTS
+                and claim.supported is True
+            ):
+                return True
+            # Compatibility for persisted analyses and deterministic fixtures
+            # created before the semantic-verdict contract existed.
+            if (
+                claim.semantic_verdict is SemanticVerdict.NOT_APPLICABLE
+                and claim.supported is True
+            ):
                 return True
             if claim.supported is None and self.accepts(claim.value):
                 return True
@@ -526,6 +537,44 @@ class TaskDefinition(BaseModel):
             if value is not None:
                 verified[claim.slot_id] = value
         return verified
+
+    def context_reference_catalog(
+        self,
+        verified_slots: Mapping[str, object] | None = None,
+    ) -> dict[str, str | int | float | bool]:
+        """Return bounded, reviewed context that a child may refer to implicitly.
+
+        References are pointers for resolving words such as ``둘`` or
+        ``오른쪽``.  They are never child evidence and never include hidden
+        expected answers.  Nested visual facts are flattened into stable paths
+        so both the classifier and orchestrator validate the same vocabulary.
+        """
+
+        catalog: dict[str, str | int | float | bool] = {}
+
+        def add(value: object, path: str, depth: int = 0) -> None:
+            if len(catalog) >= 96 or depth > 5:
+                return
+            if isinstance(value, bool):
+                catalog[path] = value
+                return
+            if isinstance(value, (str, int, float)):
+                if not isinstance(value, str) or value.strip():
+                    catalog[path] = value
+                return
+            if isinstance(value, Mapping):
+                for key in sorted(value, key=str):
+                    add(value[key], f"{path}.{key}", depth + 1)
+                return
+            if isinstance(value, (list, tuple)):
+                for index, item in enumerate(value[:24]):
+                    add(item, f"{path}[{index}]", depth + 1)
+
+        add(self.visible_facts, "visible")
+        for slot_id, value in sorted((verified_slots or {}).items()):
+            if slot_id in self.slots:
+                add(value, f"verified.{slot_id}")
+        return catalog
 
     @property
     def semantic_support_slots(self) -> set[str]:

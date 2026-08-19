@@ -6,9 +6,12 @@ from conftest import FakeGateway
 from mormi_api.content import (
     CHANGE_TASK_ID,
     HOME_TEACH_TASK_ID,
+    HOME_TEACHING_CATALOG,
     TOTAL_CALC_TASK_ID,
+    TaskDefinition,
     calculation_task,
     create_scenario_data,
+    home_teaching_task,
 )
 from mormi_api.engine import ConversationEngine
 from mormi_api.schemas import (
@@ -16,11 +19,14 @@ from mormi_api.schemas import (
     DifficultyClass,
     ExpressionLevel,
     HintLevel,
+    InterpretationBasis,
     NoteContextualizationContext,
     NoteContextualizationOutput,
     ResponseCategory,
     SafetyCategory,
     SceneType,
+    SemanticEvidenceKind,
+    SemanticVerdict,
     SessionState,
     SlotClaim,
     UtteranceAnalysis,
@@ -58,6 +64,444 @@ class InventedNoteGateway(FakeGateway):
             self_contained=True,
             introduced_math_content=False,
         )
+
+
+def test_complete_mormi_copy_keeps_a_natural_sentence_beyond_soft_target() -> None:
+    text = (
+        "그런데 ‘2000원을 먼저 내고 거슬러받으면’이 어떻게 하는 건지 모르겠어... "
+        "조금만 더 알려줄래?"
+    )
+
+    rendered = ConversationEngine._complete_mormi_text(text)
+
+    assert len(text) > 50
+    assert rendered == text
+    assert rendered.endswith("?")
+
+
+def test_oversized_composition_falls_back_to_a_complete_question_without_slicing() -> None:
+    question = "나는 두 금액을 어떤 계산으로 합치는지 아직 헷갈려... 알려줄 수 있어?"
+    oversized = f"아, 네가 말한 내용은 잘 들었어. 그런데 아직 조금 더 알고 싶어. {question}"
+
+    rendered = ConversationEngine._complete_mormi_text(oversized)
+
+    assert rendered == question
+    assert not rendered.endswith("…")
+
+
+def test_true_explicit_money_equation_supports_open_explanation_with_trailing_connective() -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.RELATED_VAGUE,
+        claims=[],
+        confidence=0.8,
+    )
+    child_text = "500더하기 100은 600이므로"
+
+    ConversationEngine._ground_true_explicit_arithmetic_support(
+        task,
+        child_text,
+        analysis,
+        target_slot_ids={"rule"},
+    )
+    verified = task.validated_slot_claims(analysis.claims)
+
+    assert verified == {"rule": True}
+    assert analysis.claims[-1].evidence_span == "500더하기 100은 600"
+
+
+@pytest.mark.asyncio
+async def test_true_money_equation_advances_when_classifier_omits_the_open_claim() -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.RELATED_VAGUE,
+        claims=[],
+        confidence=0.8,
+    )
+    engine = ConversationEngine(FakeGateway([analysis]), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    scenario_data = create_scenario_data(
+        "home_teach",
+        curriculum_session_id="money-count",
+        skill_id="money-count",
+    )
+    state = SessionState(
+        learner_id=1,
+        scene=SceneType.HOME_TEACH,
+        scenario_id="home_teach",
+        task_ids=[HOME_TEACH_TASK_ID],
+        task_start_levels={HOME_TEACH_TASK_ID: ExpressionLevel.L4},
+        scenario_data=scenario_data,
+        expression_level=ExpressionLevel.L4,
+        task_start_level=ExpressionLevel.L4,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, effective_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="6f0f70de-d3ed-4b9c-94f7-c8a82a7f1690",
+            type="text",
+            text="500더하기 100은 600이므로",
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.verified_slots == {"rule": True}
+    assert effective_analysis.response_category is ResponseCategory.CORRECT_FULL
+    assert turn.status.value == "completed"
+
+
+@pytest.mark.parametrize(
+    "child_text",
+    [
+        "500더하기 100은 700이므로",
+        "500원과 200원을 더하면 700원이므로",
+    ],
+)
+def test_false_or_task_unrelated_equation_cannot_fill_open_explanation(child_text: str) -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[],
+        confidence=0.8,
+    )
+
+    ConversationEngine._ground_true_explicit_arithmetic_support(
+        task,
+        child_text,
+        analysis,
+        target_slot_ids={"rule"},
+    )
+
+    assert task.validated_slot_claims(analysis.claims) == {}
+
+
+def test_true_subtraction_equation_uses_the_same_task_bound_support_contract() -> None:
+    task = calculation_task(
+        task_id="subtraction_equation_support",
+        title="거스름돈 계산",
+        skill_id="subtraction",
+        left=5000,
+        right=2400,
+        operation="subtraction",
+        result=2600,
+    )
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.RELATED_VAGUE,
+        claims=[],
+        confidence=0.8,
+    )
+
+    ConversationEngine._ground_true_explicit_arithmetic_support(
+        task,
+        "5000원에서 2400원을 빼면 2600원이니까",
+        analysis,
+        target_slot_ids={"method"},
+    )
+
+    assert task.validated_slot_claims(analysis.claims) == {"method": True}
+
+
+def _money_context_refs(task: TaskDefinition) -> list[str]:
+    catalog = task.context_reference_catalog({})
+    refs = [key for key, value in catalog.items() if value in {500, 100}]
+    assert {catalog[key] for key in refs} == {500, 100}
+    return refs
+
+
+@pytest.mark.parametrize(
+    ("child_text", "evidence_kind"),
+    [
+        ("둘을 합치면 600원이야", SemanticEvidenceKind.RELATION),
+        ("큰 돈에 작은 돈만큼 더 세면 돼", SemanticEvidenceKind.PROCEDURE),
+    ],
+)
+def test_context_grounded_child_language_can_support_a_method_without_repeating_screen_terms(
+    child_text: str,
+    evidence_kind: SemanticEvidenceKind,
+) -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[
+            SlotClaim(
+                slot_id="rule",
+                factual=True,
+                evidence_span=child_text,
+                supported=True,
+                support_confidence=0.92,
+                semantic_verdict=SemanticVerdict.SUPPORTS,
+                interpretation_basis=InterpretationBasis.CONTEXTUAL,
+                evidence_kind=evidence_kind,
+                context_refs=_money_context_refs(task),
+                resolved_meaning="화면의 두 금액을 합해 전체 금액을 구한다",
+            )
+        ],
+    )
+
+    ConversationEngine._validate_semantic_claim_meanings(task, {}, child_text, analysis)
+    verified = task.validated_slot_claims(analysis.claims)
+    verified = ConversationEngine._filter_text_explanation_claims(
+        task,
+        child_text,
+        analysis,
+        verified,
+    )
+
+    assert verified == {"rule": True}
+    assert "500" not in child_text and "100" not in child_text
+
+
+def test_bare_result_cannot_be_promoted_to_an_explanation() -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    child_text = "600원이야"
+    claim = SlotClaim(
+        slot_id="rule",
+        factual=True,
+        evidence_span=child_text,
+        supported=True,
+        support_confidence=0.99,
+        semantic_verdict=SemanticVerdict.SUPPORTS,
+        interpretation_basis=InterpretationBasis.EXPLICIT,
+        evidence_kind=SemanticEvidenceKind.RESULT_ONLY,
+        resolved_meaning="결과는 600원이다",
+    )
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[claim],
+    )
+
+    ConversationEngine._validate_semantic_claim_meanings(task, {}, child_text, analysis)
+
+    assert claim.semantic_verdict is SemanticVerdict.INSUFFICIENT
+    assert claim.supported is False
+    assert task.validated_slot_claims(analysis.claims) == {}
+
+
+def test_invented_context_reference_fails_soft_instead_of_becoming_correct() -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    child_text = "둘을 합치면 600원이야"
+    claim = SlotClaim(
+        slot_id="rule",
+        factual=True,
+        evidence_span=child_text,
+        supported=True,
+        support_confidence=0.95,
+        semantic_verdict=SemanticVerdict.SUPPORTS,
+        interpretation_basis=InterpretationBasis.CONTEXTUAL,
+        evidence_kind=SemanticEvidenceKind.RELATION,
+        context_refs=["visible.amount_that_is_not_on_screen"],
+        resolved_meaning="화면에 없는 값을 합한다",
+    )
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[claim],
+    )
+
+    ConversationEngine._validate_semantic_claim_meanings(task, {}, child_text, analysis)
+
+    assert claim.semantic_verdict is SemanticVerdict.UNRESOLVED
+    assert claim.supported is False
+    assert task.validated_slot_claims(analysis.claims) == {}
+
+
+def test_unresolved_semantic_meaning_is_clarified_not_labeled_as_a_concept_error() -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    step = task.steps[ExpressionLevel.L4][0]
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        claims=[
+            SlotClaim(
+                slot_id="rule",
+                factual=False,
+                evidence_span="둘을 그렇게 하면 돼",
+                supported=False,
+                support_confidence=0.55,
+                semantic_verdict=SemanticVerdict.UNRESOLVED,
+                interpretation_basis=InterpretationBasis.CONTEXTUAL,
+                evidence_kind=SemanticEvidenceKind.NONE,
+                context_refs=_money_context_refs(task),
+                resolved_meaning="무엇을 어떻게 하는지 한 가지로 정할 수 없음",
+            )
+        ],
+    )
+
+    ConversationEngine._reconcile_response_category(analysis, task, step, {}, {})
+
+    assert analysis.response_category is ResponseCategory.RELATED_VAGUE
+    assert analysis.difficulty_class is DifficultyClass.UNKNOWN
+
+
+def test_unsubstantiated_classifier_concept_error_fails_soft() -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    step = task.steps[ExpressionLevel.L4][0]
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        difficulty_class=DifficultyClass.CONCEPT,
+        misconception_tag="place_value_confusion",
+        bottleneck="concept",
+        claims=[],
+    )
+
+    ConversationEngine._reconcile_response_category(analysis, task, step, {}, {})
+
+    assert analysis.response_category is ResponseCategory.RELATED_VAGUE
+    assert analysis.difficulty_class is DifficultyClass.UNKNOWN
+    assert analysis.misconception_tag is None
+
+
+def test_unstructured_partial_is_on_topic_but_never_carries_concept_error() -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    step = task.steps[ExpressionLevel.L4][0]
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.CONCEPT,
+        misconception_tag="place_value_confusion",
+        bottleneck="concept",
+        claims=[],
+    )
+
+    ConversationEngine._reconcile_response_category(analysis, task, step, {}, {})
+
+    assert analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert analysis.difficulty_class is DifficultyClass.UNKNOWN
+    assert analysis.misconception_tag is None
+
+
+def test_classifier_full_without_reviewed_claims_cannot_complete_the_task() -> None:
+    task = home_teaching_task(HOME_TEACHING_CATALOG["money-count"], skill_id="money-count")
+    step = task.steps[ExpressionLevel.L4][0]
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[],
+    )
+
+    ConversationEngine._reconcile_response_category(analysis, task, step, {}, {})
+
+    assert analysis.response_category is ResponseCategory.RELATED_VAGUE
+    assert analysis.difficulty_class is DifficultyClass.EXPRESSION
+
+
+def test_verified_result_plus_insufficient_reason_is_partial_not_a_concept_error() -> None:
+    task = calculation_task(
+        task_id="partial_result_with_unresolved_reason",
+        title="메뉴값 계산",
+        skill_id="addition",
+        left=500,
+        right=100,
+        operation="addition",
+        result=600,
+    )
+    step = task.steps[ExpressionLevel.L4][0]
+    claim = SlotClaim(
+        slot_id="method",
+        factual=True,
+        evidence_span="그렇게 하면 돼",
+        supported=False,
+        semantic_verdict=SemanticVerdict.INSUFFICIENT,
+        interpretation_basis=InterpretationBasis.CONTEXTUAL,
+        evidence_kind=SemanticEvidenceKind.NONE,
+        resolved_meaning="계산 방법을 구체적으로 알 수 없음",
+    )
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        difficulty_class=DifficultyClass.CONCEPT,
+        misconception_tag="wrong_operation",
+        bottleneck="concept",
+        claims=[claim],
+    )
+
+    ConversationEngine._reconcile_response_category(
+        analysis,
+        task,
+        step,
+        {"result": 600},
+        {"result": 600},
+    )
+
+    assert analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert analysis.difficulty_class is DifficultyClass.UNKNOWN
+    assert analysis.misconception_tag is None
+
+
+def test_conflicting_claim_blocks_full_completion_even_when_all_slots_have_support() -> None:
+    task = calculation_task(
+        task_id="conflicting_complete_answer",
+        title="메뉴값 계산",
+        skill_id="addition",
+        left=500,
+        right=100,
+        operation="addition",
+        result=600,
+    )
+    step = task.steps[ExpressionLevel.L4][0]
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[
+            SlotClaim(
+                slot_id="result",
+                value=510,
+                factual=True,
+                evidence_span="510원이야",
+            )
+        ],
+    )
+
+    ConversationEngine._reconcile_response_category(
+        analysis,
+        task,
+        step,
+        {"operation": "addition", "result": 600, "method": True},
+        {"operation": "addition", "result": 600, "method": True},
+    )
+
+    assert analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert analysis.difficulty_class is DifficultyClass.CONCEPT
+
+
+def test_wrong_canonical_result_still_becomes_a_concept_error() -> None:
+    task = calculation_task(
+        task_id="wrong_result_is_not_ambiguity",
+        title="메뉴값 계산",
+        skill_id="addition",
+        left=500,
+        right=100,
+        operation="addition",
+        result=600,
+    )
+    step = task.steps[ExpressionLevel.L4][0]
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.RELATED_VAGUE,
+        claims=[
+            SlotClaim(
+                slot_id="result",
+                value=510,
+                factual=True,
+                evidence_span="510원이야",
+                interpretation_confidence=1,
+            )
+        ],
+    )
+
+    ConversationEngine._reconcile_response_category(analysis, task, step, {}, {})
+
+    assert analysis.response_category is ResponseCategory.CONCEPTUAL_ERROR
+    assert analysis.difficulty_class is DifficultyClass.CONCEPT
 
 
 def _number_comparison_state() -> SessionState:

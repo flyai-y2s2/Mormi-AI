@@ -101,6 +101,35 @@ def speaker_guard() -> SpeakerGuardContract:
     return SpeakerGuardContract()
 
 
+def test_speaker_allows_small_headroom_but_rejects_copy_beyond_hard_limit() -> None:
+    text = (
+        "그런데 ‘2000원을 먼저 내고 거슬러받으면’이 어떻게 하는 건지 모르겠어... "
+        "조금만 더 알려줄래?"
+    )
+    context = SpeakerContext(
+        dialogue_act="clarify_child_expression",
+        required_question=text,
+        required_slot_ids=["method"],
+        required_slot_descriptions={"method": "거스름돈을 구하는 방법"},
+        allowed_numbers=["2000"],
+        fallback_text=text,
+    )
+
+    assert 50 < len(text) <= 60
+    assert validate_speaker_output(speaker_output(text, context), context, speaker_guard()) == text
+
+    too_long = f"아, 아직 조금 헷갈려. {text}"
+    assert len(too_long) > 60
+    assert (
+        validate_speaker_output(
+            speaker_output(too_long, context),
+            context,
+            speaker_guard(),
+        )
+        is None
+    )
+
+
 def test_speaker_rejects_grading_synonyms() -> None:
     context = speaker_context()
     for text in (
@@ -386,16 +415,14 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
                 assert "expected" not in slots[slot_id]
                 assert slots[slot_id]["claim_contract"]["supported"] is True
                 assert slots[slot_id]["claim_contract"]["value"] is None
+                assert "semantic_verdict" in slots[slot_id]["claim_contract"]
+                assert "interpretation_basis" in slots[slot_id]["claim_contract"]
+                assert "evidence_kind" in slots[slot_id]["claim_contract"]
+                assert "context_refs" in slots[slot_id]["claim_contract"]
             else:
-                assert (
-                    slots[slot_id]["claim_contract"]["value"]
-                    == "actual_child_claim_normalized"
-                )
+                assert slots[slot_id]["claim_contract"]["value"] == "actual_child_claim_normalized"
                 assert slots[slot_id]["claim_contract"]["supported"] is None
-                assert (
-                    slots[slot_id]["claim_contract"]["evidence_span"]
-                    == "exact_child_substring"
-                )
+                assert slots[slot_id]["claim_contract"]["evidence_span"] == "exact_child_substring"
         method_contract = payload["method_acceptance_contract"]
         assert method_contract["policy"] == task.help_method_policy
         assert method_contract["reviewed_examples"] == task.accepted_methods
@@ -404,8 +431,11 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         )
         assert any("related_vague" in instruction for instruction in payload["instructions"])
         assert any(
-            "아이가 실제로 주장한 값" in instruction
-            for instruction in payload["instructions"]
+            "아이가 실제로 주장한 값" in instruction for instruction in payload["instructions"]
+        )
+        assert payload["context_reference_catalog"] == task.context_reference_catalog({})
+        assert any(
+            "context_reference_catalog" in instruction for instruction in payload["instructions"]
         )
 
 

@@ -9,6 +9,13 @@ from pydantic import BaseModel, Field, model_validator
 
 from .dictionary_models import DictionaryCard, DictionaryReference
 
+# Child-facing copy is authored toward 50 characters, but runtime dialogue may
+# need a few more characters to finish a natural Korean sentence.  The hard
+# limit protects the two-line UI contract; it must never be implemented by
+# slicing a generated sentence.
+MORMI_TEXT_SOFT_TARGET = 50
+MORMI_TEXT_HARD_MAX = 60
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -98,6 +105,45 @@ class ResponseCategory(StrEnum):
     UNRELATED_RESPONSE = "unrelated_response"
     HELP_REQUEST = "help_request"
     SELF_CORRECTION = "self_correction"
+
+
+class SemanticVerdict(StrEnum):
+    """What the child's exact evidence means for one open semantic slot.
+
+    Correctness and interpretability are deliberately separate.  A response
+    can be on-topic but insufficient, or potentially useful but too ambiguous
+    to resolve safely from the reviewed screen context.
+    """
+
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+    INSUFFICIENT = "insufficient"
+    UNRESOLVED = "unresolved"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class InterpretationBasis(StrEnum):
+    """Where the classifier found the meaning of a semantic claim."""
+
+    EXPLICIT = "explicit"
+    CONTEXTUAL = "contextual"
+    MIXED = "mixed"
+    NONE = "none"
+
+
+class SemanticEvidenceKind(StrEnum):
+    """The semantic work performed by the child's evidence.
+
+    This prevents a bare result from being promoted into a method or reason
+    without requiring a finite list of accepted Korean sentences.
+    """
+
+    ACTION = "action"
+    RELATION = "relation"
+    PROCEDURE = "procedure"
+    RESULT_ONLY = "result_only"
+    OBSERVATION_ONLY = "observation_only"
+    NONE = "none"
 
 
 class SupportTrigger(StrEnum):
@@ -422,6 +468,14 @@ class SlotClaim(BaseModel):
     # slot contract. Closed-value slots leave this field unset.
     supported: bool | None = None
     support_confidence: float | None = Field(default=None, ge=0, le=1)
+    # Rich semantic evidence is returned by the same classifier call.  The
+    # orchestrator validates context_refs against reviewed task context and
+    # never treats resolved_meaning as child-authored evidence.
+    semantic_verdict: SemanticVerdict = SemanticVerdict.NOT_APPLICABLE
+    interpretation_basis: InterpretationBasis = InterpretationBasis.NONE
+    evidence_kind: SemanticEvidenceKind = SemanticEvidenceKind.NONE
+    context_refs: list[str] = Field(default_factory=list)
+    resolved_meaning: str = Field(default="", max_length=160)
 
 
 class UtteranceAnalysis(BaseModel):
@@ -479,7 +533,7 @@ class VisualContract(BaseModel):
 
 
 class MormiContract(BaseModel):
-    text: str = Field(max_length=50)
+    text: str = Field(max_length=MORMI_TEXT_HARD_MAX)
     mood: Literal["curious", "listening", "thinking", "relieved", "celebrating"]
     max_lines: Literal[1, 2] = 2
 
