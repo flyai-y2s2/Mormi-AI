@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from .content import HOME_TEACHING_CATALOG
 from .dictionary_catalog import DICTIONARY_CATALOG
 from .help_audit import registered_help_tasks
 from .schemas import ExpressionLevel, HintLevel
@@ -15,6 +16,8 @@ from .schemas import ExpressionLevel, HintLevel
 class DictionaryRelatedTask(BaseModel):
     review_id: str
     first_question: str
+    teaching_visual: dict[str, Any]
+    teaching_answer: Any
     help_plan: dict[str, str]
 
 
@@ -27,6 +30,7 @@ class DictionaryReviewItem(BaseModel):
     method_policy: str
     concept_lines: list[str]
     example_lines: list[str]
+    example_answer: Any
     facts: dict[str, Any]
     equation: dict[str, Any] | None
     visual: dict[str, Any]
@@ -43,6 +47,7 @@ class DictionaryAuditDecision(BaseModel):
     visual_matches_text: bool
     method_policy_respected: bool
     distinct_from_help_plan: bool
+    distinct_from_teaching_case: bool
     child_appropriate_language: bool
     issues: list[str] = Field(default_factory=list, max_length=8)
 
@@ -63,6 +68,8 @@ OFFLINE_DICTIONARY_AUDIT_SYSTEM = """
 - visual의 사실과 글의 사실이 같고, 그림에서 할 수 없는 조작을 요구하지 않는다.
 - open_methods는 하나의 풀이만 유일한 정답처럼 강요하지 않는다.
 - help_plan과 역할이 다르며, 도움카드 문구를 사전 설명으로 복사하지 않는다.
+- example의 수·그림·정답은 관련 teaching_visual과 teaching_answer를 재사용하지 않는다.
+- 사전은 같은 개념의 다른 예를 보여 주는 참고 자료이지 현재 문제의 답지가 아니다.
 - 초등 아동이 읽을 수 있는 짧고 구체적인 한국어인지 확인한다.
 
 각 review_id를 정확히 한 번 판정하고, 문제를 발견하면 issues에 짧고 구체적으로 쓴다.
@@ -73,10 +80,20 @@ def build_dictionary_review_items() -> list[DictionaryReviewItem]:
     related: dict[str, list[DictionaryRelatedTask]] = defaultdict(list)
     for registered in registered_help_tasks():
         task = registered.task
+        if registered.review_id.startswith("home:"):
+            home_spec = HOME_TEACHING_CATALOG[registered.review_id.removeprefix("home:")]
+            teaching_visual = dict(home_spec.sample_problem["visual"])
+            teaching_answer = home_spec.sample_problem["correct"]
+        else:
+            teaching_visual = dict(task.base_visual.data)
+            teaching_visual["type"] = task.base_visual.type
+            teaching_answer = task.slots[task.required_slots[0]].expected
         related[task.dictionary_card_id].append(
             DictionaryRelatedTask(
                 review_id=registered.review_id,
                 first_question=task.steps[ExpressionLevel.L4][0].prompt,
+                teaching_visual=teaching_visual,
+                teaching_answer=teaching_answer,
                 help_plan={
                     level.value: task.hints[level].body
                     for level in (HintLevel.H1, HintLevel.H2, HintLevel.H3)
@@ -94,6 +111,7 @@ def build_dictionary_review_items() -> list[DictionaryReviewItem]:
             method_policy=card.method_policy,
             concept_lines=card.concept.lines,
             example_lines=card.example.lines,
+            example_answer=card.example.answer,
             facts=card.example.facts,
             equation=(
                 card.example.equation.model_dump(mode="json")
@@ -123,19 +141,21 @@ def render_dictionary_human_review(items: Iterable[DictionaryReviewItem]) -> str
                 f"- 목표: {item.learning_goal}",
                 f"- 개념: {' / '.join(item.concept_lines)}",
                 f"- 예시: {' / '.join(item.example_lines)}",
+                f"- 예시 정답: `{item.example_answer}`",
                 f"- 풀이 정책: {item.method_policy}",
                 f"- 사실: `{json.dumps(item.facts, ensure_ascii=False)}`",
                 f"- 식: `{json.dumps(item.equation, ensure_ascii=False)}`",
                 f"- 전용 그림: `{json.dumps(item.visual, ensure_ascii=False)}`",
                 f"- 출처: {' / '.join(item.source_refs)}",
                 "",
-                "| 관련 과제 | 첫 질문 | H1 | H2 | H3 |",
-                "|---|---|---|---|---|",
+                "| 관련 과제 | 첫 질문 | 평가 정답 | 평가 그림 | H1 | H2 | H3 |",
+                "|---|---|---|---|---|---|---|",
             ]
         )
         for task in item.related_tasks:
             lines.append(
-                f"| {task.review_id} | {task.first_question} | "
+                f"| {task.review_id} | {task.first_question} | {task.teaching_answer} | "
+                f"`{json.dumps(task.teaching_visual, ensure_ascii=False)}` | "
                 f"{task.help_plan['H1']} | {task.help_plan['H2']} | {task.help_plan['H3']} |"
             )
         lines.extend(
@@ -146,6 +166,7 @@ def render_dictionary_human_review(items: Iterable[DictionaryReviewItem]) -> str
                 "- [ ] 그림의 수·대상·관계가 글과 일치한다.",
                 "- [ ] 특정 풀이를 유일한 정답처럼 강요하지 않는다.",
                 "- [ ] 도움카드와 역할·문구가 분리되어 있다.",
+                "- [ ] 현재 가르치기 문제와 다른 수·그림·정답을 사용한다.",
                 "",
             ]
         )

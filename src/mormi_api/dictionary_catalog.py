@@ -86,6 +86,68 @@ def _normalize_copy(value: str) -> str:
     return re.sub(r"[\s.!?]+", "", value)
 
 
+_ANSWER_ALIASES = {
+    "왼쪽": "left",
+    "오른쪽": "right",
+    "같아": "same",
+    "같음": "same",
+    "삼각형": "triangle",
+    "사각형": "quadrilateral",
+    "직사각형": "rectangle",
+    "원": "circle",
+    "위": "above",
+    "위쪽": "above",
+    "아래": "below",
+    "아래쪽": "below",
+    "빨강": "red",
+    "파랑": "blue",
+    "사과": "apple",
+    "배": "pear",
+    "귤": "tangerine",
+}
+
+
+def _normalize_assessment_answer(value: object) -> str | int | float | bool:
+    """Compare meaning, not commas, spaces, or child-facing unit spelling."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    compact = re.sub(r"[\s,‘’'\".!?]", "", str(value)).lower()
+    if compact in _ANSWER_ALIASES:
+        return _ANSWER_ALIASES[compact]
+    numeric = re.fullmatch(
+        r"([+-]?\d+(?:\.\d+)?)(?:원|개|명|묶음|cm|g|l|시간|일)?",
+        compact,
+    )
+    if numeric:
+        parsed = float(numeric.group(1))
+        return int(parsed) if parsed.is_integer() else parsed
+    return compact
+
+
+def validate_dictionary_example_is_not_teaching_answer(
+    *,
+    curriculum_session_id: str,
+    teaching_answer: object,
+    card: DictionaryCard,
+) -> None:
+    """Prevent 궁금해사전 from becoming an answer sheet for the active task."""
+
+    if card.example.answer is None:
+        raise ValueError(
+            f"{curriculum_session_id}: home dictionary example needs an explicit answer"
+        )
+    if _normalize_assessment_answer(teaching_answer) == _normalize_assessment_answer(
+        card.example.answer
+    ):
+        raise ValueError(
+            f"{curriculum_session_id}: dictionary example must use a different answer "
+            "from the teaching sample"
+        )
+
+
 def _load_version_manifest(path: Path = VERSION_MANIFEST_PATH) -> dict[str, dict[str, Any]]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     entries = raw.get("cards")
@@ -152,6 +214,11 @@ def validate_dictionary_coverage() -> None:
         card = get_dictionary_card_by_id(spec.dictionary_card_id)
         if card.curriculum_session_id != spec.id:
             raise ValueError(f"{spec.id}: dictionary_card_id points to another session")
+        validate_dictionary_example_is_not_teaching_answer(
+            curriculum_session_id=spec.id,
+            teaching_answer=spec.sample_problem["correct"],
+            card=card,
+        )
 
     for registered in registered_help_tasks():
         task = registered.task

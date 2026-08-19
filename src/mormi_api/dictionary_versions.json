@@ -1,45 +1,205 @@
 {
-  "catalog_version": 2,
+  "catalog_version": 3,
   "cards": [
-    {"card_id": "dictionary.home.number-count", "content_version": 2, "content_hash": "7ecba2a037a2364653203c4d3a3f246ca32d56f33c221ea2356474fcfffe6a04"},
-    {"card_id": "dictionary.home.number-compare", "content_version": 2, "content_hash": "7d3ee2e13f940458f4cc987e089743509803020e58460d90142cdd935db6d35c"},
-    {"card_id": "dictionary.home.money-count", "content_version": 2, "content_hash": "5f9d2060b4459773df63875622649b64b78c4a2912a0bbbc3f2e2d9d3d022332"},
-    {"card_id": "dictionary.home.number-make-ten", "content_version": 2, "content_hash": "d5acd451c14b1e6152a9784a02f9da58490c153b2e9a2101eec06abfba2ae3f7"},
-    {"card_id": "dictionary.home.number-place-value", "content_version": 2, "content_hash": "de68490aac80ed55a15ac2c16552af12dab7c54d726a2ebaf0beca060e9dc13d"},
-    {"card_id": "dictionary.home.add-pictures", "content_version": 2, "content_hash": "9882ec1c5f606458906e192fe8a8d5b66f1dfc1b0d760b7644b87237c99326df"},
-    {"card_id": "dictionary.home.money-price", "content_version": 2, "content_hash": "e6069827e04285a168580d4836516d19a7f4509c8ebe8f1dd581b090e6cf0f31"},
-    {"card_id": "dictionary.home.add-place", "content_version": 1, "content_hash": "c896389f8e80528b2498c142b277235168ac89f19ae2308cf242f0c70dfa5610"},
-    {"card_id": "dictionary.home.add-make-ten", "content_version": 1, "content_hash": "20a4c93381788cdfe3cdbb908e7293d73a6e7ee4ff1b35b56e435f287b8d79c3"},
-    {"card_id": "dictionary.home.sub-pictures", "content_version": 1, "content_hash": "3c0cf2e974edbd9cdf8c28a3736daaa44ffa5aba4550bedfe38a2ab4c14a6173"},
-    {"card_id": "dictionary.home.money-budget", "content_version": 1, "content_hash": "358dce964f8afe25232a65dfaf92c9eb0d5ecd775ab5c3d0783807435059942f"},
-    {"card_id": "dictionary.home.sub-place", "content_version": 1, "content_hash": "76577b92b32c01cf5f4234cc8a3399f6640c05120b1383d24d2b21cf1ae74d18"},
-    {"card_id": "dictionary.home.sub-borrow", "content_version": 2, "content_hash": "6cc73fd48dce46ffb36cd8cc156893c6468df3c62315d1ceb0e7c467f355db93"},
-    {"card_id": "dictionary.home.multiply-groups", "content_version": 1, "content_hash": "a3cf155bcf4f1a158857a6823cf111c8aef1ff3a877503ee7e485b9a47bc348d"},
-    {"card_id": "dictionary.home.multiply-addition", "content_version": 2, "content_hash": "7a4c1daef3c0f1169cc40dcba5305666dbb5ffa5df9d98a937a7e4f1b8f39923"},
-    {"card_id": "dictionary.home.money-mission", "content_version": 1, "content_hash": "3a1613a8ba66a40e825376534b7e38b912804c7e708889674513d6167ee3bf1c"},
-    {"card_id": "dictionary.home.multiply-easy-tables", "content_version": 2, "content_hash": "20c536d7b648883ceba144ba3e9083b822499c80deb9368fc49d259ee4cd1b83"},
-    {"card_id": "dictionary.home.multiply-tables", "content_version": 2, "content_hash": "36646d3fea45a0a451300ccdf7d06e767c4a68605a349faa373fc39a4314d3b3"},
-    {"card_id": "dictionary.home.divide-share", "content_version": 1, "content_hash": "50050e484446528bc704f731cb0214197b63314c2dba8a803934bd2d97291f3a"},
-    {"card_id": "dictionary.home.divide-group", "content_version": 1, "content_hash": "6a285c0ab0493abed65cc8477a62f735e350695ea5b43b29baf705cc46ac695c"},
-    {"card_id": "dictionary.home.pattern-repeat", "content_version": 1, "content_hash": "cf7dfeb8921959d2806977db5b0c9515e542fea0dfcabb306007aef883587ad4"},
-    {"card_id": "dictionary.home.pattern-number", "content_version": 1, "content_hash": "d4d153b4d8510b3e8c94f1fb9acacede9ea79e4cac15a5ca8ed3cc1c0c9c3c8f"},
-    {"card_id": "dictionary.home.pattern-unknown", "content_version": 2, "content_hash": "4ecaa9eac3a0ebe0d2226930b6fda65a53c0ad6659804358be888092b1c369f2"},
-    {"card_id": "dictionary.home.clock-basic", "content_version": 2, "content_hash": "2a5655aa0f8f9eeab4e1fc888423e5dc5e2e952e7282e114cb0f95705f8062c9"},
-    {"card_id": "dictionary.home.clock-quarter", "content_version": 2, "content_hash": "805d8350f22d2d31caa169add8b767fecdc889a3a06dab6a5fbb6e06b6ac024b"},
-    {"card_id": "dictionary.home.time-duration", "content_version": 1, "content_hash": "6be61d9a74976c400d3c2c3ce2b63f07bb5d304e565d4e60982c111a1a6e6867"},
-    {"card_id": "dictionary.home.time-calendar", "content_version": 2, "content_hash": "ec972166cde78ddf1a548939cfcf03fa16f731d9021c78d28aba1dd201aaf635"},
-    {"card_id": "dictionary.home.measure-compare", "content_version": 1, "content_hash": "1305c90721ec2845f4228244cfdd705e38454a1632d8ab98c9aaf91a4094406b"},
-    {"card_id": "dictionary.home.measure-ruler", "content_version": 1, "content_hash": "9521c3204f7e03c66af222e59498570525a3d5b1264812c9ef18fc494caac1ff"},
-    {"card_id": "dictionary.home.measure-weight-capacity", "content_version": 2, "content_hash": "7fe54d8e7f0fff80d305e37ffc0a85ddb6f781bc8ddf38e041959d04d9bf5c35"},
-    {"card_id": "dictionary.home.geometry-shapes", "content_version": 2, "content_hash": "cfed66af7e5901ed675b718a5529961d59e03906f6eca5462c32c70f9ae658f9"},
-    {"card_id": "dictionary.home.geometry-compose", "content_version": 2, "content_hash": "c81f0ae4d7ec2898bf634a37f8b8eccbe827a860485d0769b18dbc1a01d9dc9e"},
-    {"card_id": "dictionary.home.geometry-position", "content_version": 1, "content_hash": "55d7636ede62be87f853287d4c5727247d314b9b1065a24c751d9c0c981fd14c"},
-    {"card_id": "dictionary.home.data-classify", "content_version": 1, "content_hash": "22d1160bc2dc18e07e94c84cd81984c2a7a2e536b8b8298e8fee47fb2ac47de8"},
-    {"card_id": "dictionary.home.data-chart", "content_version": 1, "content_hash": "95e46e41c2d1456594a39929bfde90cf81780c825f1697e4f2159be0698a6d98"},
-    {"card_id": "dictionary.home.data-chance", "content_version": 1, "content_hash": "4e15fabae0c31961969ed43ed38754de188408a8f420e7b714db4c7f17eb929d"},
-    {"card_id": "dictionary.cafe.cafe-queue", "content_version": 1, "content_hash": "342f9c9835a161bf7f6b80975f09bbd864306aec2f9b718f4a2e2ee90c13c8dc"},
-    {"card_id": "dictionary.cafe.cafe-budget-menu", "content_version": 1, "content_hash": "915b81979bb8fc5814a4096c6d5c01d151f6a4c6a132cd2907fcd0dffaa9d4e0"},
-    {"card_id": "dictionary.cafe.cafe-menu-total", "content_version": 1, "content_hash": "ff20d4c6e8529c49a8334a0ec81efbece273894895f47416d932e5a4aa18cfff"},
-    {"card_id": "dictionary.cafe.cafe-change", "content_version": 1, "content_hash": "d0a1011da568d1276270b1c59c0b9c6f9d3321641c03e02ccaee7477f1618adc"}
+    {
+      "card_id": "dictionary.home.number-count",
+      "content_version": 3,
+      "content_hash": "8dda51bf4dc111985a023c672f3af91f94e48801083338114d444231f62a9710"
+    },
+    {
+      "card_id": "dictionary.home.number-compare",
+      "content_version": 3,
+      "content_hash": "f0fd9264c25b1719d979c489fa9dde2cb2ddc10a6c4eab1227440e6320131cc1"
+    },
+    {
+      "card_id": "dictionary.home.money-count",
+      "content_version": 3,
+      "content_hash": "f1163c8925aa2cd3c41b9acaeec1acd6b11c056b3e23dc13c540388e1867d0a3"
+    },
+    {
+      "card_id": "dictionary.home.number-make-ten",
+      "content_version": 3,
+      "content_hash": "e10befd294a76941d0c8faed2d3c81f348e968675995eabbdccb243515efa8af"
+    },
+    {
+      "card_id": "dictionary.home.number-place-value",
+      "content_version": 3,
+      "content_hash": "442957703249278e33796b8ff9cfe5d17b35a4507d2248f9cac50afd05d7752a"
+    },
+    {
+      "card_id": "dictionary.home.add-pictures",
+      "content_version": 3,
+      "content_hash": "edfdeff375827bacb83ff08ab0e7b5cf469ec55255c0753cb6fcfa86accc6d99"
+    },
+    {
+      "card_id": "dictionary.home.money-price",
+      "content_version": 3,
+      "content_hash": "1455cefd243d94d617d16b53006cb0ef00d49ee5e3d68857f4157fa3472b8bf6"
+    },
+    {
+      "card_id": "dictionary.home.add-place",
+      "content_version": 2,
+      "content_hash": "cbcea09461ddc7135761e24e7c002769db28f95b956d2e0f1f3f7bbcfec94e31"
+    },
+    {
+      "card_id": "dictionary.home.add-make-ten",
+      "content_version": 2,
+      "content_hash": "01587d979cf85a38a3d28f7fbfd54a479ad138b9a59e8d34611ab07b45361b57"
+    },
+    {
+      "card_id": "dictionary.home.sub-pictures",
+      "content_version": 2,
+      "content_hash": "e0431ef97df613de57ae21861bc5ea6b0d94487ddc111a67b0a30446a2f5c0fd"
+    },
+    {
+      "card_id": "dictionary.home.money-budget",
+      "content_version": 2,
+      "content_hash": "ad3d9f1e12712084eca9d6709c8c3fbcd4f913aeadf7cf98ab4bfac3b045978f"
+    },
+    {
+      "card_id": "dictionary.home.sub-place",
+      "content_version": 2,
+      "content_hash": "22eb5ebf7aaa9ef44d504055d1820a867a4d9882adb195fa056326b175c2415b"
+    },
+    {
+      "card_id": "dictionary.home.sub-borrow",
+      "content_version": 3,
+      "content_hash": "96a452abcda6f5b17ea5a1b9765a3aba0dfee5d1303b7da9c50811d80f01525e"
+    },
+    {
+      "card_id": "dictionary.home.multiply-groups",
+      "content_version": 2,
+      "content_hash": "457b14e3c65711789460a1947b21cb751a0fe98c0c8f90d6db63d364076c6f93"
+    },
+    {
+      "card_id": "dictionary.home.multiply-addition",
+      "content_version": 3,
+      "content_hash": "97cd31cdeea1522413144b7b6fb6b586c97a207dcaa0d202667887e7a44f381d"
+    },
+    {
+      "card_id": "dictionary.home.money-mission",
+      "content_version": 2,
+      "content_hash": "72eac9ed500b22c5d230c7387ddef9a8d67e41493de1a408d05363345a4b1a4b"
+    },
+    {
+      "card_id": "dictionary.home.multiply-easy-tables",
+      "content_version": 3,
+      "content_hash": "52c1df84b8ef8329a441fc489a35157ada77f73d46021d1b62ed82912d99ff27"
+    },
+    {
+      "card_id": "dictionary.home.multiply-tables",
+      "content_version": 3,
+      "content_hash": "5464983c6a5875ef8e7ab48f25a9bd390d5e91325ae0a662183f49e768a8dd8b"
+    },
+    {
+      "card_id": "dictionary.home.divide-share",
+      "content_version": 2,
+      "content_hash": "b0b9a8e3c805d9587f970c0d2fc287eb913cda3cbcf1de6d8a15f20f3dda93c4"
+    },
+    {
+      "card_id": "dictionary.home.divide-group",
+      "content_version": 2,
+      "content_hash": "d7eed6a60d6feaf78ca6d1fa65c0b3930e99edb35043e54a89f300b6ab3abb7f"
+    },
+    {
+      "card_id": "dictionary.home.pattern-repeat",
+      "content_version": 2,
+      "content_hash": "9824f12fdce38b7844d5a9ace05a485aff743bdad6b21da25ef3cd21710a2b10"
+    },
+    {
+      "card_id": "dictionary.home.pattern-number",
+      "content_version": 2,
+      "content_hash": "96746e0badcaae843e07957c9f0a7fe65dcf93b5f16c86f936af4d7fe31f5619"
+    },
+    {
+      "card_id": "dictionary.home.pattern-unknown",
+      "content_version": 3,
+      "content_hash": "41bfb6e808508e78859e28263aaba59aae3b39984c608749ff50980e40fde205"
+    },
+    {
+      "card_id": "dictionary.home.clock-basic",
+      "content_version": 3,
+      "content_hash": "fdb3c201d0f6f9eecad5f3b4c915485b793186a617dfe3f372145ccf3e662e73"
+    },
+    {
+      "card_id": "dictionary.home.clock-quarter",
+      "content_version": 3,
+      "content_hash": "ee970b14cee6026844e3175d1540f4a6794da0a4ea61b5fd8d6eccd662c31c82"
+    },
+    {
+      "card_id": "dictionary.home.time-duration",
+      "content_version": 2,
+      "content_hash": "86d4070f74e5e24386acbb7c4efe0a5698c8e26553b93502c18db3baf160732a"
+    },
+    {
+      "card_id": "dictionary.home.time-calendar",
+      "content_version": 3,
+      "content_hash": "4a02e0eebffe738b7a6b796b2939b098df06b907a69416c8be958f4a5729855d"
+    },
+    {
+      "card_id": "dictionary.home.measure-compare",
+      "content_version": 2,
+      "content_hash": "63cc653a954804f1409c81bcd64cead7171add0e22101b29516c370e2b9ff1f8"
+    },
+    {
+      "card_id": "dictionary.home.measure-ruler",
+      "content_version": 2,
+      "content_hash": "b8e405fd4cd43d55ad8187374e08f72df1c68959ae80c1046abf9850654a8302"
+    },
+    {
+      "card_id": "dictionary.home.measure-weight-capacity",
+      "content_version": 3,
+      "content_hash": "01a31d80ffef7bd111c34aaf55c69744d0236ef5956af1c686f9532af73c6e2e"
+    },
+    {
+      "card_id": "dictionary.home.geometry-shapes",
+      "content_version": 3,
+      "content_hash": "2d5dd3bfea1ccaf57306106f17c794cf91308d124cbc36409835bac3946e0b9e"
+    },
+    {
+      "card_id": "dictionary.home.geometry-compose",
+      "content_version": 3,
+      "content_hash": "6a450021accfa40cf6a6082a684c007b88eaa41035b0f8f54bcb96646dfef3bb"
+    },
+    {
+      "card_id": "dictionary.home.geometry-position",
+      "content_version": 2,
+      "content_hash": "5267d32b11843bd48c9d3d03eaa90dea5d461b2a87c103f54d3f93cb4c7a6523"
+    },
+    {
+      "card_id": "dictionary.home.data-classify",
+      "content_version": 2,
+      "content_hash": "f50442f03cf06b0ceb2fa9a749cc3dfeda648575a9947eb8ca4c95a76baeaba6"
+    },
+    {
+      "card_id": "dictionary.home.data-chart",
+      "content_version": 2,
+      "content_hash": "93ac30d7b7445872663d6d8a04a9ca88debd8f6b2fb33386e098a4912aa436cd"
+    },
+    {
+      "card_id": "dictionary.home.data-chance",
+      "content_version": 2,
+      "content_hash": "3aa14f0bb069e1861e641b20468a2aa8436e0dcfd9c4799009801d154f0e9884"
+    },
+    {
+      "card_id": "dictionary.cafe.cafe-queue",
+      "content_version": 1,
+      "content_hash": "342f9c9835a161bf7f6b80975f09bbd864306aec2f9b718f4a2e2ee90c13c8dc"
+    },
+    {
+      "card_id": "dictionary.cafe.cafe-budget-menu",
+      "content_version": 1,
+      "content_hash": "915b81979bb8fc5814a4096c6d5c01d151f6a4c6a132cd2907fcd0dffaa9d4e0"
+    },
+    {
+      "card_id": "dictionary.cafe.cafe-menu-total",
+      "content_version": 1,
+      "content_hash": "ff20d4c6e8529c49a8334a0ec81efbece273894895f47416d932e5a4aa18cfff"
+    },
+    {
+      "card_id": "dictionary.cafe.cafe-change",
+      "content_version": 1,
+      "content_hash": "d0a1011da568d1276270b1c59c0b9c6f9d3321641c03e02ccaee7477f1618adc"
+    }
   ]
 }

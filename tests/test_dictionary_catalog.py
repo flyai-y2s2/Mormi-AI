@@ -7,6 +7,7 @@ import pytest
 from conftest import FakeGateway
 from pydantic import ValidationError
 
+from mormi_api.content import HOME_TEACHING_CATALOG
 from mormi_api.db import Database
 from mormi_api.dictionary_audit import (
     build_dictionary_review_items,
@@ -18,6 +19,7 @@ from mormi_api.dictionary_catalog import (
     DictionaryVersionMismatchError,
     get_dictionary_card,
     validate_dictionary_catalog,
+    validate_dictionary_example_is_not_teaching_answer,
     validate_version_manifest,
 )
 from mormi_api.dictionary_models import DictionaryCard, dictionary_content_hash
@@ -66,16 +68,48 @@ def test_every_card_has_grounded_visual_and_a_human_review_block() -> None:
     assert report.count("## dictionary:") == 40
     assert "개념·예시·전용 그림" in report
     assert "도움카드와 역할·문구가 분리" in report
+    assert "현재 가르치기 문제와 다른 수·그림·정답" in report
 
 
-def test_counting_dictionary_uses_a_progressive_one_two_three_visual() -> None:
+def test_counting_dictionary_uses_a_distinct_progressive_visual() -> None:
     card = get_dictionary_card("number-count")
 
     assert card.visual.type == "count_sequence"
-    assert card.visual.data["sequence_counts"] == [1, 2, 3]
+    assert card.visual.data["sequence_counts"] == [1, 2, 3, 4]
     assert card.visual.data["layout"] == "left_to_right"
     assert "1개, 2개, 3개" in card.concept.lines[0]
-    assert "1개, 2개, 3개" in card.example.lines[0]
+    assert "1개, 2개, 3개, 4개" in card.example.lines[0]
+    assert card.example.answer == 4
+
+
+def test_every_home_dictionary_uses_a_different_worked_answer() -> None:
+    for session_id, spec in HOME_TEACHING_CATALOG.items():
+        card = get_dictionary_card(session_id)
+        assert card.example.answer is not None, session_id
+        validate_dictionary_example_is_not_teaching_answer(
+            curriculum_session_id=session_id,
+            teaching_answer=spec.sample_problem["correct"],
+            card=card,
+        )
+
+
+def test_dictionary_rejects_reusing_the_teaching_answer() -> None:
+    spec = HOME_TEACHING_CATALOG["money-count"]
+    card = get_dictionary_card("money-count")
+    leaked = card.model_copy(
+        update={
+            "example": card.example.model_copy(
+                update={"answer": spec.sample_problem["correct"]}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="must use a different answer"):
+        validate_dictionary_example_is_not_teaching_answer(
+            curriculum_session_id=spec.id,
+            teaching_answer=spec.sample_problem["correct"],
+            card=leaked,
+        )
 
 
 def test_requested_dictionary_copy_uses_child_readable_standard_terms() -> None:
@@ -96,12 +130,12 @@ def test_reviewed_dictionary_avoids_nonstandard_place_value_and_clock_copy() -> 
     assert "3십" not in " ".join(
         [*place_value.concept.lines, *place_value.example.lines, place_value.visual.alt_text]
     )
-    assert "십의 자리 숫자 3은 30" in place_value.concept.lines[0]
+    assert "십의 자리는 몇십인지" in place_value.concept.lines[0]
 
     half_hour = get_dictionary_card("clock-basic")
     quarter_hour = get_dictionary_card("clock-quarter")
-    assert "3과 4 사이" in half_hour.example.lines[0]
-    assert "1을 조금 지나" in quarter_hour.example.lines[0]
+    assert "4와 5 사이" in half_hour.example.lines[0]
+    assert "3에 가까우면" in quarter_hour.example.lines[0]
 
 
 def test_card_rejects_an_equation_or_visual_that_disagrees_with_facts() -> None:

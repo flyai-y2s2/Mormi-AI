@@ -98,9 +98,16 @@ class DictionaryEquation(StrictModel):
 class DictionaryExample(DictionaryTextBlock):
     facts: dict[str, Any] = Field(min_length=1)
     equation: DictionaryEquation | None = None
+    # A worked example may show its answer, but it must be a different
+    # assessment instance from the teaching question currently on screen.
+    # Keeping the answer explicit lets startup/CI compare the two without
+    # guessing which arbitrary fact key represents the outcome.
+    answer: str | int | float | bool | None = None
 
     @model_validator(mode="after")
     def validate_equation_fact_refs(self) -> DictionaryExample:
+        if isinstance(self.answer, str) and not self.answer.strip():
+            raise ValueError("dictionary example answer must not be blank")
         if self.equation is None:
             return self
         refs = [*self.equation.operand_fact_refs, self.equation.result_fact_ref]
@@ -210,8 +217,14 @@ class DictionaryCardEnvelope(StrictModel):
 
 
 def dictionary_content_hash(card: DictionaryCard) -> str:
+    dumped = card.model_dump(mode="json")
+    # `answer` was added after the first café cards were approved. Omitting an
+    # absent value preserves those cards' existing hashes while still hashing
+    # the explicit worked-example answer required for home cards.
+    if dumped["example"].get("answer") is None:
+        dumped["example"].pop("answer", None)
     payload = json.dumps(
-        card.model_dump(mode="json"),
+        dumped,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
