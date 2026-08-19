@@ -61,7 +61,7 @@ async def test_read_only_startup_skips_all_startup_write_routines() -> None:
     ("skip_startup_maintenance", "expected_calls"),
     [
         (
-            False,
+            None,
             [
                 "database",
                 "gateway",
@@ -79,7 +79,7 @@ async def test_read_only_startup_skips_all_startup_write_routines() -> None:
 )
 async def test_lifespan_respects_the_startup_maintenance_setting(
     monkeypatch: pytest.MonkeyPatch,
-    skip_startup_maintenance: bool,
+    skip_startup_maintenance: bool | None,
     expected_calls: list[str],
 ) -> None:
     calls: list[str] = []
@@ -121,19 +121,23 @@ async def test_lifespan_respects_the_startup_maintenance_setting(
     monkeypatch.setattr(main, "ClaudeGateway", LifespanGateway)
     monkeypatch.setattr(main, "ConversationEngine", LifespanEngine)
     monkeypatch.setattr(main, "ConversationService", LifespanService)
-    monkeypatch.setattr(
-        main,
-        "get_settings",
-        lambda: Settings(
-            environment="development",
-            database_url="sqlite+aiosqlite:///./test.db",
-            skip_startup_maintenance=skip_startup_maintenance,
-        ),
+    settings_kwargs = (
+        {"skip_startup_maintenance": skip_startup_maintenance}
+        if skip_startup_maintenance is not None
+        else {}
     )
+    settings = Settings(
+        environment="development",
+        database_url="sqlite+aiosqlite:///./test.db",
+        _env_file=None,
+        **settings_kwargs,
+    )
+    assert settings.skip_startup_maintenance is (skip_startup_maintenance is True)
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
 
     app = SimpleNamespace(state=SimpleNamespace())
     async with main.lifespan(app):
-        assert app.state.settings.skip_startup_maintenance is skip_startup_maintenance
+        assert app.state.settings.skip_startup_maintenance is (skip_startup_maintenance is True)
 
     assert calls == expected_calls
 
@@ -148,6 +152,16 @@ def test_startup_maintenance_flag_parses_from_environment(
         assert get_settings().skip_startup_maintenance is True
     finally:
         get_settings.cache_clear()
+
+
+def test_startup_maintenance_defaults_to_false_when_the_flag_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MORMI_SKIP_STARTUP_MAINTENANCE", raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.skip_startup_maintenance is False
 
 
 def test_production_rejects_skip_startup_maintenance() -> None:
