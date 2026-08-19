@@ -7,6 +7,7 @@ from mormi_api.content import (
     CHANGE_TASK_ID,
     HOME_TEACH_TASK_ID,
     TOTAL_CALC_TASK_ID,
+    calculation_task,
     create_scenario_data,
 )
 from mormi_api.engine import ConversationEngine
@@ -309,8 +310,18 @@ async def test_queue_keeps_l4_after_independent_counts_and_asks_the_comparison_n
         response_category=ResponseCategory.CORRECT_FULL,
         difficulty_class=DifficultyClass.UNKNOWN,
         claims=[
-            SlotClaim(slot_id="left_count", value=3, factual=True),
-            SlotClaim(slot_id="right_count", value=5, factual=True),
+            SlotClaim(
+                slot_id="left_count",
+                value=3,
+                factual=True,
+                evidence_span="왼쪽 세 명",
+            ),
+            SlotClaim(
+                slot_id="right_count",
+                value=5,
+                factual=True,
+                evidence_span="오른쪽 다섯 명",
+            ),
         ],
         confidence=1,
     )
@@ -447,6 +458,162 @@ async def test_cafe_result_only_is_remembered_and_only_method_is_asked_next() ->
     assert turn.mormi.text != initial.mormi.text
     assert "6,000원이구나" in turn.mormi.text
     assert "어떻게 계산한 건지" in turn.mormi.text
+
+
+@pytest.mark.asyncio
+async def test_numeric_claim_cannot_replace_child_wrong_amount_with_expected() -> None:
+    """A model-authored expected value cannot overrule the child's 1,800 claim."""
+
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="operation",
+                value="addition",
+                factual=True,
+                evidence_span="더하면",
+            ),
+            # Simulate the historical classifier bug: the child said 1,800,
+            # but the model copied reviewed expected=1,700 into the claim.
+            SlotClaim(
+                slot_id="result",
+                value=1700,
+                factual=True,
+                evidence_span="1800원이야",
+                interpretation_confidence=1,
+            ),
+        ],
+        confidence=1,
+    )
+    engine = ConversationEngine(FakeGateway([analysis]), show_internal_pedagogy=True)  # type: ignore[arg-type]
+    state = SessionState(
+        learner_id=1,
+        scene="cafe",
+        scenario_id="cafe_menu_total",
+        task_ids=[TOTAL_CALC_TASK_ID],
+        task_start_levels={TOTAL_CALC_TASK_ID: ExpressionLevel.L4},
+        scenario_data={
+            "menu_items": [
+                {"id": "first", "name": "첫 메뉴", "price": 1200},
+                {"id": "second", "name": "둘째 메뉴", "price": 500},
+            ],
+            "mormi_menu_id": "first",
+            "child_menu_id": "second",
+        },
+        expression_level=ExpressionLevel.L4,
+        task_start_level=ExpressionLevel.L4,
+    )
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, effective_analysis, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="a86a1a11-dd76-49b0-a831-e746157cb356",
+            type="text",
+            text="1200원에 500원을 더하면 1800원이야",
+        ),
+        initial.mormi.text,
+    )
+
+    assert next_state.verified_slots == {"operation": "addition"}
+    assert next_state.status.value == "active"
+    assert turn.status.value == "active"
+    assert effective_analysis.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert effective_analysis.difficulty_class is DifficultyClass.CONCEPT
+    assert effective_analysis.claims[1].factual is False
+
+
+def test_wrong_subtraction_cannot_satisfy_result_or_method_contract() -> None:
+    task = calculation_task(
+        task_id="subtraction_truth_gate",
+        title="거스름돈 계산",
+        skill_id="subtraction",
+        left=5000,
+        right=2400,
+        operation="subtraction",
+        result=2600,
+    )
+    child_text = "5000원에서 2400원을 빼면 2700원이야"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[
+            SlotClaim(
+                slot_id="result",
+                value=2700,
+                factual=True,
+                evidence_span="2700원이야",
+                interpretation_confidence=1,
+            ),
+            SlotClaim(
+                slot_id="method",
+                factual=True,
+                supported=True,
+                support_confidence=1,
+                evidence_span=child_text,
+            ),
+        ],
+    )
+
+    ConversationEngine._ground_text_numeric_claims(task, child_text, analysis)
+    verified = task.validated_slot_claims(analysis.claims)
+    verified = ConversationEngine._filter_text_explanation_claims(
+        task,
+        child_text,
+        analysis,
+        verified,
+    )
+
+    assert "result" not in verified
+    assert "method" not in verified
+    assert analysis.claims[1].supported is False
+
+
+@pytest.mark.parametrize(
+    ("child_text", "confidence", "accepted"),
+    [
+        ("더하면 천칠백원이야", 0.7, True),
+        ("더하면 천칠배건이야", 0.95, True),
+        ("더하면 천칠배건이야", 0.4, False),
+    ],
+)
+def test_korean_amounts_use_evidence_and_only_ambiguous_typos_need_high_confidence(
+    child_text: str,
+    confidence: float,
+    accepted: bool,
+) -> None:
+    task = calculation_task(
+        task_id="korean_amount_truth_gate",
+        title="메뉴값 계산",
+        skill_id="addition",
+        left=1200,
+        right=500,
+        operation="addition",
+        result=1700,
+    )
+    evidence = child_text.removeprefix("더하면 ")
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        claims=[
+            SlotClaim(
+                slot_id="result",
+                value=1700,
+                factual=True,
+                evidence_span=evidence,
+                interpretation_confidence=confidence,
+            )
+        ],
+    )
+
+    ConversationEngine._ground_text_numeric_claims(task, child_text, analysis)
+    verified = task.validated_slot_claims(analysis.claims)
+
+    assert (verified.get("result") == 1700) is accepted
 
 
 @pytest.mark.asyncio

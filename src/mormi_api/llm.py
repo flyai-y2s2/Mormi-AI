@@ -326,6 +326,13 @@ class ClaudeGateway:
                 "supported": True,
                 "evidence_span": "exact_child_substring",
             }
+        else:
+            contract["claim_contract"] = {
+                "value": "actual_child_claim_normalized",
+                "supported": None,
+                "evidence_span": "exact_child_substring",
+                "interpretation_confidence": "0_to_1",
+            }
         return contract
 
     @staticmethod
@@ -429,8 +436,14 @@ class ClaudeGateway:
                 ),
                 "정답 방향의 일부 의미만 있으면 correct_partial로 분류한다.",
                 (
-                    "evaluation_mode=canonical_value 슬롯은 검수된 expected 값을 value로 "
-                    "claim하고 supported는 null로 둔다."
+                    "evaluation_mode=canonical_value 슬롯의 value에는 검수된 expected가 아니라 "
+                    "아이가 실제로 주장한 값을 정규화해 넣는다. 아이가 1800이라고 말했으면 "
+                    "expected가 1700이어도 value=1800이다. supported는 null로 둔다."
+                ),
+                (
+                    "canonical_value claim의 evidence_span은 그 값을 실제로 말한 원문 부분을 "
+                    "그대로 복사하고, interpretation_confidence에는 그 원문을 value로 해석한 "
+                    "확신도를 넣는다. 원문에 없는 expected 값으로 바꾸지 않는다."
                 ),
                 (
                     "evaluation_mode=semantic_support 슬롯은 내부 대표 코드로 정규화하지 "
@@ -446,8 +459,8 @@ class ClaudeGateway:
                     "claim을 생략한다. 원문에 없는 의미를 보충해 supported=true로 만들지 않는다."
                 ),
                 (
-                    "숫자 expected에는 쉼표나 단위가 붙어도 같은 수로 해석한다. "
-                    "예: 6000원과 6,000원은 같은 값이며 expected 숫자로 claim한다."
+                    "아이의 숫자 표현은 쉼표나 단위를 제거해 같은 수로 정규화한다. "
+                    "예: 아이가 6,000원이라고 말하면 value=6000이다."
                 ),
                 "검수된 valid_explanations나 aliases 중 어느 하나와 뜻이 맞으면 인정한다.",
                 (
@@ -566,11 +579,15 @@ social_grounding_span은 안전한 메타·사회적 반응에 쓸 정확한 원
 - 교과서 문장과 어휘가 다르다는 이유로 unrelated_response를 선택하지 않는다.
 - semantic_role=observation은 화면이나 생활 장면에서 직접 확인한 사실이다.
 - semantic_role=conclusion·operation·selection은 요청한 결과가 명시된 범위만 채운다.
-- 숫자 expected에 쉼표나 단위가 붙어도 같은 수면 expected 숫자로 claim한다.
-  예를 들어 '6000원이야'는 expected=6000을 직접 말한 결론이다.
+- 숫자 표현은 쉼표나 단위를 제거해 정규화하되, value에는 expected가 아니라 아이가
+  실제로 주장한 값을 넣는다. 예를 들어 expected=1700이어도 아이가 '1800원이야'라고
+  말했다면 value=1800, evidence_span='1800원이야'다.
 - semantic_role=method는 실제 행동이나 절차, reason은 사실 사이의 관계,
   explanation은 검수된 수학 관계나 해결 절차가 원문에 있어야 한다.
-- evaluation_mode=canonical_value는 value에 검수된 정답값을 넣고 supported는 null로 둔다.
+- evaluation_mode=canonical_value는 value에 아이의 실제 주장값을 정규화해 넣고
+  supported는 null로 둔다. expected는 factual 판단의 참고값이지 claim으로 복사할 값이 아니다.
+- canonical_value의 evidence_span은 실제 주장값이 나온 정확한 원문이고,
+  interpretation_confidence는 원문을 그 값으로 읽은 확신도다. 원문에 없는 값을 만들지 않는다.
 - evaluation_mode=semantic_support는 가능한 말을 코드값 목록으로 열거하지 않는다.
   아이 원문이 슬롯 설명을 실제로 뒷받침하면 value=null, supported=true,
   support_confidence와 정확한 evidence_span을 반환한다.

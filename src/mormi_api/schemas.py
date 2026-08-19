@@ -410,6 +410,12 @@ class SlotClaim(BaseModel):
     value: str | int | float | bool | None = None
     factual: bool = False
     evidence_span: str = ""
+    # For canonical values the classifier must normalize what the child
+    # actually said, not copy the reviewed answer.  This confidence is used
+    # only when a Korean number or typo cannot be parsed deterministically;
+    # clear Arabic/Korean quantities are always checked against evidence in
+    # code regardless of the model's confidence.
+    interpretation_confidence: float | None = Field(default=None, ge=0, le=1)
     # Open-ended method/reason/explanation slots cannot be enumerated as a
     # finite list of canonical answer codes. The classifier instead states
     # whether the child's exact evidence semantically supports the reviewed
