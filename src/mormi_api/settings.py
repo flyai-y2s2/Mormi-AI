@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     speaker_verifier_timeout_seconds: float = Field(default=1.8, ge=0.2, le=10)
     raw_data_encryption_key: str | None = None
     service_api_key: str | None = None
+    skip_startup_maintenance: bool = False
     idempotency_retention_days: int = Field(default=30, ge=1, le=90)
     cors_origins: list[str] = ["http://localhost:3000"]
     show_internal_pedagogy: bool = False

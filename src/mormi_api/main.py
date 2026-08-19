@@ -41,19 +41,34 @@ from .service import ConversationService
 from .settings import Settings, get_settings
 
 
+async def run_startup_maintenance(
+    database: Database,
+    repository: Repository,
+    *,
+    skip: bool,
+) -> None:
+    if skip:
+        return
+    await database.create_schema()
+    await repository.migrate_existing_storage_to_permanent()
+    await repository.purge_expired_raw_data()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     database = Database(settings.database_url)
-    await database.create_schema()
     gateway = ClaudeGateway(settings)
     repository = Repository(
         database,
         TextCipher(settings.raw_data_encryption_key),
         idempotency_retention_days=settings.idempotency_retention_days,
     )
-    await repository.migrate_existing_storage_to_permanent()
-    await repository.purge_expired_raw_data()
+    await run_startup_maintenance(
+        database,
+        repository,
+        skip=settings.skip_startup_maintenance,
+    )
     engine = ConversationEngine(
         gateway,
         show_internal_pedagogy=settings.show_internal_pedagogy,
