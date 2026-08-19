@@ -662,6 +662,10 @@ type TurnContract = {
 
 ### `GET /v1/learners/{learner_id}/star-notes`
 
+이 엔드포인트는 AI 내부 감사·디버깅용 조회다. 운영 FE의 별노트 모아보기는 AI가
+발행한 `star_note_created` 이벤트를 멱등 수집한 Spring의 학습자별 별노트 API를
+사용한다. 브라우저가 이 AI 엔드포인트를 직접 호출하지 않는다.
+
 ```json
 {
   "learner_id": 1,

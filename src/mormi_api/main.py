@@ -101,6 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             request_timeout_seconds=settings.outbox_request_timeout_seconds,
             retry_base_seconds=settings.outbox_retry_base_seconds,
             retry_max_seconds=settings.outbox_retry_max_seconds,
+            star_note_events_enabled=settings.star_note_events_enabled,
         )
         dispatcher_task = asyncio.create_task(
             dispatcher.run_forever(),

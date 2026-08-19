@@ -96,13 +96,65 @@ X-Mormi-Service-Key: {MORMI_OBSERVATION_INGEST_KEY}
 }
 ```
 
+### 별노트 독립 이벤트(B안)
+
+별노트는 관찰 이벤트 안의 부수 문장이 아니라 별도 생명주기를 가진 서비스 데이터다.
+AI는 문장·귀속·근거를 생성하고, Spring BE는 멱등 수집한 별노트를 서비스용 원장과 조회
+API로 제공한다. FE가 AI의 별노트 조회 API를 직접 호출하거나 정적 문구를 조합하지 않는다.
+
+별노트 생성, 근거 링크, 아래 outbox row는 한 DB 트랜잭션에 저장된다. 별노트 표시 문장은
+서비스 화면에 필요한 검수 결과이므로 포함하지만, 아이 원문 발화와 raw evidence span은
+포함하지 않고 관찰 ID와 슬롯 ID만 전달한다.
+
+```json
+{
+  "event_id": "event_...",
+  "schema_version": 1,
+  "event_type": "star_note_created",
+  "star_note": {
+    "note_id": "note_...",
+    "note_version": 1,
+    "learner_id": 17,
+    "conversation_id": "conversation_...",
+    "learning_session_id": "session_...",
+    "scene": "home_teach",
+    "scenario_id": "home_teach",
+    "task_id": "home_teaching",
+    "stage": "home_teaching",
+    "task_index": 0,
+    "skill_id": "number-count",
+    "text": "색칠된 칸을 하나씩 세면 모두 3개야.",
+    "attribution": "child",
+    "attribution_label": "아이가 알려줌",
+    "evidence": "direct_explanation",
+    "evidence_links": [
+      {
+        "observation_id": "observation_...",
+        "source_slot_ids": ["tracking"]
+      }
+    ],
+    "active": true,
+    "created_at": "2026-08-19T00:00:00+00:00"
+  }
+}
+```
+
+`event_id`는 전송 멱등 키, `note_id`는 별노트 원장의 멱등 키다. 이벤트 전달 순서는
+보장하지 않으므로 Spring은 별노트 이벤트가 관찰 이벤트보다 먼저 도착해도 수용해 나중에
+근거를 연결하거나, `409 unknown_observation`을 반환해 재시도시켜야 한다. 향후 수정·비활성화
+이벤트를 추가할 수 있도록 `note_version`을 둔다.
+
+Spring 수신 계약이 먼저 배포되지 않은 환경에서는
+`MORMI_STAR_NOTE_EVENTS_ENABLED=false`를 유지한다. AI는 별노트 이벤트를 pending으로
+보존하되 claim하지 않는다. Spring 배포 후 값을 `true`로 바꾸면 적체분부터 전송한다.
+
 `event_id`가 멱등 키이므로 응답 유실 뒤 같은 이벤트를 다시 보내도 안전하다. 상태 전이는
 다음과 같다.
 
 | 결과 | Outbox 처리 |
 |---|---|
 | `200` (`duplicate: true` 포함) | `sent`, 전달 시각 기록 |
-| `409 unknown_conversation` | 지수 백오프 뒤 `retry` |
+| `409 unknown_conversation`, `unknown_learner`, `unknown_observation`, `missing_evidence_observation` | 선행 데이터 도착을 기다리며 지수 백오프 뒤 `retry` |
 | `429`, `5xx`, timeout·network error | 지수 백오프 뒤 `retry` |
 | `422` 및 재시도로 해결되지 않는 `4xx` | `failed`, 자동 재시도 중단 |
 | `401`/`403` | 현재 이벤트를 `retry`로 돌리고 worker 중단; 설정 수정 후 재시작 |

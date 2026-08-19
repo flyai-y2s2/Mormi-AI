@@ -7,7 +7,12 @@ import httpx
 import pytest
 
 from mormi_api.db import Database, OutboxEventRecord
-from mormi_api.outbox import OutboxDispatcher, OutboxStore
+from mormi_api.outbox import (
+    DIALOGUE_OBSERVATION_EVENT_TYPE,
+    STAR_NOTE_CREATED_EVENT_TYPE,
+    OutboxDispatcher,
+    OutboxStore,
+)
 from mormi_api.schemas import utc_now
 from mormi_api.settings import Settings
 
@@ -23,7 +28,7 @@ async def _database_with_events(tmp_path: object, count: int = 1) -> Database:
                     event_id=f"event_{index}",
                     aggregate_type="dialogue_observation",
                     aggregate_id=f"observation_{index}",
-                    event_type="mormi.dialogue.observation.recorded",
+                    event_type=DIALOGUE_OBSERVATION_EVENT_TYPE,
                     schema_version=1,
                     payload_json={
                         "observation_id": f"observation_{index}",
@@ -46,11 +51,36 @@ async def _record(database: Database, event_id: str = "event_0") -> OutboxEventR
         return record
 
 
+async def _add_star_note_event(database: Database, event_id: str = "event_star") -> None:
+    now = utc_now()
+    async with database.sessions() as db:
+        db.add(
+            OutboxEventRecord(
+                event_id=event_id,
+                aggregate_type="star_note",
+                aggregate_id="note_1",
+                event_type=STAR_NOTE_CREATED_EVENT_TYPE,
+                schema_version=1,
+                payload_json={
+                    "note_id": "note_1",
+                    "note_version": 1,
+                    "learner_id": 1,
+                    "conversation_id": "conversation_1",
+                    "text": "점을 하나씩 세면 모두 3개야.",
+                },
+                available_at=now,
+                created_at=now,
+            )
+        )
+        await db.commit()
+
+
 def _dispatcher(
     database: Database,
     handler: httpx.MockTransport,
     *,
     batch_size: int = 20,
+    star_note_events_enabled: bool = False,
 ) -> OutboxDispatcher:
     return OutboxDispatcher(
         OutboxStore(database, lease_seconds=30),
@@ -59,6 +89,7 @@ def _dispatcher(
         batch_size=batch_size,
         retry_base_seconds=2,
         retry_max_seconds=30,
+        star_note_events_enabled=star_note_events_enabled,
         client=httpx.AsyncClient(transport=handler),
     )
 
@@ -97,12 +128,120 @@ async def test_success_and_duplicate_are_marked_sent(
 
 
 @pytest.mark.asyncio
-async def test_unknown_conversation_retries_with_exponential_backoff(tmp_path: object) -> None:
+async def test_star_note_event_uses_separate_envelope_when_enabled(tmp_path: object) -> None:
+    captured: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"processed": True})
+
+    database = await _database_with_events(tmp_path, count=0)
+    await _add_star_note_event(database)
+    dispatcher = _dispatcher(
+        database,
+        httpx.MockTransport(handle),
+        star_note_events_enabled=True,
+    )
+
+    result = await dispatcher.run_once()
+    record = await _record(database, "event_star")
+
+    assert result.sent == 1
+    assert captured["body"] == {
+        "event_id": "event_star",
+        "schema_version": 1,
+        "event_type": "star_note_created",
+        "star_note": record.payload_json,
+    }
+    await dispatcher.close()
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_star_note_event_remains_pending_until_feature_flag_is_enabled(
+    tmp_path: object,
+) -> None:
+    calls = 0
+
+    def handle(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"processed": True})
+
+    database = await _database_with_events(tmp_path, count=0)
+    await _add_star_note_event(database)
+    disabled = _dispatcher(database, httpx.MockTransport(handle))
+
+    disabled_result = await disabled.run_once()
+    pending = await _record(database, "event_star")
+
+    assert disabled_result.claimed == 0
+    assert pending.status == "pending"
+    assert pending.attempts == 0
+    assert calls == 0
+    await disabled.close()
+
+    enabled = _dispatcher(
+        database,
+        httpx.MockTransport(handle),
+        star_note_events_enabled=True,
+    )
+    enabled_result = await enabled.run_once()
+    sent = await _record(database, "event_star")
+
+    assert enabled_result.sent == 1
+    assert sent.status == "sent"
+    assert calls == 1
+    await enabled.close()
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_unknown_outbox_event_type_fails_without_network_call(tmp_path: object) -> None:
+    calls = 0
+
+    def handle(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200)
+
+    database = await _database_with_events(tmp_path)
+    async with database.sessions() as db:
+        record = await db.get(OutboxEventRecord, "event_0")
+        assert record is not None
+        record.event_type = "mormi.unknown.event"
+        await db.commit()
+    dispatcher = _dispatcher(database, httpx.MockTransport(handle))
+
+    result = await dispatcher.run_once()
+    record = await _record(database)
+
+    assert result.failed == 1
+    assert calls == 0
+    assert record.last_error == "unsupported_outbox_event_type:mormi.unknown.event"
+    await dispatcher.close()
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "unknown_conversation",
+        "unknown_learner",
+        "unknown_observation",
+        "missing_evidence_observation",
+    ],
+)
+async def test_dependency_conflicts_retry_with_exponential_backoff(
+    tmp_path: object,
+    error_code: str,
+) -> None:
     database = await _database_with_events(tmp_path)
     dispatcher = _dispatcher(
         database,
         httpx.MockTransport(
-            lambda _: httpx.Response(409, json={"code": "unknown_conversation"})
+            lambda _: httpx.Response(409, json={"code": error_code})
         ),
     )
     before = utc_now()
@@ -117,7 +256,7 @@ async def test_unknown_conversation_retries_with_exponential_backoff(tmp_path: o
     if available_at.tzinfo is None:
         available_at = available_at.replace(tzinfo=UTC)
     assert available_at >= before + timedelta(seconds=2)
-    assert record.last_error == "unknown_conversation"
+    assert record.last_error == error_code
     await dispatcher.close()
     await database.dispose()
 
@@ -237,11 +376,13 @@ def test_observation_ingest_settings_read_the_dedicated_environment_names(
         "https://backend.example/internal/v1/observations/events",
     )
     monkeypatch.setenv("MORMI_OBSERVATION_INGEST_KEY", "configured-outside-repository")
+    monkeypatch.setenv("MORMI_STAR_NOTE_EVENTS_ENABLED", "true")
 
     settings = Settings(_env_file=None)
 
     assert settings.observation_ingest_enabled is True
     assert settings.observation_ingest_key == "configured-outside-repository"
+    assert settings.star_note_events_enabled is True
 
 
 def test_outbox_lease_must_exceed_request_timeout() -> None:

@@ -261,6 +261,7 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_SERVICE_API_KEY` | 예 | Spring→AI 호출을 보호하는 서비스 간 공유 키 |
 | `MORMI_OBSERVATION_INGEST_URL` | 관찰 전송 시 예 | Spring의 `/internal/v1/observations/events` 전체 URL |
 | `MORMI_OBSERVATION_INGEST_KEY` | 관찰 전송 시 예 | AI→Spring 관찰 이벤트 호출을 보호하는 전용 공유 키 |
+| `MORMI_STAR_NOTE_EVENTS_ENABLED` | 아니요 | BE 별노트 수신 계약 배포 후 `true`; 기본 `false`에서는 별노트 이벤트를 pending으로 보존 |
 | `MORMI_OUTBOX_POLL_INTERVAL_SECONDS` | 아니요 | 전송할 이벤트가 없을 때 폴링 간격, 기본 2초 |
 | `MORMI_OUTBOX_BATCH_SIZE` | 아니요 | 한 폴링 주기에 처리할 최대 이벤트 수, 기본 20개 |
 | `MORMI_OUTBOX_REQUEST_TIMEOUT_SECONDS` | 아니요 | Spring 수신 API 제한 시간, 기본 5초 |
@@ -285,6 +286,13 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 `MORMI_OBSERVATION_INGEST_KEY`를 함께 설정하고, Spring 수신 API에도 같은 키를
 설정합니다. 둘 중 하나만 있으면 기존 대화 API는 정상 시작하되 전송기는 비활성화되어
 설정 누락 로그를 남깁니다. 키 값과 관찰 payload는 전송 로그에 기록하지 않습니다.
+
+별노트 B안은 같은 수신 URL에 `event_type=star_note_created`를 별도 이벤트로 보냅니다.
+AI는 별노트가 생성된 턴과 같은 트랜잭션에서 outbox row를 만들지만,
+`MORMI_STAR_NOTE_EVENTS_ENABLED=false`인 동안에는 전송 대상으로 가져오지 않습니다.
+Spring이 해당 이벤트의 멱등 수집·조회 원장을 배포한 뒤 이 값을 `true`로 바꾸면 기존
+pending 이벤트까지 차례로 전달됩니다. AI를 먼저 배포할 때도 별노트가 422로 유실되지
+않도록 운영 순서를 보장하기 위한 플래그입니다.
 
 Anthropic 키와 DB 접속 문자열은 FE나 Spring 서버에 전달하지 않습니다. 첫 평문 전환이
 완료되기 전에는 기존 원문 암호화 키도 AI 서버에 유지해야 합니다.
