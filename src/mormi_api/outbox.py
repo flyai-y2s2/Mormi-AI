@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Collection
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -17,10 +18,26 @@ logger = logging.getLogger(__name__)
 
 OutboxAction = Literal["sent", "retry", "failed", "auth_failed"]
 
+DIALOGUE_OBSERVATION_EVENT_TYPE = "mormi.dialogue.observation.recorded"
+STAR_NOTE_CREATED_EVENT_TYPE = "mormi.star_note.created"
+
+_EVENT_ENVELOPES: dict[str, tuple[str, str]] = {
+    DIALOGUE_OBSERVATION_EVENT_TYPE: ("dialogue_observation", "observation"),
+    STAR_NOTE_CREATED_EVENT_TYPE: ("star_note_created", "star_note"),
+}
+
+_RETRIABLE_CONFLICT_CODES = {
+    "unknown_conversation",
+    "unknown_learner",
+    "unknown_observation",
+    "missing_evidence_observation",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class OutboxDelivery:
     event_id: str
+    event_type: str
     schema_version: int
     payload: dict[str, object]
     attempt: int
@@ -59,15 +76,21 @@ class OutboxStore:
         limit: int,
         *,
         now: datetime | None = None,
+        blocked_event_types: Collection[str] = (),
     ) -> list[OutboxDelivery]:
         claimed_at = now or utc_now()
         async with self.database.sessions() as db:
+            conditions = [
+                OutboxEventRecord.status.in_(("pending", "retry", "processing")),
+                OutboxEventRecord.available_at <= claimed_at,
+            ]
+            if blocked_event_types:
+                conditions.append(
+                    OutboxEventRecord.event_type.not_in(tuple(blocked_event_types))
+                )
             statement = (
                 select(OutboxEventRecord)
-                .where(
-                    OutboxEventRecord.status.in_(("pending", "retry", "processing")),
-                    OutboxEventRecord.available_at <= claimed_at,
-                )
+                .where(*conditions)
                 .order_by(
                     OutboxEventRecord.available_at.asc(),
                     OutboxEventRecord.created_at.asc(),
@@ -87,6 +110,7 @@ class OutboxStore:
                 deliveries.append(
                     OutboxDelivery(
                         event_id=record.event_id,
+                        event_type=record.event_type,
                         schema_version=record.schema_version,
                         payload=dict(record.payload_json),
                         attempt=record.attempts,
@@ -168,7 +192,7 @@ class OutboxStore:
 
 
 class OutboxDispatcher:
-    """Deliver observation outbox rows without blocking child dialogue turns."""
+    """Deliver versioned integration events without blocking child dialogue turns."""
 
     def __init__(
         self,
@@ -181,6 +205,7 @@ class OutboxDispatcher:
         request_timeout_seconds: float = 5.0,
         retry_base_seconds: float = 2.0,
         retry_max_seconds: float = 300.0,
+        star_note_events_enabled: bool = False,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.store = store
@@ -190,6 +215,11 @@ class OutboxDispatcher:
         self.batch_size = batch_size
         self.retry_base_seconds = retry_base_seconds
         self.retry_max_seconds = retry_max_seconds
+        self.blocked_event_types = (
+            frozenset()
+            if star_note_events_enabled
+            else frozenset({STAR_NOTE_CREATED_EVENT_TYPE})
+        )
         self._stop_event = asyncio.Event()
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=request_timeout_seconds)
@@ -200,7 +230,10 @@ class OutboxDispatcher:
         retried = 0
         failed = 0
         for _ in range(self.batch_size):
-            deliveries = await self.store.claim_due(1)
+            deliveries = await self.store.claim_due(
+                1,
+                blocked_event_types=self.blocked_event_types,
+            )
             if not deliveries:
                 break
             delivery = deliveries[0]
@@ -210,8 +243,9 @@ class OutboxDispatcher:
                 await self.store.mark_sent(delivery)
                 sent += 1
                 logger.info(
-                    "observation_outbox_sent event_id=%s attempt=%s",
+                    "ai_outbox_sent event_id=%s event_type=%s attempt=%s",
                     delivery.event_id,
+                    delivery.event_type,
                     delivery.attempt,
                 )
                 continue
@@ -224,8 +258,10 @@ class OutboxDispatcher:
                 )
                 retried += 1
                 logger.warning(
-                    "observation_outbox_retry event_id=%s attempt=%s delay_seconds=%s reason=%s",
+                    "ai_outbox_retry event_id=%s event_type=%s attempt=%s "
+                    "delay_seconds=%s reason=%s",
                     delivery.event_id,
+                    delivery.event_type,
                     delivery.attempt,
                     delay,
                     decision.reason,
@@ -241,8 +277,9 @@ class OutboxDispatcher:
                 )
                 retried += 1
                 logger.error(
-                    "observation_outbox_authentication_failed event_id=%s attempt=%s",
+                    "ai_outbox_authentication_failed event_id=%s event_type=%s attempt=%s",
                     delivery.event_id,
+                    delivery.event_type,
                     delivery.attempt,
                 )
                 return DeliveryCycleResult(
@@ -255,8 +292,9 @@ class OutboxDispatcher:
             await self.store.mark_failed(delivery, error=decision.reason)
             failed += 1
             logger.error(
-                "observation_outbox_failed event_id=%s attempt=%s reason=%s",
+                "ai_outbox_failed event_id=%s event_type=%s attempt=%s reason=%s",
                 delivery.event_id,
+                delivery.event_type,
                 delivery.attempt,
                 decision.reason,
             )
@@ -268,7 +306,7 @@ class OutboxDispatcher:
         )
 
     async def run_forever(self) -> None:
-        logger.info("observation_outbox_dispatcher_started")
+        logger.info("ai_outbox_dispatcher_started")
         try:
             while not self._stop_event.is_set():
                 try:
@@ -276,11 +314,11 @@ class OutboxDispatcher:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    logger.exception("observation_outbox_cycle_failed")
+                    logger.exception("ai_outbox_cycle_failed")
                     await self._wait_for_next_poll()
                     continue
                 if result.authentication_failed:
-                    logger.error("observation_outbox_dispatcher_stopped reason=authentication")
+                    logger.error("ai_outbox_dispatcher_stopped reason=authentication")
                     return
                 if result.claimed >= self.batch_size:
                     continue
@@ -288,9 +326,9 @@ class OutboxDispatcher:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("observation_outbox_dispatcher_crashed")
+            logger.exception("ai_outbox_dispatcher_crashed")
         finally:
-            logger.info("observation_outbox_dispatcher_stopped")
+            logger.info("ai_outbox_dispatcher_stopped")
 
     async def stop(self) -> None:
         self._stop_event.set()
@@ -307,11 +345,18 @@ class OutboxDispatcher:
             )
 
     async def _deliver(self, delivery: OutboxDelivery) -> DeliveryDecision:
+        envelope = _EVENT_ENVELOPES.get(delivery.event_type)
+        if envelope is None:
+            return DeliveryDecision(
+                "failed",
+                f"unsupported_outbox_event_type:{delivery.event_type}",
+            )
+        public_event_type, payload_key = envelope
         request_body = {
             "event_id": delivery.event_id,
             "schema_version": delivery.schema_version,
-            "event_type": "dialogue_observation",
-            "observation": delivery.payload,
+            "event_type": public_event_type,
+            payload_key: delivery.payload,
         }
         try:
             response = await self._client.post(
@@ -329,8 +374,8 @@ class OutboxDispatcher:
             return DeliveryDecision("sent", "accepted")
         if response.status_code in {401, 403}:
             return DeliveryDecision("auth_failed", f"http_{response.status_code}")
-        if response.status_code == 409 and error_code == "unknown_conversation":
-            return DeliveryDecision("retry", "unknown_conversation")
+        if response.status_code == 409 and error_code in _RETRIABLE_CONFLICT_CODES:
+            return DeliveryDecision("retry", error_code)
         if response.status_code == 429 or response.status_code >= 500:
             return DeliveryDecision("retry", f"http_{response.status_code}")
         if response.status_code == 422:

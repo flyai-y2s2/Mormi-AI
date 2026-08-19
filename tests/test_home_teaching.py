@@ -628,7 +628,15 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
         claims = list((await db.execute(select(DialogueClaimRecord))).scalars())
         outcome = (await db.execute(select(DialogueTaskOutcomeRecord))).scalar_one()
         evidence_link = (await db.execute(select(NoteEvidenceLinkRecord))).scalar_one()
-        outbox = (await db.execute(select(OutboxEventRecord))).scalar_one()
+        outboxes = list((await db.execute(select(OutboxEventRecord))).scalars())
+        observation_outbox = next(
+            event
+            for event in outboxes
+            if event.event_type == "mormi.dialogue.observation.recorded"
+        )
+        star_note_outbox = next(
+            event for event in outboxes if event.event_type == "mormi.star_note.created"
+        )
 
     assert observation.response_category == "correct_full"
     assert observation.concept_result == "correct_full"
@@ -650,17 +658,32 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert outcome.evidence_observation_ids_json == [observation.observation_id]
     assert outcome.note_id == completed.turn.note_update.note_id
     assert evidence_link.observation_id == observation.observation_id
-    assert outbox.aggregate_id == observation.observation_id
-    assert outbox.payload_json["observation_version"] == 1
-    assert outbox.payload_json["stage"] == observation.stage_id
-    assert outbox.payload_json["bottleneck_candidate"] == observation.bottleneck
-    assert outbox.payload_json["help_used"] is observation.help_card_shown
-    assert outbox.payload_json["fallback_occurred"] is False
-    assert outbox.payload_json["completion_outcome"] == observation.completion_outcome
-    assert outbox.payload_json["observed_at"].removesuffix("+00:00") == (
+    assert observation_outbox.aggregate_id == observation.observation_id
+    assert observation_outbox.payload_json["observation_version"] == 1
+    assert observation_outbox.payload_json["stage"] == observation.stage_id
+    assert observation_outbox.payload_json["bottleneck_candidate"] == observation.bottleneck
+    assert observation_outbox.payload_json["help_used"] is observation.help_card_shown
+    assert observation_outbox.payload_json["fallback_occurred"] is False
+    assert observation_outbox.payload_json["completion_outcome"] == (
+        observation.completion_outcome
+    )
+    assert observation_outbox.payload_json["observed_at"].removesuffix("+00:00") == (
         observation.created_at.isoformat()
     )
-    assert outbox.payload_json["claims"][0].get("evidence_span") is None
+    assert observation_outbox.payload_json["claims"][0].get("evidence_span") is None
+    assert star_note_outbox.aggregate_id == completed.turn.note_update.note_id
+    assert star_note_outbox.payload_json["note_id"] == completed.turn.note_update.note_id
+    assert star_note_outbox.payload_json["text"] == completed.turn.note_update.text
+    assert star_note_outbox.payload_json["attribution"] == "child"
+    assert star_note_outbox.payload_json["note_version"] == 1
+    assert star_note_outbox.payload_json["evidence_links"] == [
+        {
+            "observation_id": observation.observation_id,
+            "source_slot_ids": evidence_link.source_slot_ids_json,
+        }
+    ]
+    assert "response" not in star_note_outbox.payload_json
+    assert "evidence_span" not in star_note_outbox.payload_json
     await database.dispose()
 
 
@@ -1082,6 +1105,20 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
             )
         ).scalar_one()
         assert note_link.source_slot_ids_json == ["tracking"]
+        star_note_outbox = (
+            await db.execute(
+                select(OutboxEventRecord).where(
+                    OutboxEventRecord.event_type == "mormi.star_note.created"
+                )
+            )
+        ).scalar_one()
+        assert star_note_outbox.payload_json["text"] == completed.turn.note_update.text
+        assert star_note_outbox.payload_json["evidence_links"] == [
+            {
+                "observation_id": tracking_claim.observation_id,
+                "source_slot_ids": ["tracking"],
+            }
+        ]
     restored = await repository.get_state(started.conversation_id)
     assert restored.child_note_evidence["tracking"] == child_method
     await database.dispose()

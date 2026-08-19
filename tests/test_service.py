@@ -4,7 +4,7 @@ import pytest
 from conftest import FakeGateway
 from sqlalchemy import select
 
-from mormi_api.db import Database, TurnRecord
+from mormi_api.db import Database, OutboxEventRecord, TurnRecord
 from mormi_api.engine import ConversationEngine
 from mormi_api.main import _turn_sse_events
 from mormi_api.repository import Repository
@@ -124,6 +124,18 @@ async def test_choice_flow_completes_and_replay_returns_original_result(tmp_path
     notes = await repository.list_notes(1)
     assert len(notes) == 1
     assert notes[0].note_id == completed.turn.note_update.note_id
+
+    async with database.sessions() as db:
+        star_note_outbox = (
+            await db.execute(
+                select(OutboxEventRecord).where(
+                    OutboxEventRecord.event_type == "mormi.star_note.created"
+                )
+            )
+        ).scalar_one()
+    assert star_note_outbox.payload_json["attribution"] == "coauthored"
+    assert star_note_outbox.payload_json["evidence"] == "supported_completion"
+    assert star_note_outbox.payload_json["text"] == completed.turn.note_update.text
 
     transcript = await repository.raw_turns(conversation_id)
     assert transcript[0]["question"] == started.turn.mormi.text

@@ -22,6 +22,7 @@ from .db import (
     PracticeResultRecord,
     TurnRecord,
 )
+from .outbox import DIALOGUE_OBSERVATION_EVENT_TYPE, STAR_NOTE_CREATED_EVENT_TYPE
 from .schemas import (
     ChildResponse,
     LearnerProfile,
@@ -334,6 +335,8 @@ class Repository:
                 if claim_records:
                     await db.flush(claim_records)
 
+                note_record: NoteRecord | None = None
+                note_evidence_links: list[NoteEvidenceLinkRecord] = []
                 if note:
                     note_record = NoteRecord(
                         note_id=note.note_id,
@@ -349,13 +352,12 @@ class Repository:
                     # The evidence link has two FK parents: the already
                     # flushed observation and this note.
                     await db.flush([note_record])
-                    db.add_all(
-                        await self._note_evidence_link_records(
-                            db,
-                            previous_state=previous_state,
-                            note=note,
-                        )
+                    note_evidence_links = await self._note_evidence_link_records(
+                        db,
+                        previous_state=previous_state,
+                        note=note,
                     )
+                    db.add_all(note_evidence_links)
 
                 task_outcome = await self._task_outcome_record(
                     db,
@@ -369,6 +371,15 @@ class Repository:
                     db.add(task_outcome)
 
                 db.add(self._outbox_record(observation, claim_records, task_outcome))
+                if note is not None and note_record is not None:
+                    db.add(
+                        self._star_note_outbox_record(
+                            observation=observation,
+                            note=note,
+                            note_record=note_record,
+                            evidence_links=note_evidence_links,
+                        )
+                    )
                 await db.commit()
             except IntegrityError as error:
                 await db.rollback()
@@ -739,7 +750,58 @@ class Repository:
             event_id=new_id("event"),
             aggregate_type="dialogue_observation",
             aggregate_id=observation.observation_id,
-            event_type="mormi.dialogue.observation.recorded",
+            event_type=DIALOGUE_OBSERVATION_EVENT_TYPE,
+            schema_version=1,
+            payload_json=payload,
+        )
+
+    @staticmethod
+    def _star_note_outbox_record(
+        *,
+        observation: DialogueTurnObservationRecord,
+        note: NoteUpdate,
+        note_record: NoteRecord,
+        evidence_links: list[NoteEvidenceLinkRecord],
+    ) -> OutboxEventRecord:
+        """Create the service-facing star-note event without child raw text.
+
+        The note text is intentionally included because it is the reviewed
+        display artifact. Child utterances and raw evidence spans stay in the
+        AI evidence store and are represented here only by observation/slot
+        references.
+        """
+
+        payload: dict[str, object] = {
+            "note_id": note.note_id,
+            "note_version": 1,
+            "learner_id": observation.learner_id,
+            "conversation_id": observation.conversation_id,
+            "learning_session_id": observation.learning_session_id,
+            "scene": observation.scene,
+            "scenario_id": observation.scenario_id,
+            "task_id": observation.task_id,
+            "stage": observation.stage_id,
+            "task_index": observation.task_index,
+            "skill_id": note.skill_id,
+            "text": note.text,
+            "attribution": note.attribution.value,
+            "attribution_label": note.attribution_label,
+            "evidence": note.evidence.value,
+            "evidence_links": [
+                {
+                    "observation_id": link.observation_id,
+                    "source_slot_ids": list(link.source_slot_ids_json),
+                }
+                for link in evidence_links
+            ],
+            "active": note_record.active,
+            "created_at": note_record.created_at.isoformat(),
+        }
+        return OutboxEventRecord(
+            event_id=new_id("event"),
+            aggregate_type="star_note",
+            aggregate_id=note.note_id,
+            event_type=STAR_NOTE_CREATED_EVENT_TYPE,
             schema_version=1,
             payload_json=payload,
         )
