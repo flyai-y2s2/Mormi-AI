@@ -185,6 +185,15 @@ def _raw_response_is_available(state: SessionState, *, now: datetime) -> bool:
     )
 
 
+def _decrypt_report_response(repository: Repository, payload: str) -> str | None:
+    """Fail closed for raw text while preserving non-sensitive turn evidence."""
+
+    try:
+        return repository.cipher.decrypt(payload)
+    except ValueError:
+        return None
+
+
 async def build_report_evidence(
     repository: Repository,
     learner_id: int,
@@ -211,7 +220,7 @@ async def build_report_evidence(
                 turn_id=turn.turn_id,
                 task_id=turn.task_id,
                 response=(
-                    repository.cipher.decrypt(turn.response_raw_encrypted)
+                    _decrypt_report_response(repository, turn.response_raw_encrypted)
                     if (
                         include_raw
                         and _raw_response_is_available(state, now=now)

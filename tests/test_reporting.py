@@ -540,6 +540,24 @@ async def test_report_evidence_omits_raw_text_when_not_allowed(tmp_path: object)
 
 
 @pytest.mark.asyncio
+async def test_report_evidence_keeps_structured_turns_when_raw_key_is_unavailable(
+    tmp_path: object,
+) -> None:
+    repository = await reporting_repository(tmp_path)
+    await seed_completed_conversation(repository, learner_id=11, response_text="두 개가 더 적어요")
+    repository_without_key = Repository(repository.database, TextCipher(None))
+
+    evidence = await repository_without_key.report_evidence(11, include_raw=True)
+
+    turn = evidence.conversations[0].turns[0]
+    assert turn.response is None
+    assert turn.response_category == "correct_full"
+    assert turn.expression_level is ExpressionLevel.L2
+    assert turn.hint_level is HintLevel.H1
+    await repository.database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_report_evidence_omits_expired_raw_text_without_mutating_the_record(
     tmp_path: object,
 ) -> None:
