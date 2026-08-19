@@ -829,6 +829,80 @@ class StarNotesResponse(BaseModel):
     notes: list[NoteUpdate]
 
 
+class ReportTurnEvidence(BaseModel):
+    turn_id: str
+    task_id: str
+    response: str | None = None
+    response_type: str | None = None
+    response_category: str | None = None
+    expression_level: ExpressionLevel
+    hint_level: HintLevel
+    pedagogy: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class ReportConversationEvidence(BaseModel):
+    conversation_id: str
+    learning_session_id: str | None
+    scene: SceneType
+    scenario_id: str
+    status: SessionStatus
+    completion_outcome: CompletionOutcome | None
+    teach_reward_eligible: bool
+    verified_slots: dict[str, str | int | float | bool]
+    task_max_hint: HintLevel
+    turns: list[ReportTurnEvidence]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportEvidenceResponse(BaseModel):
+    learner_id: int
+    conversations: list[ReportConversationEvidence]
+    skills: list[SkillProfile]
+    notes: list[NoteUpdate]
+
+
+class ReportFact(BaseModel):
+    evidence_id: str = Field(pattern=r"^[a-z]+:[A-Za-z0-9_.:-]+$")
+    category: Literal["concept", "explanation", "life", "improved", "observe"]
+    statement: str = Field(min_length=1, max_length=240)
+
+
+class ReportNarrative(BaseModel):
+    text: str = Field(min_length=1, max_length=160)
+    evidence_refs: list[str] = Field(min_length=1, max_length=5)
+
+
+class ReportSummaryRequest(BaseModel):
+    learner_label: str = Field(min_length=1, max_length=40)
+    facts: list[ReportFact] = Field(min_length=1, max_length=80)
+
+    @model_validator(mode="after")
+    def evidence_ids_must_be_unique(self) -> ReportSummaryRequest:
+        evidence_ids = [fact.evidence_id for fact in self.facts]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("report evidence ids must be unique")
+        return self
+
+
+class ReportSummaryResponse(BaseModel):
+    concept_performance: ReportNarrative
+    explanation_change: ReportNarrative
+    life_transfer: ReportNarrative
+    improved_point: ReportNarrative
+    observe_point: ReportNarrative
+
+    def narratives(self) -> list[ReportNarrative]:
+        return [
+            self.concept_performance,
+            self.explanation_change,
+            self.life_transfer,
+            self.improved_point,
+            self.observe_point,
+        ]
+
+
 class ConflictDetail(BaseModel):
     code: Literal["stale_turn"] = "stale_turn"
     message: str

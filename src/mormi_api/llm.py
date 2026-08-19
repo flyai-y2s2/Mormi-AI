@@ -8,12 +8,15 @@ from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, transf
 from pydantic import BaseModel, ValidationError
 
 from .content import SlotDefinition, TaskDefinition
+from .reporting import validate_report_summary
 from .schemas import (
     ChildResponse,
     EntryPhase,
     InteractionIntent,
     NoteContextualizationContext,
     NoteContextualizationOutput,
+    ReportSummaryRequest,
+    ReportSummaryResponse,
     ResponseCategory,
     ResponseType,
     SessionState,
@@ -108,6 +111,40 @@ class ClaudeGateway:
     @property
     def configured(self) -> bool:
         return self.client is not None
+
+    async def summarize_report(self, request: ReportSummaryRequest) -> ReportSummaryResponse:
+        if not self.client:
+            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
+        schema = structured_output_schema(ReportSummaryResponse)
+        try:
+            message = await self.client.messages.create(
+                model=self.settings.speaker_model,
+                max_tokens=700,
+                temperature=0,
+                system=REPORT_SUMMARY_SYSTEM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": json.dumps(request.model_dump(mode="json"), ensure_ascii=False),
+                    }
+                ],
+                output_config={
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema,
+                    }
+                },
+            )
+        except (APIConnectionError, APIStatusError) as error:
+            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
+        if message.stop_reason in {"refusal", "max_tokens"}:
+            raise ModelOutputError(f"Report summary stopped with {message.stop_reason}")
+        raw = _text_content(message.content)
+        try:
+            response = ReportSummaryResponse.model_validate_json(raw)
+        except ValidationError as error:
+            raise ModelOutputError("Report summary output did not match schema") from error
+        return validate_report_summary(request, response)
 
     async def classify(
         self,
@@ -544,6 +581,14 @@ class ClaudeGateway:
                 ],
             }
         return json.dumps(payload, ensure_ascii=False)
+
+
+REPORT_SUMMARY_SYSTEM = """
+너는 내부 학습 보고서의 짧은 문장만 작성한다. 입력에 제공된 fact text만 사용한다.
+각 필드는 evidence_refs 중 한 fact의 문구를 그대로 복사하거나, evidence_refs 순서대로
+fact 문구를 한 칸 공백으로 정확히 이어 붙여서만 작성한다. 바꿔쓰기, 조사 변경, 요약,
+원인·진단·치료·심리적 해석·또래·평균·등수 비교의 추가나 추론은 하지 않는다.
+""".strip()
 
 
 CLASSIFIER_SYSTEM = """

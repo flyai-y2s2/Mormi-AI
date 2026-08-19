@@ -27,6 +27,7 @@ from .engine import ConversationEngine
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
 from .migrations import require_observation_schema
 from .outbox import OutboxDispatcher, OutboxStore
+from .reporting import validate_report_summary
 from .repository import (
     ConversationNotFoundError,
     PersistenceError,
@@ -39,6 +40,9 @@ from .schemas import (
     ConflictResponse,
     HealthResponse,
     PracticeResult,
+    ReportEvidenceResponse,
+    ReportSummaryRequest,
+    ReportSummaryResponse,
     SessionCreate,
     SessionEnvelope,
     SkillProfilesResponse,
@@ -51,6 +55,24 @@ from .settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
+async def run_startup_maintenance(
+    database: Database,
+    repository: Repository,
+    *,
+    skip: bool,
+) -> None:
+    if skip:
+        return
+    await database.create_schema()
+    # ``create_all`` creates missing tables but cannot repair an existing
+    # observation table with a missing FK, column, or index.
+    async with database.engine.connect() as connection:
+        await connection.run_sync(require_observation_schema)
+    await repository.migrate_existing_storage_to_permanent()
+    await repository.migrate_existing_storage_to_plaintext()
+    await repository.purge_expired_raw_data()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Trusted reference content is a startup contract, not a best-effort
@@ -58,12 +80,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     validate_dictionary_catalog()
     settings = get_settings()
     database = Database(settings.database_url)
-    await database.create_schema()
-    # ``create_all`` creates missing tables but cannot repair a table that
-    # already exists with a missing FK/column/index. Refuse startup here so a
-    # partial deployment is found before a child's live response reaches it.
-    async with database.engine.connect() as connection:
-        await connection.run_sync(require_observation_schema)
     gateway = ClaudeGateway(settings)
     repository = Repository(
         database,
@@ -72,9 +88,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         classifier_model=settings.classifier_model,
         speaker_model=settings.speaker_model,
     )
-    await repository.migrate_existing_storage_to_permanent()
-    await repository.migrate_existing_storage_to_plaintext()
-    await repository.purge_expired_raw_data()
+    await run_startup_maintenance(
+        database,
+        repository,
+        skip=settings.skip_startup_maintenance,
+    )
     engine = ConversationEngine(
         gateway,
         show_internal_pedagogy=settings.show_internal_pedagogy,
@@ -160,7 +178,24 @@ def require_service_key(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service key")
 
 
+def require_internal_reporting_service_key(
+    request: Request,
+    key: Annotated[str | None, Header(alias="X-Mormi-Service-Key")] = None,
+) -> None:
+    current: Settings = request.app.state.settings
+    if not current.service_api_key:
+        code = "service_key_not_configured"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        )
+    if key != current.service_api_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid service key")
+
+
 Auth = Annotated[None, Depends(require_service_key)]
+InternalReportingAuth = Annotated[None, Depends(require_internal_reporting_service_key)]
 Service = Annotated[ConversationService, Depends(service)]
 Repo = Annotated[Repository, Depends(repository)]
 
@@ -608,6 +643,47 @@ async def get_learner_profiles(
 )
 async def get_star_notes(learner_id: int, _: Auth, repo: Repo) -> StarNotesResponse:
     return StarNotesResponse(learner_id=learner_id, notes=await repo.list_notes(learner_id))
+
+
+@app.get(
+    "/v1/internal/learners/{learner_id}/report-evidence",
+    response_model=ReportEvidenceResponse,
+    tags=["internal reporting"],
+)
+async def get_report_evidence(
+    learner_id: int,
+    include_raw: bool,
+    _: InternalReportingAuth,
+    repo: Repo,
+) -> ReportEvidenceResponse:
+    return await repo.report_evidence(learner_id, include_raw=include_raw)
+
+
+@app.post(
+    "/v1/internal/report-summaries",
+    response_model=ReportSummaryResponse,
+    tags=["internal reporting"],
+)
+async def create_report_summary(
+    body: ReportSummaryRequest,
+    _: InternalReportingAuth,
+    request: Request,
+) -> ReportSummaryResponse:
+    gateway: ClaudeGateway = request.app.state.gateway
+    try:
+        return validate_report_summary(body, await gateway.summarize_report(body))
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "report_summary_ungrounded", "issues": []},
+        ) from error
+    except (ModelUnavailableError, ModelOutputError) as error:
+        code = _model_error_code(error)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        ) from error
 
 
 @app.get(

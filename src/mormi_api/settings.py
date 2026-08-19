@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     speaker_verifier_timeout_seconds: float = Field(default=1.8, ge=0.2, le=10)
     raw_data_encryption_key: str | None = None
     service_api_key: str | None = None
+    skip_startup_maintenance: bool = False
     observation_ingest_url: str | None = None
     observation_ingest_key: str | None = None
     star_note_events_enabled: bool = False
@@ -55,6 +56,14 @@ class Settings(BaseSettings):
         return bool(self.observation_ingest_url and self.observation_ingest_key)
 
     def validate_runtime_safety(self) -> None:
+        if self.skip_startup_maintenance and self.environment.lower() not in {
+            "local",
+            "development",
+            "test",
+        }:
+            raise RuntimeError(
+                "MORMI_SKIP_STARTUP_MAINTENANCE is allowed only in local, development, or test"
+            )
         if self.production and self.database_url.startswith("sqlite"):
             raise RuntimeError("A PostgreSQL database is required in production")
         if self.production and not self.service_api_key:

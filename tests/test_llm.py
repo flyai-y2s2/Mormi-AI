@@ -27,6 +27,10 @@ from mormi_api.schemas import (
     DifficultyClass,
     ExpressionLevel,
     InteractionIntent,
+    ReportFact,
+    ReportNarrative,
+    ReportSummaryRequest,
+    ReportSummaryResponse,
     ResponseCategory,
     ResponseType,
     SafetyCategory,
@@ -55,6 +59,83 @@ def object_schemas(node: object) -> list[dict[str, Any]]:
         for value in node:
             found.extend(object_schemas(value))
     return found
+
+
+def report_summary_request() -> ReportSummaryRequest:
+    return ReportSummaryRequest(
+        learner_label="학습자",
+        facts=[
+            ReportFact(
+                evidence_id="concept:performance",
+                category="concept",
+                statement="개념 수행은 60%입니다.",
+            )
+        ],
+    )
+
+
+def report_summary_response(text: str = "개념 수행은 60%입니다.") -> ReportSummaryResponse:
+    return ReportSummaryResponse(
+        concept_performance=ReportNarrative(text=text, evidence_refs=["concept:performance"]),
+        explanation_change=ReportNarrative(text=text, evidence_refs=["concept:performance"]),
+        life_transfer=ReportNarrative(text=text, evidence_refs=["concept:performance"]),
+        improved_point=ReportNarrative(text=text, evidence_refs=["concept:performance"]),
+        observe_point=ReportNarrative(text=text, evidence_refs=["concept:performance"]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_summarize_report_uses_strict_speaker_structured_output() -> None:
+    expected = report_summary_response()
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=expected.model_dump_json())],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None))
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+
+    result = await gateway.summarize_report(report_summary_request())
+
+    assert result == expected
+    request = messages.requests[0]
+    assert request["model"] == gateway.settings.speaker_model
+    assert request["temperature"] == 0
+    assert request["max_tokens"] == 700
+    assert "문구를 그대로" in request["system"]
+    assert "한 칸 공백" in request["system"]
+    schema = request["output_config"]["format"]["schema"]
+    assert request["output_config"]["format"]["type"] == "json_schema"
+    assert all(item.get("additionalProperties") is False for item in object_schemas(schema))
+    assert all(
+        item.get("required") == list(item.get("properties", {})) for item in object_schemas(schema)
+    )
+
+
+@pytest.mark.asyncio
+async def test_summarize_report_rejects_parsed_but_ungrounded_output() -> None:
+    invalid = report_summary_response("개념 수행은 연습 덕분에 60%입니다.")
+
+    class FakeMessages:
+        async def create(self, **kwargs: Any) -> object:
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=invalid.model_dump_json())],
+            )
+
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None))
+    gateway.client = SimpleNamespace(messages=FakeMessages())  # type: ignore[assignment]
+
+    with pytest.raises(ValueError):
+        await gateway.summarize_report(report_summary_request())
 
 
 def test_classifier_schema_is_strict_for_every_nested_object() -> None:

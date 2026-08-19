@@ -23,6 +23,7 @@ from .db import (
     TurnRecord,
 )
 from .outbox import DIALOGUE_OBSERVATION_EVENT_TYPE, STAR_NOTE_CREATED_EVENT_TYPE
+from .reporting import build_report_evidence
 from .schemas import (
     ChildResponse,
     LearnerProfile,
@@ -30,6 +31,7 @@ from .schemas import (
     NoteEvidence,
     NoteUpdate,
     PracticeResult,
+    ReportEvidenceResponse,
     ResponseCategory,
     RetentionPolicy,
     SessionState,
@@ -838,6 +840,44 @@ class Repository:
                 }
                 for record in records
             ]
+
+    async def report_evidence(
+        self,
+        learner_id: int,
+        *,
+        include_raw: bool,
+    ) -> ReportEvidenceResponse:
+        async with self.database.sessions() as db:
+            conversations = list(
+                (
+                    await db.execute(
+                        select(ConversationRecord)
+                        .where(ConversationRecord.learner_id == learner_id)
+                        .order_by(ConversationRecord.created_at.asc())
+                    )
+                ).scalars()
+            )
+            conversation_ids = [record.conversation_id for record in conversations]
+            turns = (
+                []
+                if not conversation_ids
+                else list(
+                    (
+                        await db.execute(
+                            select(TurnRecord)
+                            .where(TurnRecord.conversation_id.in_(conversation_ids))
+                            .order_by(TurnRecord.created_at.asc(), TurnRecord.id.asc())
+                        )
+                    ).scalars()
+                )
+            )
+        return await build_report_evidence(
+            self,
+            learner_id,
+            conversations,
+            turns,
+            include_raw=include_raw,
+        )
 
     async def backfill_historical_observations(self) -> int:
         """Preserve legacy turns as explicitly incomplete observations.
