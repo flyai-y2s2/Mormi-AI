@@ -356,6 +356,10 @@ class ArithmeticValidationContract(BaseModel):
     left: int
     right: int
     result: int
+    left_label: str = "첫 번째 수"
+    right_label: str = "두 번째 수"
+    result_label: str = "계산 결과"
+    unit: str = ""
 
     @model_validator(mode="after")
     def validate_result(self) -> ArithmeticValidationContract:
@@ -1248,6 +1252,9 @@ def calculation_task(
     result: int,
     scene: SceneType = SceneType.CAFE,
     stage_id: str | None = None,
+    left_label: str | None = None,
+    right_label: str | None = None,
+    result_label: str | None = None,
 ) -> TaskDefinition:
     symbol = "+" if operation == "addition" else "-"
     method = "carry" if operation == "addition" else "regroup"
@@ -1255,6 +1262,13 @@ def calculation_task(
     operation_phrase = "더해" if operation == "addition" else "빼서"
     operation_label = "더하기" if operation == "addition" else "빼기"
     place_action = "더해" if operation == "addition" else "빼"
+    resolved_left_label = left_label or ("첫 번째 금액" if operation == "addition" else "낸 돈")
+    resolved_right_label = right_label or (
+        "두 번째 금액" if operation == "addition" else "사용한 금액"
+    )
+    resolved_result_label = result_label or (
+        "전체 금액" if operation == "addition" else "거스름돈"
+    )
     return TaskDefinition(
         id=task_id,
         dictionary_card_id=(
@@ -1279,6 +1293,10 @@ def calculation_task(
             left=left,
             right=right,
             result=result,
+            left_label=resolved_left_label,
+            right_label=resolved_right_label,
+            result_label=resolved_result_label,
+            unit="원",
         ),
         slots={
             "operation": SlotDefinition(
@@ -2043,6 +2061,10 @@ def simple_calculation_task(
             left=left,
             right=right,
             result=result,
+            left_label=left_label,
+            right_label=right_label,
+            result_label="전체 금액" if operation == "addition" else "거스름돈",
+            unit="원",
         ),
         slots={
             "operation": SlotDefinition(
@@ -2191,6 +2213,12 @@ def home_teaching_task(
     visual = sample.get("visual")
     if isinstance(visual, dict) and visual.get("type") == "money":
         amounts = visual.get("amounts")
+        labels = visual.get("labels")
+        item_labels = (
+            [str(label).strip() for label in labels if str(label).strip()]
+            if isinstance(labels, list)
+            else []
+        )
         if isinstance(amounts, list) and amounts and all(
             isinstance(amount, int) and not isinstance(amount, bool) for amount in amounts
         ):
@@ -2202,6 +2230,12 @@ def home_teaching_task(
                     left=paid,
                     right=spent,
                     result=paid - spent,
+                    left_label="낸 돈",
+                    right_label=(
+                        f"{item_labels[0]}값" if len(item_labels) == 1 else "물건값"
+                    ),
+                    result_label="남는 돈",
+                    unit="원",
                 )
             elif "addition" in spec.help_skills and len(amounts) >= 2:
                 left = int(amounts[0])
@@ -2211,6 +2245,16 @@ def home_teaching_task(
                     left=left,
                     right=right,
                     result=left + right,
+                    left_label=(
+                        f"{item_labels[0]} 가격" if item_labels else "첫 번째 물건값"
+                    ),
+                    right_label=(
+                        f"{item_labels[1]} 가격"
+                        if len(item_labels) == 2
+                        else "나머지 물건값"
+                    ),
+                    result_label="전체 금액",
+                    unit="원",
                 )
 
     task = TaskDefinition(

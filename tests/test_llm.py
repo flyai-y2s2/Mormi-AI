@@ -38,9 +38,11 @@ from mormi_api.schemas import (
     SceneType,
     SessionState,
     SlotClaim,
+    SpeakerArithmeticClaim,
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
+    SpeakerQuantity,
     SpeakerVerification,
     SpeakerVerificationPolicy,
     TaskRelation,
@@ -269,6 +271,70 @@ def test_semantic_speaker_may_paraphrase_only_with_matching_contract() -> None:
 
     wrong_focus = output.model_copy(update={"asked_slot_ids": ["answer"]})
     assert validate_speaker_output(wrong_focus, context, speaker_guard()) is None
+
+
+def test_speaker_cannot_mention_an_invisible_help_card() -> None:
+    context = speaker_context().model_copy(
+        update={
+            "verification_policy": SpeakerVerificationPolicy.SEMANTIC,
+            "help_card_visible": False,
+        }
+    )
+    output = speaker_output(
+        "나는 아직 헷갈려... 도움 카드를 보고 다시 알려줄 수 있어?",
+        context,
+    )
+
+    assert validate_speaker_output(output, context, speaker_guard()) is None
+
+
+def test_semantic_verifier_must_mark_false_arithmetic_stance_safe() -> None:
+    context = speaker_context().model_copy(
+        update={
+            "verification_policy": SpeakerVerificationPolicy.SEMANTIC,
+            "help_card_visible": True,
+            "arithmetic_claims": [
+                SpeakerArithmeticClaim(
+                    operation="subtraction",
+                    source_text="2000원에서 1800원을 빼면 300원이 남아",
+                    left=SpeakerQuantity(value=2000, role="낸 돈", unit="원"),
+                    right=SpeakerQuantity(value=1800, role="간식값", unit="원"),
+                    claimed_result=SpeakerQuantity(value=300, role="남는 돈", unit="원"),
+                    truth_status="false",
+                    related_slot_ids=["reason"],
+                )
+            ],
+            "allowed_numbers": ["2000", "1800", "300"],
+        }
+    )
+    output = speaker_output(
+        "2,000원에서 1,800원을 빼면 300원이 남는다는 말이 "
+        "아직 잘 모르겠어... 도움 카드를 보고 다시 알려줄 수 있어?",
+        context,
+    )
+    base = SpeakerVerification(
+        approved=True,
+        dialogue_act_preserved=True,
+        required_focus_preserved=True,
+        only_allowed_math_used=True,
+        child_not_evaluated=True,
+        character_consistent=True,
+        meaningfully_reframed=True,
+        arithmetic_claim_stance_safe=False,
+        help_card_state_respected=True,
+        detected_dialogue_act=context.dialogue_act,
+        detected_asked_slot_ids=context.required_slot_ids,
+        question_evidence_span=output.text,
+        reason_code="approved",
+    )
+
+    assert not validate_speaker_verification(base, context, speaker_guard(), output)
+    assert validate_speaker_verification(
+        base.model_copy(update={"arithmetic_claim_stance_safe": True}),
+        context,
+        speaker_guard(),
+        output,
+    )
 
 
 def test_speaker_can_ground_a_clarification_in_an_exact_child_phrase() -> None:
