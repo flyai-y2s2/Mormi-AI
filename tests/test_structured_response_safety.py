@@ -22,6 +22,7 @@ from mormi_api.schemas import (
     DifficultyClass,
     EntryPhase,
     ExpressionLevel,
+    HelpCardEvent,
     HintLevel,
     InputKind,
     InteractionIntent,
@@ -34,6 +35,7 @@ from mormi_api.schemas import (
     SessionState,
     SkillProfile,
     SlotClaim,
+    SupportTrigger,
     TaskRelation,
     UtteranceAnalysis,
 )
@@ -254,6 +256,113 @@ async def test_false_arithmetic_relation_cannot_verify_or_enter_the_star_note() 
     assert next_state.status.value == "active"
     assert turn.note_update is None
     assert turn.completion is None
+    assert turn.help_card is not None
+    assert turn.mormi.text == (
+        "2,000원에서 1,800원을 빼면 300원이 남는다는 말이 "
+        "아직 잘 모르겠어... 도움 카드를 보고 다시 알려줄 수 있어?"
+    )
+    assert "200원" not in turn.mormi.text
+
+
+def test_false_arithmetic_claim_gets_reviewed_scene_roles_and_exact_evidence() -> None:
+    child_text = "2000원에서 1800원을 빼면 300원이 남아"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=2000,
+                right=1800,
+                operation="subtraction",
+                result=300,
+                evidence_span=child_text,
+                related_slot_ids=["rule"],
+                interpretation_confidence=1,
+            )
+        ],
+        confidence=1,
+    )
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["money-budget"],
+        skill_id="money-budget",
+    )
+
+    claims = ConversationEngine._speaker_arithmetic_claims(task, child_text, analysis)
+
+    assert len(claims) == 1
+    claim = claims[0]
+    assert claim.source_text == child_text
+    assert claim.truth_status == "false"
+    assert (claim.left.value, claim.left.role, claim.left.unit) == (2000, "낸 돈", "원")
+    assert (claim.right.value, claim.right.role, claim.right.unit) == (1800, "간식값", "원")
+    assert (claim.claimed_result.value, claim.claimed_result.role) == (300, "남는 돈")
+
+
+def test_false_arithmetic_fallback_does_not_mention_an_invisible_help_card() -> None:
+    child_text = "700원하고 500원을 더하면 1300원이야"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=700,
+                right=500,
+                operation="addition",
+                result=1300,
+                evidence_span=child_text,
+                related_slot_ids=["method"],
+                interpretation_confidence=1,
+            )
+        ],
+    )
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["money-price"],
+        skill_id="money-price",
+    )
+    claim = ConversationEngine._speaker_arithmetic_claims(task, child_text, analysis)[0]
+
+    text = ConversationEngine._support_transition_fallback(
+        SupportTrigger.CONCEPTUAL_CONFLICT,
+        HelpCardEvent.NONE,
+        arithmetic_claims=[claim],
+        help_card_visible=False,
+    )
+
+    assert text == (
+        "700원과 500원을 더하면 모두 1,300원이라는 말이 "
+        "아직 잘 모르겠어... 어떻게 계산한 건지 다시 알려줄 수 있어?"
+    )
+    assert "카드" not in text
+    assert "1,200" not in text
+
+
+def test_reversed_addition_keeps_the_reviewed_scene_roles() -> None:
+    child_text = "500원하고 700원을 더하면 1300원이야"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CONCEPTUAL_ERROR,
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=500,
+                right=700,
+                operation="addition",
+                result=1300,
+                evidence_span=child_text,
+                related_slot_ids=["method"],
+                interpretation_confidence=1,
+            )
+        ],
+    )
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["money-price"],
+        skill_id="money-price",
+    )
+
+    claim = ConversationEngine._speaker_arithmetic_claims(task, child_text, analysis)[0]
+
+    assert (claim.left.value, claim.left.role) == (500, "빵 가격")
+    assert (claim.right.value, claim.right.role) == (700, "주스 가격")
+    assert claim.claimed_result.role == "전체 금액"
 
 
 @pytest.mark.asyncio

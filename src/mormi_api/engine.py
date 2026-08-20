@@ -49,9 +49,11 @@ from .schemas import (
     SessionStatus,
     SkillProfile,
     SlotClaim,
+    SpeakerArithmeticClaim,
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
+    SpeakerQuantity,
     SpeakerQuestionIntent,
     SpeakerRuntimeAudit,
     SpeakerVerification,
@@ -353,6 +355,26 @@ class ConversationEngine:
                         type(error).__name__,
                     )
             return result
+        if (
+            any(
+                claim.truth_status == "false"
+                for claim in context.arithmetic_claims
+            )
+            and not self.semantic_verifier_enabled
+        ):
+            # Reflecting a false child claim is useful for natural dialogue,
+            # but only the semantic verifier can distinguish an uncertain
+            # question from accidental confirmation.  Without that verifier,
+            # use the reviewed fallback instead of trusting generated copy.
+            return {
+                "speaker_text": context.fallback_text,
+                "runtime": SpeakerRuntimeAudit(
+                    dialogue_act=decision.dialogue_act,
+                    speaker_source="reviewed_fallback",
+                    verifier_status="disabled",
+                    fallback_reason="false_claim_requires_semantic_verifier",
+                ).model_dump(mode="json"),
+            }
         try:
             async with asyncio.timeout(self.speaker_timeout_seconds):
                 output = await self.gateway.speak(context)
@@ -998,6 +1020,12 @@ class ConversationEngine:
                 if next_state.concept_failures > 1
                 else SupportTrigger.CONCEPTUAL_CONFLICT
             )
+            arithmetic_claims = self._speaker_arithmetic_claims(
+                task,
+                response.text,
+                analysis,
+            )
+            help_card_visible = next_state.hint_level is not HintLevel.H0
             return self._decision_for_current_step(
                 next_state,
                 task,
@@ -1008,6 +1036,8 @@ class ConversationEngine:
                     support_trigger,
                     help_event,
                     grounding,
+                    arithmetic_claims=arithmetic_claims,
+                    help_card_visible=help_card_visible,
                 ),
                 child_text=response.text,
                 analysis=analysis,
@@ -1286,6 +1316,7 @@ class ConversationEngine:
             fallback=self._complete_mormi_text(fallback),
             support_trigger=support_trigger,
             help_card_event=help_card_event,
+            help_card_visible=help_card is not None,
             must_reframe=must_reframe,
         )
         if (
@@ -1340,6 +1371,7 @@ class ConversationEngine:
         fallback: str,
         support_trigger: SupportTrigger = SupportTrigger.NONE,
         help_card_event: HelpCardEvent = HelpCardEvent.NONE,
+        help_card_visible: bool = False,
         must_reframe: bool = False,
     ) -> SpeakerContext:
         active_step = task.active_step(
@@ -1356,9 +1388,22 @@ class ConversationEngine:
         required_slot_descriptions = {
             slot: task.slots[slot].description for slot in required_slot_ids
         }
-        allowed_numbers = sorted(
+        reviewed_numbers = sorted(
             extract_numeric_values(" ".join([*verified_facts.values(), required_question or ""]))
         )
+        arithmetic_claims = self._speaker_arithmetic_claims(
+            task,
+            child_text,
+            analysis,
+        )
+        child_claim_numbers = sorted(
+            {
+                str(quantity.value)
+                for claim in arithmetic_claims
+                for quantity in (claim.left, claim.right, claim.claimed_result)
+            }
+        )
+        allowed_numbers = sorted({*reviewed_numbers, *child_claim_numbers})
         expression = self._safe_grounding_span(
             child_text,
             analysis,
@@ -1390,6 +1435,9 @@ class ConversationEngine:
             required_slot_ids,
             has_child_grounding=bool(expression),
         )
+        if arithmetic_claims and self.semantic_verifier_enabled:
+            verification_policy = SpeakerVerificationPolicy.SEMANTIC
+        safe_child_utterance = self._safe_child_utterance(child_text, analysis)
         return SpeakerContext(
             dialogue_act=dialogue_act,
             task_relation=analysis.task_relation,
@@ -1406,10 +1454,120 @@ class ConversationEngine:
             question_intent=question_intent,
             child_expression_mode=mode,
             child_expression=expression,
+            safe_child_utterance=safe_child_utterance,
+            arithmetic_claims=arithmetic_claims,
+            help_card_visible=help_card_visible,
+            child_claim_numbers=child_claim_numbers,
             allowed_numbers=allowed_numbers,
             verification_policy=verification_policy,
             fallback_text=fallback,
         )
+
+    @staticmethod
+    def _safe_child_utterance(
+        child_text: str | None,
+        analysis: UtteranceAnalysis,
+    ) -> str | None:
+        """Return bounded untrusted child text only for a normal safe turn."""
+
+        if analysis.safety_category is not SafetyCategory.NORMAL or not child_text:
+            return None
+        text = re.sub(r"\s+", " ", child_text).strip()
+        if not text or len(text) > 240:
+            return None
+        if deterministic_safety(text) is not SafetyCategory.NORMAL:
+            return None
+        return text
+
+    @classmethod
+    def _speaker_arithmetic_claims(
+        cls,
+        task: TaskDefinition,
+        child_text: str | None,
+        analysis: UtteranceAnalysis,
+    ) -> list[SpeakerArithmeticClaim]:
+        """Attach scene meaning to exact child arithmetic evidence.
+
+        Haiku understands the child's language.  This method does not parse
+        Korean; it verifies provenance, computes truth, and supplies reviewed
+        labels such as ``낸 돈`` and ``거스름돈`` so Sonnet never has to infer
+        what anonymous ``left`` and ``result`` fields mean.
+        """
+
+        if (
+            analysis.safety_category is not SafetyCategory.NORMAL
+            or not child_text
+        ):
+            return []
+        contract = task.arithmetic_contract
+        output: list[SpeakerArithmeticClaim] = []
+        for claim in analysis.arithmetic_claims:
+            source = cls._exact_child_evidence_text(child_text, claim.evidence_span)
+            if source is None:
+                continue
+            direct_alignment = bool(
+                contract
+                and claim.operation == contract.operation
+                and claim.left == contract.left
+                and claim.right == contract.right
+            )
+            reversed_addition_alignment = bool(
+                contract
+                and claim.operation == contract.operation == "addition"
+                and claim.left == contract.right
+                and claim.right == contract.left
+            )
+            aligned = direct_alignment or reversed_addition_alignment
+            computed = (
+                claim.left + claim.right
+                if claim.operation == "addition"
+                else claim.left - claim.right
+            )
+            unit = contract.unit if contract and aligned else ""
+            output.append(
+                SpeakerArithmeticClaim(
+                    operation=claim.operation,
+                    source_text=source,
+                    left=SpeakerQuantity(
+                        value=claim.left,
+                        role=(
+                            contract.right_label
+                            if contract and reversed_addition_alignment
+                            else contract.left_label
+                            if contract and direct_alignment
+                            else "첫 번째 수"
+                        ),
+                        unit=unit,
+                    ),
+                    right=SpeakerQuantity(
+                        value=claim.right,
+                        role=(
+                            contract.left_label
+                            if contract and reversed_addition_alignment
+                            else contract.right_label
+                            if contract and direct_alignment
+                            else "두 번째 수"
+                        ),
+                        unit=unit,
+                    ),
+                    claimed_result=SpeakerQuantity(
+                        value=claim.result,
+                        role=(
+                            contract.result_label
+                            if contract and aligned
+                            else "아이가 말한 계산 결과"
+                        ),
+                        unit=unit,
+                    ),
+                    truth_status="true" if claim.result == computed else "false",
+                    related_slot_ids=[
+                        slot_id
+                        for slot_id in claim.related_slot_ids
+                        if slot_id in task.slots
+                    ],
+                )
+            )
+        return output
 
     @staticmethod
     def _speaker_response_kind(
@@ -1873,6 +2031,9 @@ class ConversationEngine:
         trigger: SupportTrigger,
         event: HelpCardEvent,
         grounding: str | None = None,
+        *,
+        arithmetic_claims: list[SpeakerArithmeticClaim] | None = None,
+        help_card_visible: bool | None = None,
     ) -> str:
         """Build a coherent reviewed line for each support reason."""
 
@@ -1900,14 +2061,69 @@ class ConversationEngine:
             SupportTrigger.CONCEPTUAL_CONFLICT,
             SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT,
         }:
+            false_claim = next(
+                (
+                    claim
+                    for claim in (arithmetic_claims or [])
+                    if claim.truth_status == "false"
+                ),
+                None,
+            )
+            if false_claim is not None:
+                return cls._false_arithmetic_claim_fallback(
+                    false_claim,
+                    help_card_visible=(
+                        event is not HelpCardEvent.NONE
+                        if help_card_visible is None
+                        else help_card_visible
+                    ),
+                )
             if grounding:
+                if help_card_visible or event is not HelpCardEvent.NONE:
+                    return cls._complete_mormi_text(
+                        f"‘{grounding}’이라고? 나는 아직 헷갈려... "
+                        "도움 카드를 보고 다시 알려줄 수 있어?"
+                    )
                 return cls._complete_mormi_text(
-                    f"‘{grounding}’라는 거야? 나는 아직 헷갈려... 카드를 보고 다시 알려줄래?"
+                    f"‘{grounding}’이라고? 나는 아직 헷갈려... 조금 더 알려줄 수 있어?"
                 )
             if event is HelpCardEvent.STRENGTHENED:
                 return "나는 아직 헷갈려... 카드에 나온 다른 도움도 같이 볼까?"
-            return "나는 아직 헷갈려... 도움 카드를 보고 다시 알려줄래?"
+            if help_card_visible or event is not HelpCardEvent.NONE:
+                return "나는 아직 헷갈려... 도움 카드를 보고 다시 알려줄 수 있어?"
+            return "나는 아직 헷갈려... 어떻게 생각한 건지 조금 더 알려줄 수 있어?"
         return "어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?"
+
+    @classmethod
+    def _false_arithmetic_claim_fallback(
+        cls,
+        claim: SpeakerArithmeticClaim,
+        *,
+        help_card_visible: bool,
+    ) -> str:
+        """Reflect one false child claim without confirming or correcting it."""
+
+        left = cls._quantity_copy(claim.left)
+        right = cls._quantity_copy(claim.right)
+        result = cls._quantity_copy(claim.claimed_result)
+        if claim.operation == "addition":
+            relation = f"{left}과 {right}을 더하면 모두 {result}이라는 말이"
+        elif "거스름" in claim.claimed_result.role:
+            relation = f"{left}에서 {right}을 빼면 거스름돈이 {result}이라는 말이"
+        elif "남" in claim.claimed_result.role:
+            relation = f"{left}에서 {right}을 빼면 {result}이 남는다는 말이"
+        else:
+            relation = f"{left}에서 {right}을 빼면 결과가 {result}이라는 말이"
+        request = (
+            "아직 잘 모르겠어... 도움 카드를 보고 다시 알려줄 수 있어?"
+            if help_card_visible
+            else "아직 잘 모르겠어... 어떻게 계산한 건지 다시 알려줄 수 있어?"
+        )
+        return cls._complete_mormi_text(f"{relation} {request}")
+
+    @staticmethod
+    def _quantity_copy(quantity: SpeakerQuantity) -> str:
+        return f"{quantity.value:,}{quantity.unit}"
 
     @staticmethod
     def _visual_for(task: TaskDefinition, level: HintLevel) -> VisualContract:

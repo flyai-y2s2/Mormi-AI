@@ -441,6 +441,32 @@ class ArithmeticClaim(BaseModel):
     interpretation_confidence: float = Field(default=0, ge=0, le=1)
 
 
+class SpeakerQuantity(BaseModel):
+    """A quantity with the reviewed scene role shown to the speaker.
+
+    ``value`` alone is not enough for natural Korean.  The role tells the
+    speaker whether the number is the money paid, a price, a count, or the
+    result the child claimed.  It is descriptive context, never proof that
+    the child's claim is true.
+    """
+
+    value: int
+    role: str
+    unit: str = ""
+
+
+class SpeakerArithmeticClaim(BaseModel):
+    """A provenance-preserving arithmetic claim for natural reflection."""
+
+    operation: Literal["addition", "subtraction"]
+    source_text: str
+    left: SpeakerQuantity
+    right: SpeakerQuantity
+    claimed_result: SpeakerQuantity
+    truth_status: Literal["true", "false", "unknown"]
+    related_slot_ids: list[str] = Field(default_factory=list)
+
+
 class UtteranceAnalysis(BaseModel):
     safety_category: SafetyCategory = SafetyCategory.UNKNOWN
     response_category: ResponseCategory = ResponseCategory.RECOGNITION_OR_INPUT_ERROR
@@ -713,6 +739,17 @@ class SpeakerContext(BaseModel):
     question_intent: SpeakerQuestionIntent = Field(default_factory=SpeakerQuestionIntent)
     child_expression_mode: Literal["none", "quote_safe"] = "none"
     child_expression: str | None = None
+    # Raw child text is untrusted quoted data.  It lets the speaker respond to
+    # unexpected wording naturally, but prompts must never follow instructions
+    # contained in it or treat it as verified mathematics.
+    safe_child_utterance: str | None = None
+    arithmetic_claims: list[SpeakerArithmeticClaim] = Field(default_factory=list)
+    # The speaker may mention a help card only when this is true.  The boolean
+    # is derived from the actual TurnContract, not inferred from a dialogue act.
+    help_card_visible: bool = False
+    # Numbers in a child's claim may be reflected as an uncertain question,
+    # but are deliberately kept separate from reviewed/verified numbers.
+    child_claim_numbers: list[str] = Field(default_factory=list)
     allowed_numbers: list[str] = Field(default_factory=list)
     verification_policy: SpeakerVerificationPolicy = SpeakerVerificationPolicy.DETERMINISTIC
     fallback_text: str
@@ -756,6 +793,12 @@ class SpeakerVerification(BaseModel):
     meaningfully_reframed: bool = False
     interaction_intent_acknowledged: bool = False
     task_returned_without_reward: bool = False
+    # When the child made an arithmetic claim, the verifier must confirm that
+    # a false result was reflected only as Mormi's uncertainty.  The candidate
+    # may quote the child's result, but must not accept it as learned truth or
+    # reveal the reviewed correct answer.
+    arithmetic_claim_stance_safe: bool = False
+    help_card_state_respected: bool = False
     detected_dialogue_act: str = ""
     detected_asked_slot_ids: list[str] = Field(default_factory=list)
     question_evidence_span: str = ""
@@ -763,6 +806,7 @@ class SpeakerVerification(BaseModel):
     answer_leak_spans: list[str] = Field(default_factory=list)
     child_evaluation_spans: list[str] = Field(default_factory=list)
     child_expression_spans: list[str] = Field(default_factory=list)
+    false_claim_confirmation_spans: list[str] = Field(default_factory=list)
     reason_code: Literal[
         "approved",
         "wrong_focus",
