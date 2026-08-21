@@ -16,7 +16,7 @@ from mormi_api.content import (
     reviewed_help_card,
 )
 from mormi_api.copy_quality import validate_child_facing_math_copy
-from mormi_api.schemas import ExpressionLevel, HintLevel, SafetyCategory
+from mormi_api.schemas import ExpressionLevel, HintLevel, InputKind, SafetyCategory
 from mormi_api.security import deterministic_safety, safety_redirect
 
 VAGUE_COPY = (
@@ -164,14 +164,19 @@ def test_every_home_turn_uses_reviewed_specific_copy() -> None:
         assert not WRONG_GUESS_OPENING.search(spec.effective_l4_prompt), spec.id
 
 
-def test_korean_postpositions_attach_to_the_fill_blank() -> None:
-    detached_particle = re.compile(r"□\s+(?:으로|로|을|를|이|가|은|는|의|와|과)(?:\s|$)")
-
+def test_every_home_task_uses_the_canonical_four_level_ladder() -> None:
     for spec in HOME_TEACHING_CATALOG.values():
         task = home_teaching_task(spec, skill_id=spec.id)
-        sentence = task.steps[ExpressionLevel.L1][1].input.config["sentence"]
-        assert isinstance(sentence, str)
-        assert not detached_particle.search(sentence), (spec.id, sentence)
+        assert set(task.steps) == {
+            ExpressionLevel.L4,
+            ExpressionLevel.L3,
+            ExpressionLevel.L2,
+            ExpressionLevel.L0,
+        }, spec.id
+        assert all(
+            step.input.kind is InputKind.CHOICES
+            for step in task.steps[ExpressionLevel.L2]
+        ), spec.id
 
 
 def test_queue_reason_choices_explain_the_wait_instead_of_repeating_the_question() -> None:
@@ -184,11 +189,10 @@ def test_queue_reason_choices_explain_the_wait_instead_of_repeating_the_question
             f"내 앞에 {larger}명이 기다려서",
         ]
 
-        for level, index in ((ExpressionLevel.L2, 3), (ExpressionLevel.L1, 3)):
-            step = task.steps[level][index]
-            assert step.prompt == f"나는 왜 {side} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
-            assert [choice.label for choice in step.input.choices] == expected_labels
-            assert all("사람이 적어서" not in choice.label for choice in step.input.choices)
+        step = task.steps[ExpressionLevel.L2][3]
+        assert step.prompt == f"나는 왜 {side} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
+        assert [choice.label for choice in step.input.choices] == expected_labels
+        assert all("사람이 적어서" not in choice.label for choice in step.input.choices)
 
 
 def test_every_dynamic_queue_choice_stays_inside_the_shared_count_contract() -> None:

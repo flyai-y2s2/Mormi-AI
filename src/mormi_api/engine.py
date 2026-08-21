@@ -165,6 +165,7 @@ class ConversationEngine:
         """Expose safe graph milestones without leaking unvalidated model text."""
 
         normalized_state = state.model_copy(deep=True)
+        self._normalize_expression_ladder(normalized_state)
         self._normalize_terminal_support(normalized_state)
         final_values: dict[str, Any] | None = None
         node_stages: dict[str, EngineProgress] = {
@@ -205,6 +206,7 @@ class ConversationEngine:
 
     def initial_turn(self, state: SessionState) -> TurnContract:
         task = get_task(state.current_task_id, state.scenario_data)
+        self._normalize_expression_ladder(state)
         self._normalize_terminal_support(state)
         step = task.active_step(
             state.expression_level,
@@ -514,6 +516,7 @@ class ConversationEngine:
         previous_question: str,
     ) -> PedagogicalDecision:
         next_state = state.model_copy(deep=True)
+        self._normalize_expression_ladder(next_state)
         self._normalize_terminal_support(next_state)
         next_state.state_version += 1
         next_state.current_turn_id = None
@@ -997,8 +1000,6 @@ class ConversationEngine:
                 next_state.hint_level = HintLevel.H1
             elif next_state.hint_level is HintLevel.H1:
                 next_state.hint_level = HintLevel.H2
-            elif next_state.hint_level is HintLevel.H2 and next_state.expression_level.rank > 1:
-                next_state.expression_level = ExpressionLevel.L1
             else:
                 next_state.expression_level = ExpressionLevel.L0
                 next_state.hint_level = HintLevel.H3
@@ -1191,7 +1192,7 @@ class ConversationEngine:
             state.expression_level = state.task_start_levels.get(
                 state.current_task_id,
                 ExpressionLevel.L2,
-            )
+            ).canonical()
             state.task_start_level = state.expression_level
             state.hint_level = HintLevel.H0
             state.task_max_hint = HintLevel.H0
@@ -1335,6 +1336,23 @@ class ConversationEngine:
             mood="thinking" if help_card else "listening",
             speaker_context=context,
         )
+
+    @staticmethod
+    def _normalize_expression_ladder(state: SessionState) -> None:
+        """Read legacy L1 state without ever emitting a new L1 turn.
+
+        L1 and L2 were both structured support in the previous five-level
+        ladder.  The canonical four-level contract keeps the public labels
+        stable and maps persisted L1 values onto the choice-only L2 level.
+        """
+
+        state.expression_level = state.expression_level.canonical()
+        if state.task_start_level is not None:
+            state.task_start_level = state.task_start_level.canonical()
+        state.task_start_levels = {
+            task_id: level.canonical()
+            for task_id, level in state.task_start_levels.items()
+        }
 
     @staticmethod
     def _normalize_terminal_support(state: SessionState) -> None:
@@ -2226,8 +2244,6 @@ class ConversationEngine:
             return ConversationEngine._preface_question("내가 한꺼번에 많이 물어봤네.", step.prompt)
         if state.expression_level is ExpressionLevel.L2:
             return ConversationEngine._preface_question("말로만 들으려니 헷갈려.", step.prompt)
-        if state.expression_level is ExpressionLevel.L1:
-            return ConversationEngine._preface_question("어디부터 볼지 몰랐네.", step.prompt)
         return ConversationEngine._complete_mormi_text("도움 카드 순서대로 나와 같이 해볼까?")
 
     @staticmethod
@@ -2708,7 +2724,7 @@ def max_hint(left: HintLevel, right: HintLevel) -> HintLevel:
 def select_start_level(profile: LearnerProfile, skill_id: str) -> ExpressionLevel:
     skill = profile.skills.get(skill_id)
     if skill:
-        return skill.highest_stable_expression_level
+        return skill.highest_stable_expression_level.canonical()
     return ExpressionLevel.L4
 
 
@@ -2718,6 +2734,9 @@ def update_skill_profile(
     task: TaskDefinition,
 ) -> LearnerProfile:
     current = profile.skills.get(task.skill_id) or SkillProfile(skill_id=task.skill_id)
+    current.highest_stable_expression_level = (
+        current.highest_stable_expression_level.canonical()
+    )
     independent = state.task_max_hint is HintLevel.H0
     if independent:
         current.h0_success_streak += 1

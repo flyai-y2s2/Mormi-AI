@@ -43,23 +43,47 @@ class RetentionPolicy(StrEnum):
 
 
 class ExpressionLevel(StrEnum):
+    """Expression-support levels exposed by the dialogue contract.
+
+    ``L1`` remains parseable only for conversations and profiles created
+    before the four-level ladder migration. New dialogue content and new
+    transitions use ``L4 -> L3 -> L2 -> L0`` without renumbering the labels.
+    """
+
     L4 = "L4"
     L3 = "L3"
     L2 = "L2"
     L1 = "L1"
     L0 = "L0"
 
+    def canonical(self) -> ExpressionLevel:
+        """Map a legacy L1 value onto the canonical selection level."""
+
+        return ExpressionLevel.L2 if self is ExpressionLevel.L1 else self
+
     def lower(self) -> ExpressionLevel:
-        order = list(ExpressionLevel)
-        return order[min(order.index(self) + 1, len(order) - 1)]
+        order = (
+            ExpressionLevel.L4,
+            ExpressionLevel.L3,
+            ExpressionLevel.L2,
+            ExpressionLevel.L0,
+        )
+        current = self.canonical()
+        return order[min(order.index(current) + 1, len(order) - 1)]
 
     def higher(self) -> ExpressionLevel:
-        order = list(ExpressionLevel)
-        return order[max(order.index(self) - 1, 0)]
+        order = (
+            ExpressionLevel.L4,
+            ExpressionLevel.L3,
+            ExpressionLevel.L2,
+            ExpressionLevel.L0,
+        )
+        current = self.canonical()
+        return order[max(order.index(current) - 1, 0)]
 
     @property
     def rank(self) -> int:
-        return {"L4": 4, "L3": 3, "L2": 2, "L1": 1, "L0": 0}[self.value]
+        return {"L4": 4, "L3": 3, "L2": 2, "L1": 2, "L0": 0}[self.value]
 
 
 class HintLevel(StrEnum):

@@ -425,6 +425,19 @@ class TaskDefinition(BaseModel):
 
     @model_validator(mode="after")
     def validate_help_plan(self) -> TaskDefinition:
+        canonical_levels = {
+            ExpressionLevel.L4,
+            ExpressionLevel.L3,
+            ExpressionLevel.L2,
+            ExpressionLevel.L0,
+        }
+        if set(self.steps) != canonical_levels:
+            raise ValueError(
+                f"{self.id}: dialogue tasks need exactly L4, L3, L2 and L0 steps; "
+                "L1 is legacy-only"
+            )
+        if any(step.input.kind is not InputKind.CHOICES for step in self.steps[ExpressionLevel.L2]):
+            raise ValueError(f"{self.id}: every L2 step must use a choice input")
         step_groups = list(self.steps.values())
         if self.entry_step is not None:
             step_groups.append([self.entry_step])
@@ -510,7 +523,7 @@ class TaskDefinition(BaseModel):
         level: ExpressionLevel,
         verified_slots: Mapping[str, object],
     ) -> StepDefinition:
-        level_steps = self.steps[level]
+        level_steps = self.steps[level.canonical()]
         for step in level_steps:
             if any(slot not in verified_slots for slot in step.target_slots):
                 return step
@@ -531,6 +544,7 @@ class TaskDefinition(BaseModel):
         # A substantive but incomplete response to the entry sequence keeps
         # the child's L4 credit.  Only the next question is split so it asks
         # for the one missing idea instead of repeating a two-part prompt.
+        level = level.canonical()
         if targeted_followup and level is ExpressionLevel.L4:
             return self.step_for(ExpressionLevel.L3, verified_slots)
         return self.step_for(level, verified_slots)
@@ -1121,62 +1135,6 @@ QUEUE_TASK = TaskDefinition(
                 fallback_text="내 차례가 빨리 오는 이유를 같이 골라 보자.",
             ),
         ],
-        ExpressionLevel.L1: [
-            StepDefinition(
-                id="guided_count",
-                prompt="사람을 한 명씩 눌러 두 줄을 같이 세어 볼까?",
-                target_slots=["left_count", "right_count"],
-                input=InputContract(
-                    kind=InputKind.COUNT,
-                    target_slots=["left_count", "right_count"],
-                    config={
-                        "left_person_ids": ["l1", "l2", "l3"],
-                        "right_person_ids": ["r1", "r2", "r3", "r4", "r5"],
-                    },
-                ),
-                fallback_text="내가 어디부터 볼지 몰랐네. 같이 세어 보자.",
-            ),
-            StepDefinition(
-                id="guided_compare",
-                prompt="3은 5보다 어떻게 돼?",
-                target_slots=["smaller_number"],
-                input=choice_input(
-                    ["smaller_number"], [option("smaller", "작아"), option("larger", "커")]
-                ),
-                choice_effects={"smaller": {"smaller_number": 3}, "larger": {"smaller_number": 5}},
-                fallback_text="3과 5를 놓고 관계부터 같이 보자.",
-            ),
-            StepDefinition(
-                id="guided_map",
-                prompt="3명이 있는 줄은 어느 쪽이야?",
-                target_slots=["final_choice"],
-                input=choice_input(
-                    ["final_choice"], [option("left", "왼쪽"), option("right", "오른쪽")]
-                ),
-                choice_effects={
-                    "left": {"final_choice": "left"},
-                    "right": {"final_choice": "right"},
-                },
-                fallback_text="3명이 있는 줄을 장면에서 같이 찾아보자.",
-            ),
-            StepDefinition(
-                id="guided_reason",
-                prompt="나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 같이 골라 볼까?",
-                target_slots=["reason"],
-                input=choice_input(
-                    ["reason"],
-                    [
-                        option("fewer", "내 앞에 3명이 기다려서"),
-                        option("more", "내 앞에 5명이 기다려서"),
-                    ],
-                ),
-                choice_effects={
-                    "fewer": {"reason": "fewer_people"},
-                    "more": {"reason": "more_people"},
-                },
-                fallback_text="마지막 이유도 같이 이어 보자.",
-            ),
-        ],
         ExpressionLevel.L0: [
             StepDefinition(
                 id="joint_performance",
@@ -1408,24 +1366,6 @@ def calculation_task(
                     fallback_text="자리 계산 방법도 같이 골라 보자.",
                 ),
             ],
-            ExpressionLevel.L1: [
-                StepDefinition(
-                    id="guided_equation",
-                    prompt="세로식 빈칸을 한 자리씩 같이 채워볼까?",
-                    target_slots=["operation", "result", "method"],
-                    input=InputContract(
-                        kind=InputKind.EQUATION,
-                        target_slots=["operation", "result", "method"],
-                        config={
-                            "left": left,
-                            "right": right,
-                            "operation": operation,
-                            "places": ["만", "천", "백", "십", "일"],
-                        },
-                    ),
-                    fallback_text="내가 어디부터 볼지 몰랐네. 한 자리씩 보자.",
-                )
-            ],
             ExpressionLevel.L0: [
                 StepDefinition(
                     id="joint_equation",
@@ -1628,32 +1568,13 @@ def queue_task(
         choice.id: {"right_count": int(choice.id)}
         for choice in task.steps[ExpressionLevel.L2][1].input.choices
     }
-    task.steps[ExpressionLevel.L1][0].input.config = {
-        "left_person_ids": [f"l{index}" for index in range(1, left + 1)],
-        "right_person_ids": [f"r{index}" for index in range(1, right + 1)],
-    }
-    task.steps[ExpressionLevel.L1][1].prompt = (
-        f"{left}{particle(left, '과', '와')} {right} 중 더 작은 수는 뭐야?"
-    )
-    task.steps[ExpressionLevel.L1][1].input = choice_input(
-        ["smaller_number"],
-        [option(str(left), str(left)), option(str(right), str(right))],
-    )
-    task.steps[ExpressionLevel.L1][1].choice_effects = {
-        str(left): {"smaller_number": left},
-        str(right): {"smaller_number": right},
-    }
-    task.steps[ExpressionLevel.L1][2].prompt = f"{smaller}명이 있는 줄은 어느 쪽이야?"
     task.steps[ExpressionLevel.L3][2].prompt = (
         f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 알려줄 수 있어?"
     )
     task.steps[ExpressionLevel.L3][2].fallback_text = (
         "나는 왜 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?"
     )
-    for level, step_index in (
-        (ExpressionLevel.L2, 3),
-        (ExpressionLevel.L1, 3),
-    ):
+    for level, step_index in ((ExpressionLevel.L2, 3),):
         reason_step = task.steps[level][step_index]
         reason_step.prompt = (
             f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
@@ -1829,7 +1750,6 @@ def menu_selection_task(
             ExpressionLevel.L4: [step.model_copy(deep=True)],
             ExpressionLevel.L3: [step.model_copy(deep=True)],
             ExpressionLevel.L2: [step.model_copy(deep=True)],
-            ExpressionLevel.L1: [step.model_copy(deep=True)],
             ExpressionLevel.L0: [joint_step],
         },
         hints={
@@ -2000,34 +1920,6 @@ def simple_calculation_task(
             fallback_text="계산한 금액도 같이 골라 보자.",
         ),
     ]
-    fill_result = InputContract(
-        kind=InputKind.FILL,
-        target_slots=["result"],
-        choices=result_choices,
-        config={"expression": f"{left:,} {symbol} {right:,} = □"},
-    )
-    l1 = [
-        StepDefinition(
-            id="guided_operation",
-            prompt=(
-                "두 메뉴 가격은 어떤 계산으로 합칠까?"
-                if operation == "addition"
-                else "거스름돈을 구하려면 어떤 계산을 할까?"
-            ),
-            target_slots=["operation"],
-            input=choice_input(["operation"], operation_choices),
-            choice_effects=operation_effects,
-            fallback_text="두 금액 사이 계산 기호부터 골라 보자.",
-        ),
-        StepDefinition(
-            id="guided_result",
-            prompt=f"{left:,} {symbol} {right:,}의 빈칸은 얼마야?",
-            target_slots=["result"],
-            input=fill_result,
-            choice_effects=result_effects,
-            fallback_text="가로식의 빈칸을 같이 채워 보자.",
-        ),
-    ]
     joint = StepDefinition(
         id="joint_calculation",
         prompt="도움 카드 순서대로 계산을 같이 해볼까?",
@@ -2098,7 +1990,6 @@ def simple_calculation_task(
             ExpressionLevel.L4: [l4],
             ExpressionLevel.L3: l3,
             ExpressionLevel.L2: l2,
-            ExpressionLevel.L1: l1,
             ExpressionLevel.L0: [joint],
         },
         hints={
@@ -2200,21 +2091,6 @@ def home_teaching_task(
         f"short_{index}": {"rule": expected_rule} if label == spec.short_correct else {}
         for index, label in enumerate(spec.short_options)
     }
-    fill_choices = [option(f"fill_{index}", label) for index, label in enumerate(spec.fill_options)]
-    fill_effects: dict[str, dict[str, str | int | float | bool]] = {
-        f"fill_{index}": {"rule": expected_rule} if label == spec.fill_correct else {}
-        for index, label in enumerate(spec.fill_options)
-    }
-    fill_before = spec.fill_before.strip()
-    fill_after = spec.fill_after.strip()
-    # Korean postpositions attach to the word that fills the blank.  Joining
-    # every fragment with spaces produced visibly broken copy such as
-    # ``남은 □ 을 더해``.  Keep the blank and its postposition together.
-    if re.match(r"^(?:으로|로|을|를|이|가|은|는|의|와|과)(?:\s|$)", fill_after):
-        blank_and_after = f"□{fill_after}"
-    else:
-        blank_and_after = " ".join(part for part in ("□", fill_after) if part)
-    sentence_frame = " ".join(part for part in (fill_before, blank_and_after) if part)
     sample = raw_sample
     sample.pop("correct", None)
 
@@ -2362,29 +2238,6 @@ def home_teaching_task(
                     input=choice_input(["rule"], short_choices),
                     choice_effects=short_effects,
                     fallback_text="말로 어렵다면 필요한 방법을 같이 골라 보자.",
-                ),
-            ],
-            ExpressionLevel.L1: [
-                StepDefinition(
-                    id="guided_answer",
-                    prompt=str(sample["prompt"]),
-                    target_slots=["answer"],
-                    input=choice_input(["answer"], answer_choices),
-                    choice_effects=answer_effects,
-                    fallback_text="화면을 보며 답부터 하나 골라 보자.",
-                ),
-                StepDefinition(
-                    id="complete_rule",
-                    prompt=sentence_frame,
-                    target_slots=["rule"],
-                    input=InputContract(
-                        kind=InputKind.FILL,
-                        target_slots=["rule"],
-                        choices=fill_choices,
-                        config={"sentence": sentence_frame},
-                    ),
-                    choice_effects=fill_effects,
-                    fallback_text="도움 카드 문장의 빈칸을 같이 채워 보자.",
                 ),
             ],
             ExpressionLevel.L0: [
@@ -2635,37 +2488,6 @@ def _configure_number_count_task(
                 fallback_text="나 점을 셀 때 뭘 해야 할지 헷갈려... 같이 골라 볼까?",
             ),
         ],
-        ExpressionLevel.L1: [
-            StepDefinition(
-                id="guided_count",
-                prompt="지금 점이 몇 개야?",
-                target_slots=["answer"],
-                input=choice_input(["answer"], answer_choices),
-                choice_effects=answer_effects,
-                fallback_text="화면을 보며 센 수부터 골라 보자.",
-            ),
-            StepDefinition(
-                id="complete_tracking",
-                prompt="점을 하나씩 보면서 □.",
-                target_slots=["tracking"],
-                input=InputContract(
-                    kind=InputKind.FILL,
-                    target_slots=["tracking"],
-                    choices=[
-                        option("say_one_number", "하나, 둘, 셋 하고 세어"),
-                        option("count_twice", "같은 점을 두 번 세어"),
-                        option("skip_dots", "점을 건너뛰며 세어"),
-                    ],
-                    config={"sentence": "점을 하나씩 보면서 □."},
-                ),
-                choice_effects={
-                    "say_one_number": {"tracking": "count_each_once"},
-                    "count_twice": {},
-                    "skip_dots": {},
-                },
-                fallback_text="도움 카드 문장의 빈칸을 같이 채워 보자.",
-            ),
-        ],
         ExpressionLevel.L0: [
             StepDefinition(
                 id="joint_counting",
@@ -2703,13 +2525,6 @@ def _configure_number_compare_task(
     a legitimate way to explain the comparison; the child must not be forced
     to recite a single strategy such as one-to-one pairing.
     """
-
-    guided_answer_choices = [
-        choice for choice in answer_choices if choice.label in {"왼쪽", "오른쪽"}
-    ]
-    guided_answer_effects = {
-        choice.id: answer_effects[choice.id] for choice in guided_answer_choices
-    }
 
     task.slots = {
         "answer": SlotDefinition(
@@ -2799,37 +2614,6 @@ def _configure_number_compare_task(
                     "counts_same": {},
                 },
                 fallback_text="나 두 쪽에서 센 수가 헷갈려... 같이 골라 볼까?",
-            ),
-        ],
-        ExpressionLevel.L1: [
-            StepDefinition(
-                id="guided_comparison",
-                prompt="점이 5개인 쪽은 어느 쪽이야?",
-                target_slots=["answer"],
-                input=choice_input(["answer"], guided_answer_choices),
-                choice_effects=guided_answer_effects,
-                fallback_text="점이 5개인 쪽부터 같이 찾아보자.",
-            ),
-            StepDefinition(
-                id="complete_comparison",
-                prompt="왼쪽은 3개, 오른쪽은 5개라서 □.",
-                target_slots=["reason"],
-                input=InputContract(
-                    kind=InputKind.FILL,
-                    target_slots=["reason"],
-                    choices=[
-                        option("right_more", "오른쪽이 더 많아"),
-                        option("left_more", "왼쪽이 더 많아"),
-                        option("same", "두 쪽이 똑같아"),
-                    ],
-                    config={"sentence": "왼쪽은 3개, 오른쪽은 5개라서 □."},
-                ),
-                choice_effects={
-                    "right_more": {"reason": "count_comparison"},
-                    "left_more": {},
-                    "same": {},
-                },
-                fallback_text="센 수를 문장에 넣어 같이 마무리해 보자.",
             ),
         ],
         ExpressionLevel.L0: [
@@ -3144,7 +2928,12 @@ def validate_content() -> None:
                 raise ValueError(f"{task.id}: note-producing task needs reviewed note context")
         if set(task.text_explanation_slots) - set(task.required_slots):
             raise ValueError(f"{task.id}: explanation slots must be required completion slots")
-        for level in ExpressionLevel:
+        for level in (
+            ExpressionLevel.L4,
+            ExpressionLevel.L3,
+            ExpressionLevel.L2,
+            ExpressionLevel.L0,
+        ):
             if level not in task.steps or not task.steps[level]:
                 raise ValueError(f"{task.id}: missing steps for {level}")
         reviewed_steps = [item for steps in task.steps.values() for item in steps]

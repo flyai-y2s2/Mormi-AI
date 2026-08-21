@@ -146,14 +146,18 @@ def test_number_count_support_does_not_force_pointing_as_the_only_method() -> No
     assert "가리키" not in " ".join(
         [spec.learned_line, spec.hint, *spec.help_lines, *spec.short_options]
     )
-    guided = task.steps[ExpressionLevel.L1][1]
-    assert guided.prompt == "점을 하나씩 보면서 □."
-    assert guided.choice_effects["say_one_number"] == {"tracking": "count_each_once"}
+    assert ExpressionLevel.L1 not in task.steps
     short_method = task.steps[ExpressionLevel.L3][1]
     choice_method = task.steps[ExpressionLevel.L2][1]
     assert short_method.prompt != choice_method.prompt
     assert short_method.input.kind is InputKind.TEXT
     assert choice_method.input.kind is InputKind.CHOICES
+    reviewed_choice = next(
+        choice for choice in choice_method.input.choices if choice.label == spec.short_correct
+    )
+    assert choice_method.choice_effects[reviewed_choice.id] == {
+        "tracking": "count_each_once"
+    }
 
 
 def test_every_home_task_declares_semantic_roles_instead_of_relying_on_slot_names() -> None:
@@ -498,8 +502,11 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
     for spec in HOME_TEACHING_CATALOG.values():
         task = home_teaching_task(spec, skill_id=spec.id)
         l2_answer, l2_method = task.steps[ExpressionLevel.L2]
-        l1_answer, l1_rule = task.steps[ExpressionLevel.L1]
         expected_answers = [str(answer) for answer in spec.sample_problem["answers"]]
+
+        assert ExpressionLevel.L1 not in task.steps
+        assert l2_answer.input.kind is InputKind.CHOICES
+        assert l2_method.input.kind is InputKind.CHOICES
 
         if spec.id == "number-compare":
             assert "어느 쪽" in l2_answer.prompt
@@ -511,8 +518,6 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
                 "왼쪽은 5개, 오른쪽은 3개라서",
                 "두 쪽 모두 5개라서",
             ]
-            assert "5개인 쪽" in l1_answer.prompt
-            assert l1_rule.input.kind is InputKind.FILL
             continue
 
         if spec.id == "number-count":
@@ -524,16 +529,12 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
             assert l2_method.prompt != spec.short_prompt
             assert "같이 골라 볼까?" in l2_method.prompt
             assert l2_method.input.kind is InputKind.CHOICES
-            assert l1_rule.input.kind is InputKind.FILL
             continue
 
         assert l2_answer.prompt == spec.sample_problem["prompt"]
         assert [choice.label for choice in l2_answer.input.choices] == expected_answers
         assert l2_method.prompt == spec.short_prompt
         assert [choice.label for choice in l2_method.input.choices] == spec.short_options
-        assert l1_answer.prompt == spec.sample_problem["prompt"]
-        assert [choice.label for choice in l1_answer.input.choices] == expected_answers
-        assert l1_rule.input.kind is InputKind.FILL
         assert spec.short_prompt != "어떤 방법이 맞을까?"
 
 

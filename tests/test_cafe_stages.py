@@ -490,7 +490,7 @@ def test_calculation_guidance_uses_natural_korean_without_menu_name_particles() 
     }
     task_id = get_scenario("cafe_menu_total").task_ids[1]
     task = get_task(task_id, data)
-    prompt = task.steps[ExpressionLevel.L1][0].prompt
+    prompt = task.steps[ExpressionLevel.L2][0].prompt
 
-    assert prompt == "두 메뉴 가격은 어떤 계산으로 합칠까?"
+    assert prompt == "어떤 계산을 해야 할까?"
     assert "우유을" not in prompt
