@@ -26,6 +26,7 @@ from .outbox import DIALOGUE_OBSERVATION_EVENT_TYPE, STAR_NOTE_CREATED_EVENT_TYP
 from .reporting import build_report_evidence
 from .schemas import (
     ChildResponse,
+    DialogueHistoryTurn,
     LearnerProfile,
     NoteAttribution,
     NoteEvidence,
@@ -33,6 +34,7 @@ from .schemas import (
     PracticeResult,
     ReportEvidenceResponse,
     ResponseCategory,
+    ResponseType,
     RetentionPolicy,
     SessionState,
     SpeakerRuntimeAudit,
@@ -840,6 +842,62 @@ class Repository:
                 }
                 for record in records
             ]
+
+    async def recent_dialogue_context(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 6,
+    ) -> list[DialogueHistoryTurn]:
+        """Return a bounded answered-turn tail for within-session reference resolution.
+
+        This query intentionally excludes the unanswered active turn. The caller
+        supplies that turn's question separately, so the model never sees the
+        current prompt twice. Raw text remains scoped to this conversation and is
+        not copied into analytics columns.
+        """
+
+        bounded_limit = max(1, min(limit, 6))
+        async with self.database.sessions() as db:
+            conversation = await db.get(ConversationRecord, conversation_id)
+            if not conversation:
+                raise ConversationNotFoundError(conversation_id)
+            statement = (
+                select(TurnRecord)
+                .where(
+                    TurnRecord.conversation_id == conversation_id,
+                    TurnRecord.response_id.is_not(None),
+                )
+                .order_by(TurnRecord.id.desc())
+                .limit(bounded_limit)
+            )
+            records = list((await db.execute(statement)).scalars())
+
+        history = [
+            DialogueHistoryTurn(
+                turn_id=record.turn_id,
+                mormi=(
+                    self.text_codec.load(record.mormi_question_encrypted)
+                    if record.mormi_question_encrypted
+                    else ""
+                ),
+                child=(
+                    self.text_codec.load(record.response_raw_encrypted)
+                    if record.response_raw_encrypted
+                    else None
+                ),
+                response_type=(
+                    ResponseType(record.response_type) if record.response_type else None
+                ),
+                response_category=(
+                    ResponseCategory(record.response_category)
+                    if record.response_category
+                    else None
+                ),
+            )
+            for record in reversed(records)
+        ]
+        return history
 
     async def report_evidence(
         self,

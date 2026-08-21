@@ -17,13 +17,16 @@ from mormi_api.schemas import (
     DifficultyClass,
     ExpressionLevel,
     HintLevel,
+    InteractionIntent,
     NoteContextualizationContext,
     NoteContextualizationOutput,
     ResponseCategory,
     SafetyCategory,
     SceneType,
+    SemanticAssessment,
     SessionState,
     SlotClaim,
+    TaskRelation,
     UtteranceAnalysis,
 )
 
@@ -100,6 +103,137 @@ def _number_comparison_state() -> SessionState:
         expression_level=ExpressionLevel.L4,
         task_start_level=ExpressionLevel.L4,
     )
+
+
+@pytest.mark.asyncio
+async def test_clear_current_task_answer_skips_sonnet_adjudication() -> None:
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        task_relation=TaskRelation.CURRENT_TASK,
+        answer_status=SemanticAssessment.COMPLETE,
+        reason_status=SemanticAssessment.MISSING,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽",
+            )
+        ],
+        confidence=0.95,
+    )
+    gateway = FakeGateway([analysis])
+    engine = ConversationEngine(gateway)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="45a91271-8be9-46e4-a7fd-f729766977f1",
+            type="text",
+            text="오른쪽",
+        ),
+        initial.mormi.text,
+    )
+
+    assert gateway.classify_calls == 1
+    assert gateway.adjudicate_calls == 0
+    assert gateway.bridge_speak_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_high_impact_ambiguity_uses_sonnet_adjudication_once() -> None:
+    primary = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.UNRELATED_RESPONSE,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        task_relation=TaskRelation.CURRENT_TASK,
+        answer_status=SemanticAssessment.UNCERTAIN,
+        reason_status=SemanticAssessment.MISSING,
+        needs_adjudication=True,
+        adjudication_reason="짧은 위치 답을 현재 장면과 대조해야 함",
+        confidence=0.72,
+    )
+    adjudicated = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        task_relation=TaskRelation.CURRENT_TASK,
+        answer_status=SemanticAssessment.COMPLETE,
+        reason_status=SemanticAssessment.MISSING,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽",
+            )
+        ],
+        confidence=0.96,
+    )
+    gateway = FakeGateway([primary], [adjudicated])
+    engine = ConversationEngine(gateway)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    _, effective, _ = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="9eb209cb-2419-43f3-8d25-f287476964f0",
+            type="text",
+            text="오른쪽",
+        ),
+        initial.mormi.text,
+    )
+
+    assert gateway.classify_calls == 1
+    assert gateway.adjudicate_calls == 1
+    assert gateway.bridge_speak_calls == 0
+    assert effective.response_category is ResponseCategory.CORRECT_PARTIAL
+    assert effective.claims[0].value == "오른쪽"
+
+
+@pytest.mark.asyncio
+async def test_safe_meta_utterance_uses_fast_dialogue_bridge() -> None:
+    child_text = "너 알면서 일부러 물어보지?"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.UNRELATED_RESPONSE,
+        difficulty_class=DifficultyClass.ENGAGEMENT,
+        task_relation=TaskRelation.META_ABOUT_MORMI,
+        interaction_intent=InteractionIntent.AUTHENTICITY_CHALLENGE,
+        social_grounding_span=child_text,
+        confidence=0.94,
+    )
+    gateway = FakeGateway([analysis])
+    engine = ConversationEngine(gateway)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="90cbd679-5ec6-4742-af6e-2a761886d02c",
+            type="text",
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert gateway.classify_calls == 1
+    assert gateway.adjudicate_calls == 0
+    assert gateway.bridge_speak_calls == 1
+    assert next_state.verified_slots == {}
+    assert turn.status.value == "active"
 
 
 @pytest.mark.asyncio

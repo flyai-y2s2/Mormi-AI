@@ -16,15 +16,18 @@ from mormi_api.content import (
     simple_calculation_task,
 )
 from mormi_api.llm import (
+    NOTE_CONTEXTUALIZER_SYSTEM,
+    SPEAKER_SYSTEM,
+    SPEAKER_VERIFIER_SYSTEM,
     ClaudeGateway,
     structured_output_schema,
     validate_speaker_output,
     validate_speaker_verification,
 )
 from mormi_api.schemas import (
-    ArithmeticClaim,
     CafeMenuItem,
     ChildResponse,
+    DialogueHistoryTurn,
     DifficultyClass,
     ExpressionLevel,
     InteractionIntent,
@@ -288,6 +291,40 @@ def test_speaker_cannot_mention_an_invisible_help_card() -> None:
     assert validate_speaker_output(output, context, speaker_guard()) is None
 
 
+def test_l2_rejects_joint_performance_language_but_l0_allows_it() -> None:
+    text = "그럼 나랑 같이 골라볼까?"
+    l2_context = SpeakerContext(
+        dialogue_act="reduce_expression_load",
+        expression_level=ExpressionLevel.L2,
+        required_question=text,
+        required_slot_ids=["answer"],
+        required_slot_descriptions={"answer": "선택할 답"},
+        fallback_text="그럼 혹시 여기서 골라서 알려줄 수 있어?",
+    )
+    assert (
+        validate_speaker_output(
+            speaker_output(text, l2_context),
+            l2_context,
+            speaker_guard(),
+        )
+        is None
+    )
+
+    l0_context = l2_context.model_copy(
+        update={
+            "dialogue_act": "joint_mode",
+            "expression_level": ExpressionLevel.L0,
+            "required_question": text,
+        }
+    )
+    l0_output = SpeakerOutput(
+        text=text,
+        dialogue_act="joint_mode",
+        asked_slot_ids=["answer"],
+    )
+    assert validate_speaker_output(l0_output, l0_context, speaker_guard()) == text
+
+
 def test_semantic_verifier_must_mark_false_arithmetic_stance_safe() -> None:
     context = speaker_context().model_copy(
         update={
@@ -322,6 +359,9 @@ def test_semantic_verifier_must_mark_false_arithmetic_stance_safe() -> None:
         meaningfully_reframed=True,
         arithmetic_claim_stance_safe=False,
         help_card_state_respected=True,
+        sentence_complete=True,
+        joint_mode_respected=True,
+        violation_codes=[],
         detected_dialogue_act=context.dialogue_act,
         detected_asked_slot_ids=context.required_slot_ids,
         question_evidence_span=output.text,
@@ -368,6 +408,9 @@ def test_speaker_can_ground_a_clarification_in_an_exact_child_phrase() -> None:
         only_allowed_math_used=True,
         child_not_evaluated=True,
         character_consistent=True,
+        sentence_complete=True,
+        joint_mode_respected=True,
+        violation_codes=[],
         detected_dialogue_act=context.dialogue_act,
         detected_asked_slot_ids=["tracking"],
         question_evidence_span="‘차근차근’은 어떻게 세는 거야?",
@@ -440,6 +483,9 @@ def test_support_turn_semantic_verifier_requires_meaningful_reframing() -> None:
         only_allowed_math_used=True,
         child_not_evaluated=True,
         character_consistent=True,
+        sentence_complete=True,
+        joint_mode_respected=True,
+        violation_codes=[],
         detected_dialogue_act=context.dialogue_act,
         detected_asked_slot_ids=["tracking"],
         question_evidence_span="조금만 더 알려줄래?",
@@ -579,11 +625,92 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         assert method_contract["help_card_route_is_not_the_only_correct_method"] is (
             task.help_method_policy == "open_methods"
         )
-        assert any("related_vague" in instruction for instruction in payload["instructions"])
+        assert any(
+            "related_vague" in instruction
+            for instruction in payload["instructions"]
+        )
         assert any(
             "아이가 실제로 주장한 값" in instruction
             for instruction in payload["instructions"]
         )
+
+
+def test_classifier_prompt_carries_only_the_latest_six_dialogue_turns() -> None:
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-count"],
+        skill_id="number-count",
+    )
+    state = SessionState(
+        learner_id=1,
+        scene=SceneType.HOME_TEACH,
+        scenario_id="history_prompt_test",
+        task_ids=[task.id],
+        expression_level=ExpressionLevel.L4,
+    )
+    history = [
+        DialogueHistoryTurn(
+            turn_id=f"history_{index}",
+            mormi=f"이전 질문 {index}",
+            child=f"이전 답 {index}",
+            response_type=ResponseType.TEXT,
+            response_category=ResponseCategory.CORRECT_PARTIAL,
+        )
+        for index in range(7)
+    ]
+
+    prompt = ClaudeGateway._classifier_prompt(
+        state,
+        task,
+        previous_question=task.steps[ExpressionLevel.L4][0].prompt,
+        response=ChildResponse(
+            turn_id="turn_history",
+            response_id=uuid4(),
+            type=ResponseType.TEXT,
+            text="아까 말한 방법으로 세면 돼",
+        ),
+        dialogue_history=history,
+    )
+    payload = json.loads(prompt)
+
+    assert [turn["turn_id"] for turn in payload["recent_dialogue"]] == [
+        f"history_{index}" for index in range(1, 7)
+    ]
+    assert payload["recent_dialogue"][-1]["child"] == "이전 답 6"
+    assert any(
+        "대명사·생략" in instruction for instruction in payload["instructions"]
+    )
+
+
+def test_reviewed_speaker_and_note_prompt_contracts_are_pinned() -> None:
+    assert "아이보다 조금 서툴지만 지나치게 자기비하 하지 않는다." in SPEAKER_SYSTEM
+    assert (
+        "아이의 말이 모호하면 이해한 척하지 말고, 잘 모르겠다며 구체적인 정보를 "
+        "자연스럽게 요청해라."
+    ) in SPEAKER_SYSTEM
+    for rule in (
+        "L4, L3, L2에서는 아이가 모르미에게 알려주는 주체다.",
+        'L2에서 "같이 고르자", "같이 찾아보자"라고 말하지 않는다.',
+        '공동 수행을 뜻하는 "같이 해보자"는 L0에서만 사용한다.',
+        "도움 카드가 실제로 화면에 표시된 경우에만 도움 카드를 언급한다.",
+    ):
+        assert rule in SPEAKER_SYSTEM
+
+    assert "대사를 새로 작성하지 말고 계약 위반 여부만 판정한다." in (
+        SPEAKER_VERIFIER_SYSTEM
+    )
+    assert "1. 시스템이 요청한 dialogue_act를 수행했는가?" in (
+        SPEAKER_VERIFIER_SYSTEM
+    )
+    assert "9. 문장이 중간에 잘리지 않고 완결됐는가?" in SPEAKER_VERIFIER_SYSTEM
+    assert "대사를 고쳐 쓰지 않는다." in SPEAKER_VERIFIER_SYSTEM
+
+    assert "생략된 주어나 대상을 검증된 장면 사실로 명확히 한다." in (
+        NOTE_CONTEXTUALIZER_SYSTEM
+    )
+    assert (
+        "예: '둘이', '오른쪽', '그거'를 검증된 실제 대상으로 바꾼다."
+        in NOTE_CONTEXTUALIZER_SYSTEM
+    )
 
 
 def test_speaker_rejects_teacher_style_probe() -> None:
@@ -623,7 +750,7 @@ def test_speaker_rejects_teacher_style_probe() -> None:
     "initial_category",
     [ResponseCategory.UNRELATED_RESPONSE, ResponseCategory.CONCEPTUAL_ERROR],
 )
-async def test_negative_free_text_classification_is_semantically_rechecked_once(
+async def test_negative_free_text_classification_is_left_for_graph_routing(
     initial_category: ResponseCategory,
 ) -> None:
     first = UtteranceAnalysis(
@@ -632,31 +759,15 @@ async def test_negative_free_text_classification_is_semantically_rechecked_once(
         difficulty_class=DifficultyClass.UNKNOWN,
         confidence=0.7,
     )
-    audited = UtteranceAnalysis(
-        safety_category=SafetyCategory.NORMAL,
-        response_category=ResponseCategory.CORRECT_PARTIAL,
-        difficulty_class=DifficultyClass.UNKNOWN,
-        claims=[
-            SlotClaim(
-                slot_id="tracking",
-                value="count_each_once",
-                factual=True,
-                evidence_span="하나 둘 셋",
-            )
-        ],
-        confidence=0.55,
-    )
-
     class FakeMessages:
         def __init__(self) -> None:
-            self.outputs = [first.model_dump_json(), audited.model_dump_json()]
             self.prompts: list[str] = []
 
         async def create(self, **kwargs: Any) -> object:
             self.prompts.append(kwargs["messages"][0]["content"])
             return SimpleNamespace(
                 stop_reason="end_turn",
-                content=[SimpleNamespace(type="text", text=self.outputs.pop(0))],
+                content=[SimpleNamespace(type="text", text=first.model_dump_json())],
             )
 
     messages = FakeMessages()
@@ -683,17 +794,16 @@ async def test_negative_free_text_classification_is_semantically_rechecked_once(
         ),
     )
 
-    assert result.response_category is ResponseCategory.CORRECT_PARTIAL
-    assert result.claims[0].slot_id == "tracking"
-    assert len(messages.prompts) == 2
-    assert "semantic_relation_audit" in messages.prompts[1]
+    assert result.response_category is initial_category
+    assert result.claims == []
+    assert len(messages.prompts) == 1
     assert "문구 일치가 아니라" in messages.prompts[0]
     assert "10개 중 색칠된 게 3개던데" not in messages.prompts[0]
 
 
 @pytest.mark.asyncio
-async def test_positive_classification_without_current_claim_is_rechecked_once() -> None:
-    """A positive label without evidence cannot leave the state claimless."""
+async def test_positive_classification_without_current_claim_is_left_for_graph_routing() -> None:
+    """The primary pass stays cheap; the graph decides whether to adjudicate."""
 
     first = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
@@ -701,32 +811,15 @@ async def test_positive_classification_without_current_claim_is_rechecked_once()
         difficulty_class=DifficultyClass.UNKNOWN,
         confidence=0.8,
     )
-    audited = UtteranceAnalysis(
-        safety_category=SafetyCategory.NORMAL,
-        response_category=ResponseCategory.CORRECT_PARTIAL,
-        difficulty_class=DifficultyClass.UNKNOWN,
-        claims=[
-            SlotClaim(
-                slot_id="answer",
-                value=600,
-                factual=True,
-                evidence_span="600원이지",
-                interpretation_confidence=0.99,
-            )
-        ],
-        confidence=0.95,
-    )
-
     class FakeMessages:
         def __init__(self) -> None:
-            self.outputs = [first.model_dump_json(), audited.model_dump_json()]
             self.prompts: list[str] = []
 
         async def create(self, **kwargs: Any) -> object:
             self.prompts.append(kwargs["messages"][0]["content"])
             return SimpleNamespace(
                 stop_reason="end_turn",
-                content=[SimpleNamespace(type="text", text=self.outputs.pop(0))],
+                content=[SimpleNamespace(type="text", text=first.model_dump_json())],
             )
 
     messages = FakeMessages()
@@ -753,16 +846,14 @@ async def test_positive_classification_without_current_claim_is_rechecked_once()
         ),
     )
 
-    assert len(messages.prompts) == 2
-    assert result.claims[0].slot_id == "answer"
-    assert result.claims[0].value == 600
-    assert "구조화 claim이 일치" in messages.prompts[1]
+    assert len(messages.prompts) == 1
+    assert result.claims == []
     assert "arithmetic_claims" in messages.prompts[0]
 
 
 @pytest.mark.asyncio
-async def test_number_rich_supported_explanation_without_relation_is_rechecked_once() -> None:
-    """Haiku, not a Korean phrase regex, repairs missing arithmetic structure."""
+async def test_number_rich_explanation_without_relation_is_left_for_graph_routing() -> None:
+    """The primary pass exposes ambiguity without paying for a second Haiku call."""
 
     child_text = "2000원에서 1800원 내면 300원 남아"
     first = UtteranceAnalysis(
@@ -781,32 +872,15 @@ async def test_number_rich_supported_explanation_without_relation_is_rechecked_o
         ],
         confidence=0.8,
     )
-    audited = first.model_copy(
-        update={
-            "arithmetic_claims": [
-                ArithmeticClaim(
-                    left=2000,
-                    right=1800,
-                    operation="subtraction",
-                    result=300,
-                    evidence_span=child_text,
-                    related_slot_ids=["rule"],
-                    interpretation_confidence=0.99,
-                )
-            ]
-        }
-    )
-
     class FakeMessages:
         def __init__(self) -> None:
-            self.outputs = [first.model_dump_json(), audited.model_dump_json()]
             self.prompts: list[str] = []
 
         async def create(self, **kwargs: Any) -> object:
             self.prompts.append(kwargs["messages"][0]["content"])
             return SimpleNamespace(
                 stop_reason="end_turn",
-                content=[SimpleNamespace(type="text", text=self.outputs.pop(0))],
+                content=[SimpleNamespace(type="text", text=first.model_dump_json())],
             )
 
     messages = FakeMessages()
@@ -833,9 +907,9 @@ async def test_number_rich_supported_explanation_without_relation_is_rechecked_o
         ),
     )
 
-    assert len(messages.prompts) == 2
-    assert result.arithmetic_claims[0].operation == "subtraction"
-    assert "숫자 사이의 덧셈·뺄셈 관계" in messages.prompts[1]
+    assert len(messages.prompts) == 1
+    assert result.arithmetic_claims == []
+    assert "arithmetic_claims" in messages.prompts[0]
 
 
 @pytest.mark.asyncio
@@ -925,6 +999,9 @@ def test_social_bridge_requires_acknowledgement_and_rejects_rewarding_copy() -> 
         meaningfully_reframed=True,
         interaction_intent_acknowledged=True,
         task_returned_without_reward=True,
+        sentence_complete=True,
+        joint_mode_respected=True,
+        violation_codes=[],
         detected_dialogue_act=context.dialogue_act,
         detected_asked_slot_ids=["answer"],
         question_evidence_span="점이 몇 개인지 알려줄래?",

@@ -23,6 +23,7 @@ from .schemas import (
     ChildResponse,
     CompletionContract,
     CompletionOutcome,
+    DialogueHistoryTurn,
     DifficultyClass,
     EntryPhase,
     EntryStance,
@@ -45,6 +46,7 @@ from .schemas import (
     ResponseCategory,
     ResponseType,
     SafetyCategory,
+    SemanticAssessment,
     SessionState,
     SessionStatus,
     SkillProfile,
@@ -63,6 +65,7 @@ from .schemas import (
     TaskAnchorContract,
     TaskRelation,
     TurnContract,
+    UnderstandingRoute,
     UtteranceAnalysis,
     VisualContract,
     new_id,
@@ -94,8 +97,11 @@ class ConversationGraphState(TypedDict, total=False):
     session: dict[str, Any]
     response: dict[str, Any]
     previous_question: str
+    recent_dialogue: list[dict[str, Any]]
     analysis: dict[str, Any]
     classifier_response_category: str
+    understanding_route: str
+    adjudicator_used: bool
     decision: dict[str, Any]
     speaker_output: dict[str, Any]
     speaker_text: str
@@ -126,15 +132,33 @@ class ConversationEngine:
         # LangGraph's current generic overloads do not accept async bound methods
         # cleanly in mypy even though they are supported at runtime.
         builder.add_node("understand", self._understand_node)  # type: ignore[call-overload]
+        builder.add_node("adjudicate", self._adjudicate_node)  # type: ignore[call-overload]
         builder.add_node("orchestrate", self._orchestrate_node)  # type: ignore[call-overload]
+        builder.add_node("bridge_speak", self._bridge_speak_node)  # type: ignore[call-overload]
         builder.add_node("speak", self._speak_node)  # type: ignore[call-overload]
         builder.add_node(  # type: ignore[call-overload]
             "validate_and_compose",
             self._validate_and_compose_node,
         )
         builder.add_edge(START, "understand")
-        builder.add_edge("understand", "orchestrate")
-        builder.add_edge("orchestrate", "speak")
+        builder.add_conditional_edges(
+            "understand",
+            self._route_after_understanding,
+            {
+                "adjudicate": "adjudicate",
+                "orchestrate": "orchestrate",
+            },
+        )
+        builder.add_edge("adjudicate", "orchestrate")
+        builder.add_conditional_edges(
+            "orchestrate",
+            self._route_after_orchestration,
+            {
+                "bridge_speak": "bridge_speak",
+                "speak": "speak",
+            },
+        )
+        builder.add_edge("bridge_speak", "validate_and_compose")
         builder.add_edge("speak", "validate_and_compose")
         builder.add_edge("validate_and_compose", END)
         # Canonical state is committed atomically to the access-controlled application
@@ -147,9 +171,15 @@ class ConversationEngine:
         state: SessionState,
         response: ChildResponse,
         previous_question: str,
+        recent_dialogue: list[DialogueHistoryTurn] | None = None,
     ) -> tuple[SessionState, UtteranceAnalysis, TurnContract]:
         result: EngineTurnResult | None = None
-        async for event in self.run_turn_stream(state, response, previous_question):
+        async for event in self.run_turn_stream(
+            state,
+            response,
+            previous_question,
+            recent_dialogue=recent_dialogue,
+        ):
             if isinstance(event, EngineTurnResult):
                 result = event
         if result is None:  # pragma: no cover - LangGraph always reaches END
@@ -161,6 +191,8 @@ class ConversationEngine:
         state: SessionState,
         response: ChildResponse,
         previous_question: str,
+        *,
+        recent_dialogue: list[DialogueHistoryTurn] | None = None,
     ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
         """Expose safe graph milestones without leaking unvalidated model text."""
 
@@ -170,7 +202,9 @@ class ConversationEngine:
         final_values: dict[str, Any] | None = None
         node_stages: dict[str, EngineProgress] = {
             "understand": EngineProgress("understanding"),
+            "adjudicate": EngineProgress("understanding"),
             "orchestrate": EngineProgress("planning"),
+            "bridge_speak": EngineProgress("speaking"),
             "speak": EngineProgress("speaking"),
             "validate_and_compose": EngineProgress("validating"),
         }
@@ -179,6 +213,9 @@ class ConversationEngine:
                 "session": normalized_state.model_dump(mode="json"),
                 "response": response.model_dump(mode="json"),
                 "previous_question": previous_question,
+                "recent_dialogue": [
+                    turn.model_dump(mode="json") for turn in (recent_dialogue or [])[-6:]
+                ],
             },
             stream_mode=["updates", "values"],
         ):
@@ -247,7 +284,7 @@ class ConversationEngine:
                 bottleneck="expression",
                 confidence=1,
             )
-            return self._understanding_result(analysis)
+            return self._understanding_result(analysis, UnderstandingRoute.NORMAL)
 
         text = response.text or self._response_as_text(response)
         deterministic_category = deterministic_safety(text)
@@ -272,31 +309,166 @@ class ConversationEngine:
                 ),
                 confidence=1,
             )
-            return self._understanding_result(analysis)
+            route = (
+                UnderstandingRoute.BRIDGE
+                if deterministic_category is SafetyCategory.PLAYFUL_OFFTOPIC
+                else UnderstandingRoute.NORMAL
+            )
+            return self._understanding_result(analysis, route)
 
         if response.type is ResponseType.TEXT:
+            recent_dialogue = [
+                DialogueHistoryTurn.model_validate(turn)
+                for turn in graph_state.get("recent_dialogue", [])
+            ]
             analysis = await self.gateway.classify(
                 state=state,
                 task=task,
                 previous_question=previous_question,
                 response=response,
+                dialogue_history=recent_dialogue,
             )
             # Deterministic safety always wins; model safety may make the result
             # stricter but can never downgrade an explicit local match.
             if analysis.safety_category is SafetyCategory.UNKNOWN:
                 analysis.safety_category = SafetyCategory.NORMAL
-            return self._understanding_result(analysis)
+            route = self._select_understanding_route(state, task, response, analysis)
+            return self._understanding_result(analysis, route)
 
         analysis = self._deterministic_analysis(state, task, response)
-        return self._understanding_result(analysis)
+        return self._understanding_result(analysis, UnderstandingRoute.NORMAL)
 
     @staticmethod
-    def _understanding_result(analysis: UtteranceAnalysis) -> dict[str, Any]:
+    def _understanding_result(
+        analysis: UtteranceAnalysis,
+        route: UnderstandingRoute,
+    ) -> dict[str, Any]:
         """Keep the understanding model's label before code reconciliation."""
 
         return {
             "analysis": analysis.model_dump(mode="json"),
             "classifier_response_category": analysis.response_category.value,
+            "understanding_route": route.value,
+            "adjudicator_used": False,
+        }
+
+    @staticmethod
+    def _route_after_understanding(graph_state: ConversationGraphState) -> str:
+        if graph_state.get("understanding_route") == UnderstandingRoute.ADJUDICATE.value:
+            return "adjudicate"
+        return "orchestrate"
+
+    def _select_understanding_route(
+        self,
+        state: SessionState,
+        task: TaskDefinition,
+        response: ChildResponse,
+        analysis: UtteranceAnalysis,
+    ) -> UnderstandingRoute:
+        """Spend extra model work only where its educational value justifies it."""
+
+        if analysis.safety_category is not SafetyCategory.NORMAL:
+            return (
+                UnderstandingRoute.BRIDGE
+                if analysis.safety_category is SafetyCategory.PLAYFUL_OFFTOPIC
+                else UnderstandingRoute.NORMAL
+            )
+        safe_social = (
+            analysis.task_relation in {TaskRelation.META_ABOUT_MORMI, TaskRelation.OFF_TOPIC}
+            and analysis.interaction_intent is not InteractionIntent.NONE
+            and not analysis.claims
+            and not analysis.arithmetic_claims
+        )
+        if safe_social:
+            return UnderstandingRoute.BRIDGE
+        if response.type is not ResponseType.TEXT:
+            return UnderstandingRoute.NORMAL
+
+        entry_active = (
+            task.entry_step is not None
+            and state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE
+        )
+        step = task.active_step(
+            state.expression_level,
+            state.verified_slots,
+            entry_active=entry_active,
+            targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
+        )
+        current_slots = {*step.target_slots, *step.optional_slots}
+        positive_categories = {
+            ResponseCategory.CORRECT_FULL,
+            ResponseCategory.CORRECT_PARTIAL,
+            ResponseCategory.SELF_CORRECTION,
+        }
+        negative_categories = {
+            ResponseCategory.UNRELATED_RESPONSE,
+            ResponseCategory.CONCEPTUAL_ERROR,
+            ResponseCategory.CONCEPTUAL_BLOCK,
+        }
+        positive_without_current_claim = (
+            analysis.response_category in positive_categories
+            and bool(current_slots)
+            and not any(claim.slot_id in current_slots for claim in analysis.claims)
+        )
+        arithmetic_explanation_without_relation = (
+            task.arithmetic_contract is not None
+            and analysis.response_category in positive_categories
+            and len(extract_numeric_values(response.text or "")) >= 3
+            and not analysis.arithmetic_claims
+        )
+        uncertain_meaning = any(
+            status is SemanticAssessment.UNCERTAIN
+            for status in (analysis.answer_status, analysis.reason_status)
+        )
+        current_task_negative = (
+            analysis.task_relation is TaskRelation.CURRENT_TASK
+            and analysis.response_category in negative_categories
+        )
+        if (
+            analysis.needs_adjudication
+            or analysis.confidence < 0.68
+            or uncertain_meaning
+            or positive_without_current_claim
+            or arithmetic_explanation_without_relation
+            or current_task_negative
+        ):
+            return UnderstandingRoute.ADJUDICATE
+        return UnderstandingRoute.NORMAL
+
+    async def _adjudicate_node(
+        self,
+        graph_state: ConversationGraphState,
+    ) -> dict[str, Any]:
+        state = SessionState.model_validate(graph_state["session"])
+        response = ChildResponse.model_validate(graph_state["response"])
+        task = get_task(state.current_task_id, state.scenario_data)
+        primary = UtteranceAnalysis.model_validate(graph_state["analysis"])
+        recent_dialogue = [
+            DialogueHistoryTurn.model_validate(turn)
+            for turn in graph_state.get("recent_dialogue", [])
+        ]
+        try:
+            analysis = await self.gateway.adjudicate(
+                state=state,
+                task=task,
+                previous_question=graph_state["previous_question"],
+                response=response,
+                primary_analysis=primary,
+                dialogue_history=recent_dialogue,
+            )
+        except Exception as error:
+            logger.warning(
+                "understanding_adjudication_fallback error_type=%s",
+                type(error).__name__,
+            )
+            return {
+                "understanding_route": UnderstandingRoute.NORMAL.value,
+                "adjudicator_used": False,
+            }
+        return {
+            "analysis": analysis.model_dump(mode="json"),
+            "understanding_route": UnderstandingRoute.ADJUDICATE.value,
+            "adjudicator_used": True,
         }
 
     async def _orchestrate_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
@@ -311,6 +483,21 @@ class ConversationEngine:
             analysis,
             graph_state["previous_question"],
         )
+        recent_dialogue = [
+            DialogueHistoryTurn.model_validate(turn)
+            for turn in graph_state.get("recent_dialogue", [])[-3:]
+        ]
+        speaker_context = decision.speaker_context.model_copy(
+            update={
+                "expression_level": decision.state.expression_level,
+                "hint_level": decision.state.hint_level,
+                "unresolved_focus": dict(
+                    decision.speaker_context.required_slot_descriptions
+                ),
+                "recent_dialogue": recent_dialogue,
+            }
+        )
+        decision = decision.model_copy(update={"speaker_context": speaker_context})
         return {
             "session": decision.state.model_dump(mode="json"),
             # ``_decide`` may reconcile correctness from validated slot claims.
@@ -319,6 +506,66 @@ class ConversationEngine:
             "analysis": analysis.model_dump(mode="json"),
             "decision": decision.model_dump(mode="json"),
         }
+
+    @staticmethod
+    def _route_after_orchestration(graph_state: ConversationGraphState) -> str:
+        """Use the cheap bridge speaker only for a safe social bridge act.
+
+        The understanding route alone cannot bypass the pedagogical decision:
+        the orchestrator must first preserve the unresolved learning focus and
+        choose one of the two reviewed bridge dialogue acts.
+        """
+
+        decision = PedagogicalDecision.model_validate(graph_state["decision"])
+        if (
+            graph_state.get("understanding_route")
+            == UnderstandingRoute.BRIDGE.value
+            and decision.dialogue_act
+            in {"acknowledge_meta_and_reask", "brief_ack_and_redirect"}
+        ):
+            return "bridge_speak"
+        return "speak"
+
+    async def _bridge_speak_node(
+        self,
+        graph_state: ConversationGraphState,
+    ) -> dict[str, Any]:
+        """Generate one bounded social acknowledgement with the fast model."""
+
+        decision = PedagogicalDecision.model_validate(graph_state["decision"])
+        context = decision.speaker_context
+        try:
+            async with asyncio.timeout(self.speaker_timeout_seconds):
+                output = await self.gateway.bridge_speak(context)
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="bridge_llm",
+                verifier_status=(
+                    "disabled"
+                    if context.verification_policy is SpeakerVerificationPolicy.SEMANTIC
+                    and not self.semantic_verifier_enabled
+                    else "not_required"
+                ),
+            )
+            return {
+                "speaker_output": output.model_dump(mode="json"),
+                "runtime": runtime.model_dump(mode="json"),
+            }
+        except Exception as error:
+            logger.warning(
+                "speaker_fallback stage=bridge_generation error_type=%s",
+                type(error).__name__,
+            )
+            runtime = SpeakerRuntimeAudit(
+                dialogue_act=decision.dialogue_act,
+                speaker_source="generation_fallback",
+                verifier_status="not_required",
+                fallback_reason=type(error).__name__,
+            )
+            return {
+                "speaker_text": context.fallback_text,
+                "runtime": runtime.model_dump(mode="json"),
+            }
 
     async def _speak_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
         decision = PedagogicalDecision.model_validate(graph_state["decision"])
@@ -418,6 +665,17 @@ class ConversationEngine:
         task = get_task(decision.state.current_task_id, decision.state.scenario_data)
         guard = self._speaker_guard(task, decision.state, decision.speaker_context)
         runtime = SpeakerRuntimeAudit.model_validate(graph_state["runtime"])
+        runtime = runtime.model_copy(
+            update={
+                "understanding_route": UnderstandingRoute(
+                    graph_state.get(
+                        "understanding_route",
+                        UnderstandingRoute.NORMAL.value,
+                    )
+                ),
+                "adjudicator_used": bool(graph_state.get("adjudicator_used", False)),
+            }
+        )
         text = graph_state.get("speaker_text")
         if not text and graph_state.get("speaker_output"):
             output = SpeakerOutput.model_validate(graph_state["speaker_output"])
@@ -1463,6 +1721,9 @@ class ConversationEngine:
             interaction_repeat_count=state.unrelated_count,
             support_trigger=support_trigger,
             help_card_event=help_card_event,
+            expression_level=state.expression_level,
+            hint_level=state.hint_level,
+            unresolved_focus=required_slot_descriptions,
             must_reframe=must_reframe,
             previous_question=previous_question,
             required_question=required_question,

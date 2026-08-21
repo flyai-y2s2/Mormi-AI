@@ -10,10 +10,15 @@ from mormi_api.main import _turn_sse_events
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
     ChildResponse,
+    DifficultyClass,
     ExpressionLevel,
     LearnerProfile,
+    ResponseCategory,
+    SafetyCategory,
     SessionCreate,
     SkillProfile,
+    SlotClaim,
+    UtteranceAnalysis,
 )
 from mormi_api.security import TextCipher
 from mormi_api.service import ConversationService
@@ -323,4 +328,64 @@ async def test_inline_practice_snapshot_uses_top_level_ownership(tmp_path: objec
     assert stored is not None
     assert stored.learner_id == 7
     assert stored.success_rate == 0.8
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_answered_turn_is_restored_as_bounded_session_dialogue(
+    tmp_path: object,
+) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/dialogue-history.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    gateway = FakeGateway()
+    service = ConversationService(
+        repository,
+        ConversationEngine(gateway),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=8,
+            scene="cafe",
+            scenario_id="cafe_queue_demo",
+        )
+    )
+    state = await repository.get_state(started.conversation_id)
+    left_count = int(state.scenario_data["left_count"])
+    gateway.analyses.append(
+        UtteranceAnalysis(
+            safety_category=SafetyCategory.NORMAL,
+            response_category=ResponseCategory.CORRECT_PARTIAL,
+            difficulty_class=DifficultyClass.UNKNOWN,
+            claims=[
+                SlotClaim(
+                    slot_id="left_count",
+                    value=left_count,
+                    factual=True,
+                    evidence_span=f"{left_count}명",
+                )
+            ],
+            confidence=0.98,
+        )
+    )
+
+    await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="9a87a585-a2ce-4c75-af38-1bf92f80169f",
+            type="text",
+            text=f"왼쪽은 {left_count}명이야",
+        ),
+    )
+
+    history = await repository.recent_dialogue_context(
+        started.conversation_id,
+        limit=6,
+    )
+    assert len(history) == 1
+    assert history[0].turn_id == started.turn.turn_id
+    assert history[0].mormi == started.turn.mormi.text
+    assert history[0].child == f"왼쪽은 {left_count}명이야"
+    assert history[0].response_category is ResponseCategory.CORRECT_PARTIAL
     await database.dispose()

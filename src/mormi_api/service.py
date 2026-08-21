@@ -207,9 +207,16 @@ class ConversationService:
         validate_response_payload(active_turn.input, response)
         yield ConversationStreamEvent(name="accepted", stage="accepted")
         previous_task = get_task(state.current_task_id, state.scenario_data)
+        recent_dialogue = await self.repository.recent_dialogue_context(
+            conversation_id,
+            limit=6,
+        )
         result: EngineTurnResult | None = None
         async for engine_event in self.engine.run_turn_stream(
-            state, response, active_turn.mormi.text
+            state,
+            response,
+            active_turn.mormi.text,
+            recent_dialogue=recent_dialogue,
         ):
             if isinstance(engine_event, EngineProgress):
                 yield ConversationStreamEvent(
