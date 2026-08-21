@@ -151,6 +151,20 @@ def test_queue_scenario_requires_frontend_counts() -> None:
             queue_context={"left_count": 3, "right_count": 3},
         )
 
+    for queue_context in (
+        {"left_count": 0, "right_count": 2},
+        {"left_count": 2, "right_count": 0},
+        {"left_count": 6, "right_count": 2},
+        {"left_count": 2, "right_count": 6},
+    ):
+        with pytest.raises(ValidationError):
+            SessionCreate(
+                learner_id=1,
+                scene="cafe",
+                scenario_id="cafe_queue",
+                queue_context=queue_context,
+            )
+
     # The demo id keeps drawing its own line-up, so it must refuse a screen's counts.
     with pytest.raises(ValidationError):
         SessionCreate(
@@ -182,6 +196,37 @@ async def test_queue_counts_come_from_the_frontend(tmp_path: object) -> None:
     assert started.turn.input.kind is InputKind.TEXT
     assert started.turn.input.target_slots == ["left_count", "right_count"]
     assert started.turn.help_card is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_queue_completion_keeps_verified_counts_inside_the_shared_contract(
+    tmp_path: object,
+) -> None:
+    service, _, database = await make_service(
+        tmp_path,
+        skills=("compare_quantity_in_context",),
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=1,
+            scene="cafe",
+            scenario_id="cafe_queue",
+            queue_context={"left_count": 1, "right_count": 5},
+        )
+    )
+
+    left = await choose(service, started.conversation_id, started.turn, "1")
+    right = await choose(service, started.conversation_id, left.turn, "5")
+    side = await choose(service, started.conversation_id, right.turn, "left")
+    completed = await choose(service, started.conversation_id, side.turn, "fewer")
+
+    assert completed.turn.completion is not None
+    facts = completed.turn.completion.verified_facts
+    assert facts["left_count"] == 1
+    assert facts["right_count"] == 5
+    assert facts["left_count"] != facts["right_count"]
+    assert all(1 <= int(facts[key]) <= 5 for key in ("left_count", "right_count"))
     await database.dispose()
 
 

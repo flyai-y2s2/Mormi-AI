@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from .copy_quality import validate_child_facing_math_copy
 from .schemas import (
+    QUEUE_MAX_COUNT,
+    QUEUE_MIN_COUNT,
     CafeMenuItem,
     CafeSessionContext,
     ChoiceOption,
@@ -1079,12 +1081,12 @@ QUEUE_TASK = TaskDefinition(
                 prompt="오른쪽 줄에는 몇 명이 있어?",
                 target_slots=["right_count"],
                 input=choice_input(
-                    ["right_count"], [option("4", "4명"), option("5", "5명"), option("6", "6명")]
+                    ["right_count"], [option("3", "3명"), option("4", "4명"), option("5", "5명")]
                 ),
                 choice_effects={
+                    "3": {"right_count": 3},
                     "4": {"right_count": 4},
                     "5": {"right_count": 5},
-                    "6": {"right_count": 6},
                 },
                 fallback_text="오른쪽 줄 사람 수도 같이 골라 보자.",
             ),
@@ -1495,15 +1497,13 @@ KOREAN_COUNTS = {
     3: ["3명", "세명", "세 명"],
     4: ["4명", "네명", "네 명"],
     5: ["5명", "다섯명", "다섯 명"],
-    6: ["6명", "여섯명", "여섯 명"],
-    7: ["7명", "일곱명", "일곱 명"],
-    8: ["8명", "여덟명", "여덟 명"],
-    9: ["9명", "아홉명", "아홉 명"],
 }
 
-# QueueSessionContext 가 1~9를 받으므로 여기도 같은 범위를 덮어야 한다.
+# QueueSessionContext와 동적 콘텐츠가 같은 1~5 계약을 공유한다.
 # 둘이 어긋나면 화면이 그린 줄을 말로 못 옮기고 KeyError 로 죽는다.
 MAX_QUEUE_COUNT = max(KOREAN_COUNTS)
+if set(KOREAN_COUNTS) != set(range(QUEUE_MIN_COUNT, QUEUE_MAX_COUNT + 1)):
+    raise RuntimeError("KOREAN_COUNTS must cover the complete queue count contract")
 
 # 숫자를 소리 내어 읽었을 때 마지막 음절에 받침이 있는지.
 # 일(ㄹ) 삼(ㅁ) 육(ㄱ) 칠(ㄹ) 팔(ㄹ) 은 받침이 있고, 이 사 오 구 는 없다.
@@ -1547,6 +1547,15 @@ def queue_task(
     right: int,
     note_policy: str = "stage",
 ) -> TaskDefinition:
+    if not (
+        QUEUE_MIN_COUNT <= left <= QUEUE_MAX_COUNT
+        and QUEUE_MIN_COUNT <= right <= QUEUE_MAX_COUNT
+    ):
+        raise ValueError(
+            f"queue counts must be between {QUEUE_MIN_COUNT} and {QUEUE_MAX_COUNT}"
+        )
+    if left == right:
+        raise ValueError("queue counts must differ")
     task = QUEUE_TASK.model_copy(deep=True)
     smaller = min(left, right)
     larger = max(left, right)

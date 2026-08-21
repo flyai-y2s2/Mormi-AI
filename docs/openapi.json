@@ -657,6 +657,132 @@
         }
       }
     },
+    "/v1/internal/learners/{learner_id}/report-evidence": {
+      "get": {
+        "tags": [
+          "internal reporting"
+        ],
+        "summary": "Get Report Evidence",
+        "operationId": "get_report_evidence_v1_internal_learners__learner_id__report_evidence_get",
+        "parameters": [
+          {
+            "name": "learner_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Learner Id"
+            }
+          },
+          {
+            "name": "include_raw",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean",
+              "title": "Include Raw"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportEvidenceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/internal/report-summaries": {
+      "post": {
+        "tags": [
+          "internal reporting"
+        ],
+        "summary": "Create Report Summary",
+        "operationId": "create_report_summary_v1_internal_report_summaries_post",
+        "parameters": [
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportSummaryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/conversations/{conversation_id}/transcript": {
       "get": {
         "tags": [
@@ -1227,6 +1353,26 @@
                 "type": "null"
               }
             ]
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
           }
         },
         "additionalProperties": false,
@@ -1559,7 +1705,7 @@
         "properties": {
           "text": {
             "type": "string",
-            "maxLength": 50,
+            "minLength": 1,
             "title": "Text"
           },
           "mood": {
@@ -1926,13 +2072,13 @@
         "properties": {
           "left_count": {
             "type": "integer",
-            "maximum": 9.0,
+            "maximum": 5.0,
             "minimum": 1.0,
             "title": "Left Count"
           },
           "right_count": {
             "type": "integer",
-            "maximum": 9.0,
+            "maximum": 5.0,
             "minimum": 1.0,
             "title": "Right Count"
           }
@@ -1944,6 +2090,330 @@
         ],
         "title": "QueueSessionContext",
         "description": "Frontend-owned queue facts frozen for one AI conversation.\n\nThe screen draws the two lines before the conversation starts, so Mormi has\nto talk about the counts the child is actually looking at. Letting this side\ndraw its own would put different numbers in the speech bubble and the scene."
+      },
+      "ReportConversationEvidence": {
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
+          },
+          "learning_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learning Session Id"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/SceneType"
+          },
+          "scenario_id": {
+            "type": "string",
+            "title": "Scenario Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus"
+          },
+          "completion_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CompletionOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "teach_reward_eligible": {
+            "type": "boolean",
+            "title": "Teach Reward Eligible"
+          },
+          "verified_slots": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Verified Slots"
+          },
+          "task_max_hint": {
+            "$ref": "#/components/schemas/HintLevel"
+          },
+          "turns": {
+            "items": {
+              "$ref": "#/components/schemas/ReportTurnEvidence"
+            },
+            "type": "array",
+            "title": "Turns"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "learning_session_id",
+          "scene",
+          "scenario_id",
+          "status",
+          "completion_outcome",
+          "teach_reward_eligible",
+          "verified_slots",
+          "task_max_hint",
+          "turns",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ReportConversationEvidence"
+      },
+      "ReportEvidenceResponse": {
+        "properties": {
+          "learner_id": {
+            "type": "integer",
+            "title": "Learner Id"
+          },
+          "conversations": {
+            "items": {
+              "$ref": "#/components/schemas/ReportConversationEvidence"
+            },
+            "type": "array",
+            "title": "Conversations"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/SkillProfile"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/NoteUpdate"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "learner_id",
+          "conversations",
+          "skills",
+          "notes"
+        ],
+        "title": "ReportEvidenceResponse"
+      },
+      "ReportFact": {
+        "properties": {
+          "evidence_id": {
+            "type": "string",
+            "pattern": "^[a-z]+:[A-Za-z0-9_.:-]+$",
+            "title": "Evidence Id"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "concept",
+              "explanation",
+              "life",
+              "improved",
+              "observe"
+            ],
+            "title": "Category"
+          },
+          "statement": {
+            "type": "string",
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Statement"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evidence_id",
+          "category",
+          "statement"
+        ],
+        "title": "ReportFact"
+      },
+      "ReportNarrative": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Evidence Refs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "evidence_refs"
+        ],
+        "title": "ReportNarrative"
+      },
+      "ReportSummaryRequest": {
+        "properties": {
+          "learner_label": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Learner Label"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/ReportFact"
+            },
+            "type": "array",
+            "maxItems": 80,
+            "minItems": 1,
+            "title": "Facts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "learner_label",
+          "facts"
+        ],
+        "title": "ReportSummaryRequest"
+      },
+      "ReportSummaryResponse": {
+        "properties": {
+          "concept_performance": {
+            "$ref": "#/components/schemas/ReportNarrative"
+          },
+          "explanation_change": {
+            "$ref": "#/components/schemas/ReportNarrative"
+          },
+          "life_transfer": {
+            "$ref": "#/components/schemas/ReportNarrative"
+          },
+          "improved_point": {
+            "$ref": "#/components/schemas/ReportNarrative"
+          },
+          "observe_point": {
+            "$ref": "#/components/schemas/ReportNarrative"
+          }
+        },
+        "type": "object",
+        "required": [
+          "concept_performance",
+          "explanation_change",
+          "life_transfer",
+          "improved_point",
+          "observe_point"
+        ],
+        "title": "ReportSummaryResponse"
+      },
+      "ReportTurnEvidence": {
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "title": "Turn Id"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response"
+          },
+          "response_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Type"
+          },
+          "response_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Category"
+          },
+          "expression_level": {
+            "$ref": "#/components/schemas/ExpressionLevel"
+          },
+          "hint_level": {
+            "$ref": "#/components/schemas/HintLevel"
+          },
+          "pedagogy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pedagogy"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "turn_id",
+          "task_id",
+          "expression_level",
+          "hint_level",
+          "created_at"
+        ],
+        "title": "ReportTurnEvidence"
       },
       "ResponseType": {
         "type": "string",
@@ -2238,7 +2708,6 @@
           },
           "prompt": {
             "type": "string",
-            "maxLength": 50,
             "minLength": 1,
             "title": "Prompt"
           },
