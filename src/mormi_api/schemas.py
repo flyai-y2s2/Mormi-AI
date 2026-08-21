@@ -307,6 +307,10 @@ class CafeSessionContext(BaseModel):
         return self
 
 
+QUEUE_MIN_COUNT = 1
+QUEUE_MAX_COUNT = 5
+
+
 class QueueSessionContext(BaseModel):
     """Frontend-owned queue facts frozen for one AI conversation.
 
@@ -315,8 +319,8 @@ class QueueSessionContext(BaseModel):
     draw its own would put different numbers in the speech bubble and the scene.
     """
 
-    left_count: int = Field(ge=1, le=9)
-    right_count: int = Field(ge=1, le=9)
+    left_count: int = Field(ge=QUEUE_MIN_COUNT, le=QUEUE_MAX_COUNT)
+    right_count: int = Field(ge=QUEUE_MIN_COUNT, le=QUEUE_MAX_COUNT)
 
     @model_validator(mode="after")
     def lines_must_differ(self) -> QueueSessionContext:

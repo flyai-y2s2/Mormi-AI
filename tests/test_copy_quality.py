@@ -191,6 +191,23 @@ def test_queue_reason_choices_explain_the_wait_instead_of_repeating_the_question
             assert all("사람이 적어서" not in choice.label for choice in step.input.choices)
 
 
+def test_every_dynamic_queue_choice_stays_inside_the_shared_count_contract() -> None:
+    for left, right in permutations(range(1, 6), 2):
+        task = queue_task(task_id="range-test", stage_id="queue", left=left, right=right)
+
+        for step_index, expected in ((0, left), (1, right)):
+            choices = task.steps[ExpressionLevel.L2][step_index].input.choices
+            values = [int(choice.id) for choice in choices]
+            assert expected in values
+            assert all(1 <= value <= 5 for value in values)
+
+
+@pytest.mark.parametrize("left,right", [(0, 2), (2, 0), (6, 2), (2, 6), (4, 4)])
+def test_queue_task_rejects_counts_outside_the_shared_contract(left: int, right: int) -> None:
+    with pytest.raises(ValueError):
+        queue_task(task_id="invalid-range", stage_id="queue", left=left, right=right)
+
+
 def test_every_mormi_task_question_asks_from_its_own_confusion() -> None:
     for left, right in permutations(range(1, 6), 2):
         task = queue_task(task_id="persona-test", stage_id="queue", left=left, right=right)

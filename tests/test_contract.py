@@ -39,6 +39,11 @@ def test_openapi_exposes_frontend_agreed_paths() -> None:
     assert {"menu_items", "mormi_menu_id"}.issubset(cafe_context["required"])
     assert "child_menu_id" not in cafe_context["properties"]
     assert "paid_amount" not in cafe_context["properties"]
+    queue_context = schema["components"]["schemas"]["QueueSessionContext"]
+    assert queue_context["properties"]["left_count"]["minimum"] == 1
+    assert queue_context["properties"]["left_count"]["maximum"] == 5
+    assert queue_context["properties"]["right_count"]["minimum"] == 1
+    assert queue_context["properties"]["right_count"]["maximum"] == 5
     assert "completion" in schema["components"]["schemas"]["TurnContract"]["properties"]
     assert "task_anchor" in schema["components"]["schemas"]["TurnContract"]["properties"]
     assert "dictionary_ref" in schema["components"]["schemas"]["TurnContract"]["properties"]
