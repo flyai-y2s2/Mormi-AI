@@ -73,13 +73,13 @@ def home_state(
 
 
 @pytest.mark.asyncio
-async def test_wrong_fill_never_completes_number_compare_and_moves_to_joint_h3() -> None:
-    """A wrong fill option must be a concept error, never a completed teaching turn."""
+async def test_wrong_l2_choice_never_completes_number_compare_and_moves_to_joint_h3() -> None:
+    """A wrong L2 choice must be a concept error, never a completed teaching turn."""
 
     engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
     state = home_state(
         "number-compare",
-        expression_level=ExpressionLevel.L1,
+        expression_level=ExpressionLevel.L2,
         hint_level=HintLevel.H2,
         verified_slots={"answer": "오른쪽"},
     )
@@ -87,16 +87,16 @@ async def test_wrong_fill_never_completes_number_compare_and_moves_to_joint_h3()
     initial = engine.initial_turn(state)
     state.current_turn_id = initial.turn_id
 
-    assert state.subgoal_id == "complete_comparison"
-    assert initial.input.kind is InputKind.FILL
+    assert state.subgoal_id == "choose_reason"
+    assert initial.input.kind is InputKind.CHOICES
 
     next_state, analysis, turn = await engine.run_turn(
         state,
         ChildResponse(
             turn_id=initial.turn_id,
             response_id=uuid4(),
-            type=ResponseType.FILL,
-            choice_ids=["left_more"],
+            type=ResponseType.CHOICE,
+            choice_ids=["counts_left"],
         ),
         initial.mormi.text,
     )
@@ -113,13 +113,13 @@ async def test_wrong_fill_never_completes_number_compare_and_moves_to_joint_h3()
 
 
 @pytest.mark.asyncio
-async def test_correct_fill_completes_number_compare_as_supported_learning() -> None:
-    """The reviewed correct fill option is the only supported completion path."""
+async def test_correct_l2_choice_completes_number_compare_as_supported_learning() -> None:
+    """The reviewed correct L2 choice is a supported completion path."""
 
     engine = ConversationEngine(FakeGateway(), show_internal_pedagogy=True)  # type: ignore[arg-type]
     state = home_state(
         "number-compare",
-        expression_level=ExpressionLevel.L1,
+        expression_level=ExpressionLevel.L2,
         hint_level=HintLevel.H2,
         verified_slots={"answer": "오른쪽"},
     )
@@ -132,8 +132,8 @@ async def test_correct_fill_completes_number_compare_as_supported_learning() -> 
         ChildResponse(
             turn_id=initial.turn_id,
             response_id=uuid4(),
-            type=ResponseType.FILL,
-            choice_ids=["right_more"],
+            type=ResponseType.CHOICE,
+            choice_ids=["counts_right"],
         ),
         initial.mormi.text,
     )
@@ -1337,7 +1337,7 @@ async def test_deterministic_playful_text_returns_neutrally_without_progress() -
     assert turn.note_update is None
 
 
-def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None:
+def test_every_wrong_home_l2_option_stays_unverified_and_incomplete() -> None:
     """Reviewed choices are a hard safety boundary across all 36 home lessons."""
 
     engine = ConversationEngine(FakeGateway())  # type: ignore[arg-type]
@@ -1348,8 +1348,6 @@ def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None
         step_states = [
             (ExpressionLevel.L2, {}),
             (ExpressionLevel.L2, {"answer": answer}),
-            (ExpressionLevel.L1, {}),
-            (ExpressionLevel.L1, {"answer": answer}),
         ]
 
         for level, verified_slots in step_states:
@@ -1360,17 +1358,13 @@ def test_every_wrong_home_l2_l1_option_stays_unverified_and_incomplete() -> None
                 verified_slots=verified_slots,
             )
             step = task.step_for(level, state.verified_slots)
-            assert step.input.kind in {InputKind.CHOICES, InputKind.FILL}
+            assert step.input.kind is InputKind.CHOICES
 
             for choice in step.input.choices:
                 response = ChildResponse(
                     turn_id="turn_structured_option",
                     response_id=uuid4(),
-                    type=(
-                        ResponseType.FILL
-                        if step.input.kind is InputKind.FILL
-                        else ResponseType.CHOICE
-                    ),
+                    type=ResponseType.CHOICE,
                     choice_ids=[choice.id],
                 )
                 analysis = engine._deterministic_analysis(state, task, response)
@@ -1547,7 +1541,6 @@ async def test_repeated_no_response_walks_every_ladder_step_without_changing_pro
     expected = [
         (ExpressionLevel.L3, HintLevel.H1, InputKind.TEXT),
         (ExpressionLevel.L2, HintLevel.H2, InputKind.CHOICES),
-        (ExpressionLevel.L1, HintLevel.H2, InputKind.CHOICES),
         (ExpressionLevel.L0, HintLevel.H3, InputKind.JOINT),
         (ExpressionLevel.L0, HintLevel.H3, InputKind.JOINT),
     ]
@@ -1620,7 +1613,7 @@ def test_initial_turn_normalizes_every_terminal_mismatch_to_joint_h3(
     ("expression_level", "hint_level"),
     [
         (ExpressionLevel.L4, HintLevel.H2),
-        (ExpressionLevel.L1, HintLevel.H0),
+        (ExpressionLevel.L2, HintLevel.H0),
     ],
 )
 def test_nonterminal_expression_and_hint_levels_remain_independent(
@@ -1646,8 +1639,8 @@ def test_nonterminal_expression_and_hint_levels_remain_independent(
 
 
 @pytest.mark.asyncio
-async def test_expression_block_at_l1_enters_complete_joint_contract() -> None:
-    """The original asymmetric branch must not create L0-H2."""
+async def test_legacy_l1_state_normalizes_to_l2_then_enters_complete_joint_contract() -> None:
+    """Legacy L1 remains readable, but every emitted turn uses the four-level contract."""
 
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
@@ -1667,6 +1660,11 @@ async def test_expression_block_at_l1_enters_complete_joint_contract() -> None:
     )
     initial = engine.initial_turn(state)
     state.current_turn_id = initial.turn_id
+
+    assert state.expression_level is ExpressionLevel.L2
+    assert initial.input.kind is InputKind.CHOICES
+    assert initial.pedagogy is not None
+    assert initial.pedagogy.expression_level is ExpressionLevel.L2
 
     next_state, classified, turn = await engine.run_turn(
         state,
@@ -1696,20 +1694,20 @@ def test_unknown_or_multiple_choice_ids_are_input_errors_in_analysis() -> None:
     engine = ConversationEngine(FakeGateway())  # type: ignore[arg-type]
     state = home_state(
         "number-compare",
-        expression_level=ExpressionLevel.L1,
+        expression_level=ExpressionLevel.L2,
         hint_level=HintLevel.H0,
         verified_slots={"answer": "오른쪽"},
     )
     task = get_task(HOME_TEACH_TASK_ID, state.scenario_data)
 
-    for choice_ids in (["not-an-option"], ["fill_0", "fill_2"]):
+    for choice_ids in (["not-an-option"], ["counts_left", "counts_right"]):
         analysis = engine._deterministic_analysis(
             state,
             task,
             ChildResponse(
                 turn_id="turn_bad_choice",
                 response_id=uuid4(),
-                type=ResponseType.FILL,
+                type=ResponseType.CHOICE,
                 choice_ids=choice_ids,
             ),
         )
