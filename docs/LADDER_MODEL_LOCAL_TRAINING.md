@@ -57,3 +57,22 @@ validation macro F1이 2 epoch 동안 개선되지 않으면 8 epoch 전에 자�
 `artifacts/ladder-model/run-v1/`은 누수 원인 분석 기록으로만 보존하며 서비스나 발표
 성능으로 사용하지 않습니다. v2 역시 합성 발화가 많은 프로토타입이므로 실제 아동에 대한
 일반화 성능을 주장할 수 없습니다.
+
+## 4. 분석 작업자에서 사용
+
+학습 결과 중 `run-v2/model/`과 같은 상위 폴더의 `model-manifest.json`을 운영 AI
+서버의 영구 디스크에 별도로 배치합니다. 모델 가중치와 학습 데이터는 Git에 커밋하지
+않습니다. AI 서버에는 모델 폴더의 절대 경로를 지정합니다.
+
+```powershell
+$env:MORMI_LADDER_MODEL_DIR = "D:\mormi-models\ladder-v2\model"
+$env:MORMI_LADDER_ANALYSIS_WORKER_ENABLED = "true"
+$env:MORMI_LADDER_ANALYSIS_POLL_INTERVAL_SECONDS = "2"
+$env:MORMI_LADDER_ANALYSIS_BATCH_SIZE = "10"
+$env:MORMI_LADDER_ANALYSIS_LEASE_SECONDS = "60"
+```
+
+작업자는 모델을 첫 분석 때 지연 로드합니다. `MORMI_LADDER_MODEL_DIR`이 없거나 모델을
+읽지 못하면 해당 작업은 제한된 오류 코드로 실패하고 발화 원문을 오류 메시지나 신규
+분석 테이블에 복사하지 않습니다. 운영 연결과 재처리 절차는
+[`LADDER_ANALYSIS_OPERATIONS.md`](./LADDER_ANALYSIS_OPERATIONS.md)를 따릅니다.
