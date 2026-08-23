@@ -24,6 +24,16 @@ from .dictionary_catalog import (
 )
 from .dictionary_models import DictionaryCardEnvelope
 from .engine import ConversationEngine
+from .ladder_analysis_repository import (
+    LadderAnalysisNotApplicableError,
+    LadderAnalysisNotFoundError,
+    LadderAnalysisRepository,
+    LadderAnalysisRequest,
+    LadderAnalysisStaleError,
+)
+from .ladder_analysis_worker import DatabaseSpeechLoader, LadderAnalysisWorker
+from .ladder_model.dataset import canonical_level
+from .ladder_model.runtime import LadderModelRuntime
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
 from .migrations import require_observation_schema
 from .outbox import OutboxDispatcher, OutboxStore
@@ -39,6 +49,9 @@ from .schemas import (
     ConflictDetail,
     ConflictResponse,
     HealthResponse,
+    LadderAnalysisApprovalRequest,
+    LadderAnalysisCreateRequest,
+    LadderAnalysisCreateResponse,
     PracticeResult,
     ReportEvidenceResponse,
     ReportSummaryRequest,
@@ -81,9 +94,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     database = Database(settings.database_url)
     gateway = ClaudeGateway(settings)
+    text_codec = StoredTextCodec(settings.raw_data_encryption_key)
     repository = Repository(
         database,
-        StoredTextCodec(settings.raw_data_encryption_key),
+        text_codec,
         idempotency_retention_days=settings.idempotency_retention_days,
         classifier_model=settings.classifier_model,
         speaker_model=settings.speaker_model,
@@ -105,6 +119,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gateway = gateway
     app.state.repository = repository
     app.state.service = ConversationService(repository, engine)
+    ladder_store = LadderAnalysisRepository(
+        database, lease_seconds=settings.ladder_analysis_lease_seconds
+    )
+    app.state.ladder_analysis_store = ladder_store
+    ladder_worker: LadderAnalysisWorker | None = None
+    ladder_worker_task: asyncio.Task[None] | None = None
+    if settings.ladder_analysis_enabled:
+        assert settings.ladder_model_dir is not None
+        ladder_worker = LadderAnalysisWorker(
+            ladder_store,
+            LadderModelRuntime(settings.ladder_model_dir),
+            load_speech=DatabaseSpeechLoader(database, text_codec),
+            poll_interval_seconds=settings.ladder_analysis_poll_interval_seconds,
+            batch_size=settings.ladder_analysis_batch_size,
+        )
+        ladder_worker_task = asyncio.create_task(
+            ladder_worker.run_forever(), name="ladder-analysis-worker"
+        )
+        app.state.ladder_analysis_worker = ladder_worker
     dispatcher: OutboxDispatcher | None = None
     dispatcher_task: asyncio.Task[None] | None = None
     if settings.observation_ingest_enabled:
@@ -133,6 +166,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        if ladder_worker is not None:
+            await ladder_worker.stop()
+        if ladder_worker_task is not None:
+            await ladder_worker_task
         if dispatcher is not None:
             await dispatcher.stop()
         if dispatcher_task is not None:
@@ -657,6 +694,69 @@ async def get_report_evidence(
     repo: Repo,
 ) -> ReportEvidenceResponse:
     return await repo.report_evidence(learner_id, include_raw=include_raw)
+
+
+@app.post(
+    "/v1/internal/ladder-analyses",
+    response_model=LadderAnalysisCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=["internal reporting"],
+)
+async def create_ladder_analysis(
+    body: LadderAnalysisCreateRequest,
+    _: InternalReportingAuth,
+    request: Request,
+) -> LadderAnalysisCreateResponse:
+    store: LadderAnalysisRepository = request.app.state.ladder_analysis_store
+    job = await store.enqueue(
+        LadderAnalysisRequest(
+            idempotency_key=body.idempotency_key,
+            learner_id=body.learner_id,
+            skill_id=body.skill_id,
+            trigger_session_id=body.trigger_session_id,
+            session_ids=body.session_ids,
+            current_level=canonical_level(body.current_level.value),
+            performance_by_level={
+                canonical_level(level.value): values.model_dump()
+                for level, values in body.performance_by_level.items()
+            },
+            lower_rule_evidence_count=body.lower_rule_evidence_count,
+        )
+    )
+    return LadderAnalysisCreateResponse(analysis_id=job.analysis_id, status=job.status)
+
+
+@app.post(
+    "/v1/internal/ladder-analyses/{analysis_id}/approve",
+    response_model=LadderAnalysisCreateResponse,
+    tags=["internal reporting"],
+)
+async def approve_ladder_analysis(
+    analysis_id: str,
+    body: LadderAnalysisApprovalRequest,
+    _: InternalReportingAuth,
+    request: Request,
+) -> LadderAnalysisCreateResponse:
+    store: LadderAnalysisRepository = request.app.state.ladder_analysis_store
+    try:
+        job = await store.approve(
+            analysis_id,
+            learner_id=body.learner_id,
+            recommendation_version=body.recommendation_version,
+        )
+    except LadderAnalysisNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Ladder analysis not found") from error
+    except LadderAnalysisStaleError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ladder_recommendation_stale", "issues": []},
+        ) from error
+    except LadderAnalysisNotApplicableError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ladder_recommendation_not_applicable", "issues": []},
+        ) from error
+    return LadderAnalysisCreateResponse(analysis_id=job.analysis_id, status="approved")
 
 
 @app.post(

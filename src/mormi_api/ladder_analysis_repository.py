@@ -1,15 +1,28 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
 
-from .db import Database, LadderAnalysisRecord
+from .db import Database, LadderAnalysisRecord, LearnerProfileRecord
 from .ladder_model.dataset import LadderLevel, canonical_level
-from .schemas import utc_now
+from .schemas import ExpressionLevel, LearnerProfile, SkillProfile, utc_now
+
+
+class LadderAnalysisNotFoundError(LookupError):
+    pass
+
+
+class LadderAnalysisStaleError(RuntimeError):
+    pass
+
+
+class LadderAnalysisNotApplicableError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -114,6 +127,36 @@ class LadderAnalysisRepository:
                 await db.refresh(record)
             return self._job(record)
 
+    async def enqueue_from_dict(self, payload: Mapping[str, object]) -> LadderAnalysisJob:
+        raw_performance = payload.get("performance_by_level")
+        if not isinstance(raw_performance, Mapping):
+            raise ValueError("performance_by_level is required")
+        performance: dict[LadderLevel, dict[str, int]] = {}
+        for raw_level, raw_values in raw_performance.items():
+            if not isinstance(raw_values, Mapping):
+                raise ValueError("invalid performance values")
+            performance[canonical_level(raw_level)] = {
+                "correct": int(raw_values.get("correct", 0)),
+                "attempts": int(raw_values.get("attempts", 0)),
+            }
+        raw_sessions = payload.get("session_ids")
+        if not isinstance(raw_sessions, (list, tuple)) or len(raw_sessions) != 2:
+            raise ValueError("exactly two session_ids are required")
+        return await self.enqueue(
+            LadderAnalysisRequest(
+                idempotency_key=str(payload["idempotency_key"]),
+                learner_id=int(str(payload["learner_id"])),
+                skill_id=str(payload["skill_id"]),
+                trigger_session_id=str(payload["trigger_session_id"]),
+                session_ids=(str(raw_sessions[0]), str(raw_sessions[1])),
+                current_level=canonical_level(payload["current_level"]),
+                performance_by_level=performance,
+                lower_rule_evidence_count=int(
+                    str(payload.get("lower_rule_evidence_count", 0))
+                ),
+            )
+        )
+
     async def claim_pending(
         self, limit: int, *, now: datetime | None = None
     ) -> list[LadderAnalysisJob]:
@@ -198,3 +241,66 @@ class LadderAnalysisRepository:
                 ).scalars()
             )
             return [self._job(record) for record in records]
+
+    async def approve(
+        self,
+        analysis_id: str,
+        *,
+        learner_id: int,
+        recommendation_version: int,
+    ) -> LadderAnalysisJob:
+        approved_at = utc_now()
+        async with self.database.sessions() as db:
+            record = await db.get(LadderAnalysisRecord, analysis_id, with_for_update=True)
+            if record is None or record.learner_id != learner_id:
+                raise LadderAnalysisNotFoundError(analysis_id)
+            if record.status != "completed" or not record.decision_json:
+                raise LadderAnalysisNotApplicableError("analysis is not completed")
+            if record.recommendation_version != recommendation_version:
+                raise LadderAnalysisStaleError("recommendation version is stale")
+            if record.approved_at is not None:
+                return self._job(record)
+            action = str(record.decision_json.get("action", ""))
+            if action not in {"UPGRADE", "ADJUST_DOWN"}:
+                raise LadderAnalysisNotApplicableError("recommendation does not change level")
+            current_level = ExpressionLevel(
+                canonical_level(record.decision_json.get("current_level")).value
+            )
+            recommended_level = ExpressionLevel(
+                canonical_level(record.decision_json.get("recommended_level")).value
+            )
+            ladder_ranks = {"L0": 0, "L2": 1, "L3": 2, "L4": 3}
+            if abs(
+                ladder_ranks[recommended_level.canonical().value]
+                - ladder_ranks[current_level.canonical().value]
+            ) != 1:
+                raise LadderAnalysisNotApplicableError("recommendation must move one step")
+
+            profile_record = await db.get(LearnerProfileRecord, learner_id, with_for_update=True)
+            profile = (
+                LearnerProfile.model_validate(profile_record.profile_json)
+                if profile_record is not None
+                else LearnerProfile(learner_id=learner_id)
+            )
+            skill = profile.skills.get(record.skill_id) or SkillProfile(skill_id=record.skill_id)
+            if skill.highest_stable_expression_level.canonical() is not current_level.canonical():
+                raise LadderAnalysisStaleError("learner stable level has changed")
+            skill.highest_stable_expression_level = recommended_level.canonical()
+            profile.skills[record.skill_id] = skill
+            profile.updated_at = approved_at
+            if profile_record is None:
+                db.add(
+                    LearnerProfileRecord(
+                        learner_id=learner_id,
+                        profile_json=profile.model_dump(mode="json"),
+                        updated_at=approved_at,
+                    )
+                )
+            else:
+                profile_record.profile_json = profile.model_dump(mode="json")
+                profile_record.updated_at = approved_at
+            record.approved_at = approved_at
+            record.updated_at = approved_at
+            await db.commit()
+            await db.refresh(record)
+            return self._job(record)

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from mormi_api.content import HOME_TEACHING_CATALOG, home_teaching_task
+from mormi_api.engine import update_skill_profile
 from mormi_api.ladder_analysis import (
     LadderAction,
     LadderEvidence,
@@ -12,6 +14,13 @@ from mormi_api.ladder_analysis import (
 )
 from mormi_api.ladder_model.dataset import LadderLevel
 from mormi_api.ladder_model.runtime import LadderModelRuntime, RuntimePrediction
+from mormi_api.schemas import (
+    ExpressionLevel,
+    HintLevel,
+    LearnerProfile,
+    SessionState,
+    SkillProfile,
+)
 
 
 def evidence(
@@ -152,3 +161,38 @@ def test_runtime_reports_unavailable_without_loading_or_echoing_text(tmp_path: P
 def test_runtime_prediction_rejects_l0_from_speech_model() -> None:
     with pytest.raises(ValueError, match="L0"):
         RuntimePrediction(level=LadderLevel.L0, confidence=0.9)
+
+
+def test_dialogue_success_updates_metrics_but_never_auto_promotes_stable_level() -> None:
+    profile = LearnerProfile(
+        learner_id=1,
+        skills={
+            "number-count": SkillProfile(
+                skill_id="number-count",
+                highest_stable_expression_level=ExpressionLevel.L2,
+                h0_success_streak=1,
+            )
+        },
+    )
+    state = SessionState(
+        conversation_id="conversation-1",
+        learner_id=1,
+        scene="home_teach",
+        scenario_id="home_teach",
+        learning_session_id="session-1",
+        practice_result_id="practice-1",
+        task_ids=["number-count"],
+        current_task_id="number-count",
+        expression_level=ExpressionLevel.L4,
+        task_max_hint=HintLevel.H0,
+    )
+    task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-count"], skill_id="number-count"
+    )
+
+    updated = update_skill_profile(profile, state, task)
+
+    skill = updated.skills["number-count"]
+    assert skill.h0_success_streak == 2
+    assert skill.expression_independence > 0.5
+    assert skill.highest_stable_expression_level is ExpressionLevel.L2

@@ -2748,9 +2748,5 @@ def update_skill_profile(
     current.last_bottleneck = "unknown"
     if independent and state.expression_level.rank >= current.highest_stable_expression_level.rank:
         current.expression_independence = min(1, current.expression_independence + 0.06)
-        if current.h0_success_streak >= 2:
-            current.highest_stable_expression_level = (
-                current.highest_stable_expression_level.higher()
-            )
     profile.skills[task.skill_id] = current
     return profile

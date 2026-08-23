@@ -952,11 +952,66 @@ class ReportConversationEvidence(BaseModel):
     updated_at: datetime
 
 
+class LadderLevelPerformance(BaseModel):
+    correct: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def correct_must_not_exceed_attempts(self) -> LadderLevelPerformance:
+        if self.correct > self.attempts:
+            raise ValueError("correct must not exceed attempts")
+        return self
+
+
+class LadderAnalysisCreateRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    learner_id: int = Field(ge=1)
+    skill_id: str = Field(min_length=1, max_length=100)
+    trigger_session_id: str = Field(min_length=1, max_length=100)
+    session_ids: tuple[str, str]
+    current_level: ExpressionLevel
+    performance_by_level: dict[ExpressionLevel, LadderLevelPerformance]
+    lower_rule_evidence_count: int = Field(default=0, ge=0)
+
+
+class LadderAnalysisCreateResponse(BaseModel):
+    analysis_id: str
+    status: str
+
+
+class LadderAnalysisApprovalRequest(BaseModel):
+    learner_id: int = Field(ge=1)
+    recommendation_version: int = Field(ge=1)
+
+
+class LadderRecommendationEvidence(BaseModel):
+    analysis_id: str
+    learner_id: int
+    skill_id: str
+    trigger_session_id: str
+    session_ids: list[str]
+    current_level: ExpressionLevel
+    recommended_level: ExpressionLevel
+    action: str = Field(
+        pattern=r"^(UPGRADE|MAINTAIN|ADJUST_DOWN|INSUFFICIENT_EVIDENCE)$"
+    )
+    current_accuracy: float | None = Field(default=None, ge=0, le=1)
+    evidence_count: int = Field(ge=0)
+    reason_code: str
+    recent_predictions: list[dict[str, str | float]] = Field(default_factory=list)
+    model_version: str
+    recommendation_version: int
+    status: str
+    approved: bool
+    analyzed_at: datetime
+
+
 class ReportEvidenceResponse(BaseModel):
     learner_id: int
     conversations: list[ReportConversationEvidence]
     skills: list[SkillProfile]
     notes: list[NoteUpdate]
+    ladder_recommendations: list[LadderRecommendationEvidence] = Field(default_factory=list)
 
 
 class ReportFact(BaseModel):
