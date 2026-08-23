@@ -297,6 +297,38 @@ class OutboxEventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class LadderAnalysisRecord(Base):
+    """Durable subunit analysis metadata; child speech is deliberately excluded."""
+
+    __tablename__ = "ladder_analysis_jobs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_ladder_analysis_idempotency"),
+        Index("ix_ladder_analysis_claim", "status", "available_at"),
+        Index("ix_ladder_analysis_learner_skill", "learner_id", "skill_id", "created_at"),
+    )
+
+    analysis_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    learner_id: Mapped[int] = mapped_column(Integer, index=True)
+    skill_id: Mapped[str] = mapped_column(String(100), index=True)
+    trigger_session_id: Mapped[str] = mapped_column(String(100), index=True)
+    session_ids_json: Mapped[list[str]] = mapped_column(JSON)
+    current_level: Mapped[str] = mapped_column(String(10))
+    performance_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    lower_rule_evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    decision_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    recommendation_version: Mapped[int] = mapped_column(Integer, default=1)
+    error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class Database:
     def __init__(self, url: str) -> None:
         self.url = url

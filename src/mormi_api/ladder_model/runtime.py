@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,18 @@ class LadderModelRuntime:
         self._tokenizer: Any | None = None
         self._model: Any | None = None
         self._torch: Any | None = None
+
+    @property
+    def model_version(self) -> str:
+        manifest = self._model_dir.parent / "model-manifest.json"
+        if not manifest.is_file():
+            manifest = self._model_dir / "model-manifest.json"
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return "ladder-speech-v2"
+        value = payload.get("model_version") if isinstance(payload, dict) else None
+        return value if isinstance(value, str) and value else "ladder-speech-v2"
 
     def _load(self) -> str | None:
         if self._model is not None:
