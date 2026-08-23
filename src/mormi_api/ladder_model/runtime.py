@@ -54,15 +54,15 @@ class LadderModelRuntime:
         if not self._model_dir.is_dir():
             return "MODEL_NOT_FOUND"
         try:
-            import torch  # type: ignore[import-not-found]
-            from transformers import (  # type: ignore[import-not-found]
+            import torch
+            from transformers import (
                 AutoModelForSequenceClassification,
                 AutoTokenizer,
             )
         except ImportError:
             return "MODEL_DEPENDENCY_MISSING"
         try:
-            self._tokenizer = AutoTokenizer.from_pretrained(
+            self._tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
                 self._model_dir, local_files_only=True
             )
             self._model = AutoModelForSequenceClassification.from_pretrained(

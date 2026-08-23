@@ -86,10 +86,10 @@ def train_model(config: TrainConfig) -> LadderMetrics:
     validation work without installing the optional ``analysis`` dependencies.
     """
     try:
-        import numpy as np  # type: ignore[import-not-found]
-        import torch  # type: ignore[import-not-found]
-        from datasets import Dataset  # type: ignore[import-not-found]
-        from transformers import (  # type: ignore[import-not-found]
+        import numpy as np
+        import torch
+        from datasets import Dataset  # type: ignore[import-untyped]
+        from transformers import (
             AutoModelForSequenceClassification,
             AutoTokenizer,
             DataCollatorWithPadding,
@@ -104,7 +104,9 @@ def train_model(config: TrainConfig) -> LadderMetrics:
     train_rows = load_labeled_jsonl(config.train_path)
     validation_rows = load_labeled_jsonl(config.validation_path)
     test_rows = load_labeled_jsonl(config.test_path)
-    tokenizer = AutoTokenizer.from_pretrained(config.base_model, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(  # type: ignore[no-untyped-call]
+        config.base_model, use_fast=True
+    )
 
     def tokenize(batch: dict[str, list[Any]]) -> dict[str, Any]:
         return cast(
