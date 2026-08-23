@@ -64,6 +64,7 @@
 - DB 폴링 작업자는 미완료 작업을 가져와 처리하며 재시작 뒤에도 `pending` 작업을 이어간다.
 - 모델이 없거나 원문을 사용할 수 없으면 규칙 근거만 사용하거나 `INSUFFICIENT_EVIDENCE`로 종료한다.
 - 한 작업 실패가 대화 API나 다른 작업을 중단시키지 않는다.
+- 기존 대화 엔진의 H0 성공 2회 자동 승급은 제거한다. `h0_success_streak`, 숙달도, 독립성 지표는 계속 갱신하되 `highest_stable_expression_level`은 교사 승인 API만 변경한다.
 
 ### 내부 계약
 
