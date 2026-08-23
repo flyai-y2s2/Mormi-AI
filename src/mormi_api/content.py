@@ -713,6 +713,10 @@ class HomeTeachingSpec(BaseModel):
     fill_correct: str
     fill_options: list[str] = Field(min_length=2, max_length=6)
     short_prompt: str = Field(min_length=1)
+    # Reviewed wording used only after the child has already supplied the
+    # method/reason and the concrete answer is the sole unresolved part.  Old
+    # snapshots can omit it and safely fall back to the sample question.
+    answer_followup_prompt: str | None = Field(default=None, min_length=1)
     short_correct: str
     short_options: list[str] = Field(min_length=2, max_length=6)
     help_plan: HomeHelpPlan
@@ -2161,10 +2165,10 @@ def home_teaching_task(
         },
         arithmetic_contract=arithmetic_contract,
         slots={
-            # The concrete answer is useful partial evidence: when a child only
-            # corrects Mormi's answer, preserve it and ask only for the method.
-            # It is intentionally not required for completion because the
-            # teaching goal and star-note evidence are the general rule.
+            # Answer and method are independent teaching claims.  Either may
+            # arrive first; the engine preserves the verified claim and asks
+            # only for the unresolved one.  Star-note authorship remains
+            # method-only through ``note_slots`` below.
             "answer": SlotDefinition(
                 id="answer",
                 description=f"화면의 {spec.title} 예시 문제 답",
@@ -2175,7 +2179,11 @@ def home_teaching_task(
             ),
             "rule": SlotDefinition(
                 id="rule",
-                description=f"{spec.title}를 해결하는 사실이 맞는 설명 또는 검수된 방법",
+                description=(
+                    f"{spec.title}를 해결하는 사실이 맞는 설명, 필요한 연산 종류 또는 "
+                    "검수된 방법. 아이가 짧게 말한 연산 종류도 방법으로 인정하되, "
+                    "구체적인 답을 말했다고 보충하지 않는다."
+                ),
                 semantic_role="explanation",
                 expected=expected_rule,
                 aliases=list(
@@ -2190,14 +2198,13 @@ def home_teaching_task(
                 fact_sentence=expected_rule,
             ),
         },
-        required_slots=["rule"],
+        required_slots=["answer", "rule"],
         steps={
             ExpressionLevel.L4: [
                 StepDefinition(
                     id="free_explanation",
                     prompt=spec.effective_l4_prompt,
-                    target_slots=["rule"],
-                    optional_slots=["answer"],
+                    target_slots=["answer", "rule"],
                     input=text_input(
                         "answer",
                         "rule",
@@ -2209,10 +2216,10 @@ def home_teaching_task(
             ExpressionLevel.L3: [
                 StepDefinition(
                     id="short_answer",
-                    prompt=str(sample["prompt"]),
+                    prompt=spec.answer_followup_prompt or str(sample["prompt"]),
                     target_slots=["answer"],
                     input=text_input("answer", placeholder="답만 짧게 알려줘"),
-                    fallback_text="내가 한꺼번에 물어봤네. 답부터 알려줘.",
+                    fallback_text=spec.answer_followup_prompt or str(sample["prompt"]),
                 ),
                 StepDefinition(
                     id="short_explanation",
@@ -2244,13 +2251,16 @@ def home_teaching_task(
                 StepDefinition(
                     id="joint_reading",
                     prompt="도움 카드 문장을 나와 같이 읽어볼까?",
-                    target_slots=["rule"],
+                    target_slots=["answer", "rule"],
                     input=InputContract(
                         kind=InputKind.JOINT,
-                        target_slots=["rule"],
+                        target_slots=["answer", "rule"],
                         config={
                             "text": spec.help_plan.H3.body,
-                            "completion_values": {"rule": expected_rule},
+                            "completion_values": {
+                                "answer": expected_answer,
+                                "rule": expected_rule,
+                            },
                         },
                     ),
                     fallback_text="도움 카드 문장을 나와 같이 읽어볼까?",

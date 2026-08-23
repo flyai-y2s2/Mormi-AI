@@ -7,12 +7,16 @@ from mormi_api.content import (
     CHANGE_TASK_ID,
     HOME_TEACH_TASK_ID,
     TOTAL_CALC_TASK_ID,
+    TOTAL_MENU_PICK_TASK_ID,
     calculation_task,
     create_scenario_data,
+    get_task,
 )
 from mormi_api.engine import ConversationEngine
 from mormi_api.schemas import (
     ArithmeticClaim,
+    CafeMenuItem,
+    CafeSessionContext,
     ChildResponse,
     DifficultyClass,
     ExpressionLevel,
@@ -29,6 +33,7 @@ from mormi_api.schemas import (
     TaskRelation,
     UtteranceAnalysis,
 )
+from mormi_api.settings import Settings
 
 
 class ContextualizedNoteGateway(FakeGateway):
@@ -62,6 +67,21 @@ class InventedNoteGateway(FakeGateway):
             self_contained=True,
             introduced_math_content=False,
         )
+
+
+def test_natural_speaker_timeouts_are_bounded_but_not_overly_aggressive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MORMI_SPEAKER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("MORMI_SPEAKER_VERIFIER_TIMEOUT_SECONDS", raising=False)
+
+    settings = Settings(_env_file=None)
+    engine = ConversationEngine(FakeGateway([]))  # type: ignore[arg-type]
+
+    assert settings.speaker_timeout_seconds == 10.0
+    assert settings.speaker_verifier_timeout_seconds == 3.5
+    assert engine.speaker_timeout_seconds == 10.0
+    assert engine.verifier_timeout_seconds == 3.5
 
 
 def test_complete_mormi_copy_keeps_a_natural_sentence_beyond_soft_target() -> None:
@@ -209,6 +229,9 @@ async def test_safe_meta_utterance_uses_fast_dialogue_bridge() -> None:
         difficulty_class=DifficultyClass.ENGAGEMENT,
         task_relation=TaskRelation.META_ABOUT_MORMI,
         interaction_intent=InteractionIntent.AUTHENTICITY_CHALLENGE,
+        conversation_only=True,
+        conversation_summary="모르미가 정말 모르는지 의심함",
+        bridge_reply="나 진짜 몰라서 그래... 어느 쪽이 더 많고 왜 그런지 알려줄 수 있어?",
         social_grounding_span=child_text,
         confidence=0.94,
     )
@@ -231,9 +254,226 @@ async def test_safe_meta_utterance_uses_fast_dialogue_bridge() -> None:
 
     assert gateway.classify_calls == 1
     assert gateway.adjudicate_calls == 0
-    assert gateway.bridge_speak_calls == 1
+    assert gateway.bridge_speak_calls == 0
     assert next_state.verified_slots == {}
     assert turn.status.value == "active"
+    assert turn.mormi.text == analysis.bridge_reply
+
+
+@pytest.mark.asyncio
+async def test_open_set_task_comment_uses_one_call_bridge_without_enum_dependency() -> None:
+    child_text = "그건 너무 쉽지"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.UNRELATED_RESPONSE,
+        difficulty_class=DifficultyClass.ENGAGEMENT,
+        task_relation=TaskRelation.META_ABOUT_TASK,
+        interaction_intent=InteractionIntent.NONE,
+        conversation_only=True,
+        conversation_summary="현재 과제가 쉽다고 말함",
+        bridge_reply="오, 그렇게 느꼈구나. 그럼 어느 쪽이 더 많고 왜 그런지 알려줄 수 있어?",
+        social_grounding_span=child_text,
+        confidence=0.96,
+    )
+    gateway = FakeGateway([analysis])
+    engine = ConversationEngine(gateway)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, effective, turn = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="d97f5815-30e5-49f9-9076-a589c870d1e8",
+            type="text",
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert gateway.classify_calls == 1
+    assert gateway.adjudicate_calls == 0
+    assert gateway.bridge_speak_calls == 0
+    assert effective.task_relation is TaskRelation.META_ABOUT_TASK
+    assert next_state.verified_slots == {}
+    assert next_state.expression_level is ExpressionLevel.L4
+    assert next_state.hint_level is HintLevel.H0
+    assert turn.note_update is None
+    assert "어떻게 하는 건지 모르겠어" not in turn.mormi.text
+    assert turn.mormi.text == analysis.bridge_reply
+
+
+@pytest.mark.asyncio
+async def test_conversation_only_flag_cannot_discard_a_learning_claim() -> None:
+    """A contradictory open-set flag must not bypass educational evidence."""
+
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        task_relation=TaskRelation.UNKNOWN,
+        interaction_intent=InteractionIntent.NONE,
+        conversation_only=True,
+        conversation_summary="분류기가 대화 전용이라고 잘못 표시함",
+        bridge_reply="그렇구나. 그럼 다시 알려줄 수 있어?",
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="오른쪽",
+                interpretation_confidence=1,
+            )
+        ],
+        confidence=0.9,
+    )
+    gateway = FakeGateway([analysis])
+    engine = ConversationEngine(gateway)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, _, _ = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="a0ab4301-7d45-45be-99a2-f56505323bd2",
+            type="text",
+            text="오른쪽",
+        ),
+        initial.mormi.text,
+    )
+
+    assert gateway.bridge_speak_calls == 0
+    assert next_state.verified_slots.get("answer") == "오른쪽"
+
+
+def test_menu_selection_transition_is_not_labelled_as_teaching() -> None:
+    cafe_context = CafeSessionContext(
+        menu_items=[
+            CafeMenuItem(id="juice", name="주스", price=700),
+            CafeMenuItem(id="bread", name="빵", price=500),
+        ],
+        mormi_menu_id="juice",
+    )
+    scenario_data = create_scenario_data(
+        "cafe_menu_total",
+        cafe_context,
+    )
+    scenario_data["child_menu_id"] = "bread"
+    task = get_task(TOTAL_CALC_TASK_ID, scenario_data)
+    # The task being completed is the preceding menu-selection task. Its
+    # reviewed transition must describe a choice, not a teaching success.
+    selection_task = get_task(TOTAL_MENU_PICK_TASK_ID, scenario_data)
+
+    rendered = ConversationEngine._task_transition_then_question(
+        selection_task,
+        "",
+        task.steps[ExpressionLevel.L4][0].prompt,
+    )
+
+    assert rendered.startswith("네 메뉴도 골랐구나.")
+    assert "네가 알려줘서" not in rendered
+
+
+def test_task_transition_without_reviewed_copy_does_not_add_generic_acknowledgement() -> None:
+    cafe_context = CafeSessionContext(
+        menu_items=[
+            CafeMenuItem(id="juice", name="주스", price=700),
+            CafeMenuItem(id="bread", name="빵", price=500),
+        ],
+        mormi_menu_id="juice",
+    )
+    scenario_data = create_scenario_data("cafe_menu_total", cafe_context)
+    task = get_task(TOTAL_CALC_TASK_ID, scenario_data).model_copy(update={"transition_text": None})
+    question = task.steps[ExpressionLevel.L4][0].prompt
+
+    rendered = ConversationEngine._task_transition_then_question(
+        task,
+        "아이가 실제로 알려준 내용",
+        question,
+    )
+
+    assert rendered == question
+    assert "아, 그렇구나" not in rendered
+    assert "응, 알겠어" not in rendered
+
+
+def test_ladder_fallback_does_not_prepend_generic_excuse() -> None:
+    scenario_data = create_scenario_data(
+        "cafe_menu_total",
+        CafeSessionContext(
+            menu_items=[
+                CafeMenuItem(id="juice", name="주스", price=700),
+                CafeMenuItem(id="bread", name="빵", price=500),
+            ],
+            mormi_menu_id="juice",
+        ),
+    )
+    task = get_task(TOTAL_CALC_TASK_ID, scenario_data)
+    state = SessionState(
+        learner_id=1,
+        scene=SceneType.CAFE,
+        scenario_id="cafe_menu_total",
+        task_ids=[TOTAL_CALC_TASK_ID],
+        scenario_data=scenario_data,
+        expression_level=ExpressionLevel.L3,
+        task_start_level=ExpressionLevel.L4,
+        task_start_levels={TOTAL_CALC_TASK_ID: ExpressionLevel.L4},
+    )
+
+    rendered = ConversationEngine._smooth_ladder_fallback(state, task)
+
+    assert rendered == task.step_for(ExpressionLevel.L3, {}).prompt
+    assert "한꺼번에 많이" not in rendered
+    assert "말로만 들으려니" not in rendered
+
+
+def test_deterministic_acknowledgement_uses_the_verified_count_not_example_copy() -> None:
+    scenario_data = create_scenario_data(
+        "cafe_menu_total",
+        CafeSessionContext(
+            menu_items=[
+                CafeMenuItem(id="juice", name="주스", price=700),
+                CafeMenuItem(id="bread", name="빵", price=500),
+            ],
+            mormi_menu_id="juice",
+        ),
+    )
+    task = get_task(TOTAL_CALC_TASK_ID, scenario_data).model_copy(
+        update={"skill_id": "number-count"}
+    )
+
+    rendered = ConversationEngine._younger_sibling_acknowledgement(
+        task,
+        {"answer": "4개"},
+    )
+
+    assert rendered == "아, 네 개구나!"
+    assert "세 개" not in rendered
+
+
+def test_deterministic_acknowledgement_omits_generic_glue_for_unknown_fact() -> None:
+    scenario_data = create_scenario_data(
+        "cafe_menu_total",
+        CafeSessionContext(
+            menu_items=[
+                CafeMenuItem(id="juice", name="주스", price=700),
+                CafeMenuItem(id="bread", name="빵", price=500),
+            ],
+            mormi_menu_id="juice",
+        ),
+    )
+    task = get_task(TOTAL_CALC_TASK_ID, scenario_data).model_copy(
+        update={"skill_id": "future-skill"}
+    )
+
+    rendered = ConversationEngine._younger_sibling_acknowledgement(
+        task,
+        {"future_slot": "아이의 새로운 설명"},
+    )
+
+    assert rendered is None
 
 
 @pytest.mark.asyncio
@@ -411,6 +651,64 @@ async def test_code_downgrades_classifier_full_when_only_one_current_slot_is_ver
     assert effective_analysis.response_category is ResponseCategory.CORRECT_PARTIAL
     assert next_state.verified_slots["answer"] == "오른쪽"
     assert turn.input.target_slots == ["reason"]
+
+
+@pytest.mark.asyncio
+async def test_uncertain_open_set_utterance_is_adjudicated_instead_of_forced_into_other() -> None:
+    """An unfamiliar utterance must not be lost in a catch-all bridge route."""
+
+    child_text = "그건 말한 것처럼 하면 되는 거잖아"
+    primary = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.UNRELATED_RESPONSE,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        task_relation=TaskRelation.UNKNOWN,
+        interaction_intent=InteractionIntent.NONE,
+        conversation_only=True,
+        conversation_summary="앞서 말한 방법을 가리키는 것 같지만 학습 답인지 불확실함",
+        bridge_reply="그렇구나. 그럼 다시 알려줄 수 있어?",
+        needs_adjudication=True,
+        adjudication_reason="대명사가 최근 학습 설명을 가리킬 가능성이 있음",
+        confidence=0.82,
+    )
+    adjudicated = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.EXPRESSION,
+        task_relation=TaskRelation.CURRENT_TASK,
+        conversation_only=False,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="오른쪽",
+                factual=True,
+                evidence_span="그건",
+                interpretation_confidence=0.78,
+            )
+        ],
+        confidence=0.86,
+    )
+    gateway = FakeGateway([primary], [adjudicated])
+    engine = ConversationEngine(gateway)  # type: ignore[arg-type]
+    state = _number_comparison_state()
+    initial = engine.initial_turn(state)
+    state.current_turn_id = initial.turn_id
+
+    next_state, effective, _ = await engine.run_turn(
+        state,
+        ChildResponse(
+            turn_id=initial.turn_id,
+            response_id="6a0a9858-1f5c-46eb-bf2a-9f044f435e70",
+            type="text",
+            text=child_text,
+        ),
+        initial.mormi.text,
+    )
+
+    assert gateway.classify_calls == 1
+    assert gateway.adjudicate_calls == 1
+    assert effective.conversation_only is False
+    assert next_state.verified_slots["answer"] == "오른쪽"
 
 
 @pytest.mark.asyncio
@@ -713,8 +1011,8 @@ def test_wrong_subtraction_cannot_satisfy_result_or_method_contract() -> None:
                 supported=True,
                 support_confidence=1,
                 evidence_span=child_text,
-                ),
-            ],
+            ),
+        ],
         arithmetic_claims=[
             ArithmeticClaim(
                 left=5000,

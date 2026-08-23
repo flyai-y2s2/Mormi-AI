@@ -861,7 +861,8 @@ async def test_repeated_count_evidence_moves_from_targeted_text_to_choices(
     assert turn.input.kind is InputKind.CHOICES
     assert turn.input.target_slots == ["tracking"]
     assert turn.mormi.text != initial.mormi.text
-    assert "같이 골라 볼까?" in turn.mormi.text
+    assert "여기서 골라서 알려줄 수 있어?" in turn.mormi.text
+    assert "같이" not in turn.mormi.text
     assert turn.note_update is None
 
 
@@ -1241,15 +1242,23 @@ async def test_meta_challenge_gets_one_bounded_bridge_without_learning_mutation(
     scene: SceneType,
     reported_category: ResponseCategory,
 ) -> None:
-    """A safe challenge is acknowledged, but never becomes learning evidence."""
+    """Open-set conversation routing overrides a legacy response category."""
 
     child_text = "너 알면서 일부러 물어보지?"
+    bridge_reply = (
+        "나 진짜 몰라서 그래... 점이 몇 개인지랑 어떻게 세는지 알려줄 수 있어?"
+        if scene is SceneType.HOME_TEACH
+        else "나 진짜 몰라서 그래... 두 줄에 각각 몇 명인지 알려줄 수 있어?"
+    )
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
         response_category=reported_category,
         difficulty_class=DifficultyClass.ENGAGEMENT,
         task_relation=TaskRelation.META_ABOUT_MORMI,
         interaction_intent=InteractionIntent.AUTHENTICITY_CHALLENGE,
+        conversation_only=True,
+        conversation_summary="모르미가 정말 모르는지 의심함",
+        bridge_reply=bridge_reply,
         social_grounding_span=child_text,
         confidence=0.96,
     )

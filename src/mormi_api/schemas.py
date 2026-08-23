@@ -176,13 +176,20 @@ class TaskRelation(StrEnum):
     """How a safe utterance relates to the current learning conversation."""
 
     CURRENT_TASK = "current_task"
+    META_ABOUT_TASK = "meta_about_task"
     META_ABOUT_MORMI = "meta_about_mormi"
     OFF_TOPIC = "off_topic"
     UNKNOWN = "unknown"
 
 
 class InteractionIntent(StrEnum):
-    """Social intent kept separate from mathematical correctness."""
+    """Legacy/broad social telemetry, never a required routing taxonomy.
+
+    New safe utterances do not need a new enum member.  The understanding
+    model can use ``OTHER_SAFE_SOCIAL`` or ``NONE`` and describe the meaning
+    in ``conversation_summary`` instead.  Pedagogical state changes must not
+    depend on a perfect choice from this finite list.
+    """
 
     NONE = "none"
     AUTHENTICITY_CHALLENGE = "authenticity_challenge"
@@ -541,6 +548,16 @@ class UtteranceAnalysis(BaseModel):
     # never verify a mathematical claim or change a ladder by themselves.
     task_relation: TaskRelation = TaskRelation.UNKNOWN
     interaction_intent: InteractionIntent = InteractionIntent.NONE
+    # Open-set conversational understanding.  A safe utterance that contains
+    # no answer/reason/method/help request can be handled conversationally
+    # without forcing its exact intent into a growing enum.  The free-text
+    # summary is audit context only; it can never verify a learning slot.
+    conversation_only: bool = False
+    conversation_summary: str = Field(default="", max_length=160)
+    # For conversation-only turns Haiku may produce the one short bridge line
+    # in the same call.  Code still validates focus, safety, numbers and answer
+    # leakage before exposing it, and never treats it as learning evidence.
+    bridge_reply: str = Field(default="", max_length=120)
     entry_stance: EntryStance = EntryStance.NOT_APPLICABLE
     answer_status: SemanticAssessment = SemanticAssessment.NOT_APPLICABLE
     reason_status: SemanticAssessment = SemanticAssessment.NOT_APPLICABLE
@@ -913,6 +930,7 @@ class SpeakerRuntimeAudit(BaseModel):
         "reviewed_fallback",
         "llm",
         "bridge_llm",
+        "classifier_bridge",
         "generation_fallback",
         "deterministic_validation_fallback",
         "semantic_verification_fallback",
@@ -927,6 +945,8 @@ class SpeakerRuntimeAudit(BaseModel):
     fallback_reason: str | None = Field(default=None, max_length=120)
     understanding_route: UnderstandingRoute = UnderstandingRoute.NORMAL
     adjudicator_used: bool = False
+    speaker_latency_ms: int | None = Field(default=None, ge=0)
+    verifier_latency_ms: int | None = Field(default=None, ge=0)
 
 
 class SessionEnvelope(BaseModel):
