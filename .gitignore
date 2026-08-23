@@ -13,6 +13,7 @@ data/*
 dist/
 build/
 *.egg-info/
+artifacts/ladder-model/
 /.worktrees/
 
 # 일회성 프론트 협의·회신 문서는 공식 API_SPEC에 통합한다.
