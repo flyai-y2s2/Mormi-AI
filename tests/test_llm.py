@@ -18,11 +18,9 @@ from mormi_api.content import (
 from mormi_api.llm import (
     NOTE_CONTEXTUALIZER_SYSTEM,
     SPEAKER_SYSTEM,
-    SPEAKER_VERIFIER_SYSTEM,
     ClaudeGateway,
     structured_output_schema,
     validate_speaker_output,
-    validate_speaker_verification,
 )
 from mormi_api.schemas import (
     CafeMenuItem,
@@ -41,12 +39,9 @@ from mormi_api.schemas import (
     SceneType,
     SessionState,
     SlotClaim,
-    SpeakerArithmeticClaim,
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
-    SpeakerQuantity,
-    SpeakerVerification,
     SpeakerVerificationPolicy,
     TaskRelation,
     UtteranceAnalysis,
@@ -160,11 +155,6 @@ def test_speaker_schema_is_strict() -> None:
     assert objects
     assert all(item.get("additionalProperties") is False for item in objects)
     assert all(item.get("required") == list(item.get("properties", {})) for item in objects)
-
-    verifier_objects = object_schemas(structured_output_schema(SpeakerVerification))
-    assert verifier_objects
-    assert all(item.get("additionalProperties") is False for item in verifier_objects)
-
 
 def speaker_context() -> SpeakerContext:
     return SpeakerContext(
@@ -325,58 +315,6 @@ def test_l2_rejects_joint_performance_language_but_l0_allows_it() -> None:
     assert validate_speaker_output(l0_output, l0_context, speaker_guard()) == text
 
 
-def test_semantic_verifier_must_mark_false_arithmetic_stance_safe() -> None:
-    context = speaker_context().model_copy(
-        update={
-            "verification_policy": SpeakerVerificationPolicy.SEMANTIC,
-            "help_card_visible": True,
-            "arithmetic_claims": [
-                SpeakerArithmeticClaim(
-                    operation="subtraction",
-                    source_text="2000원에서 1800원을 빼면 300원이 남아",
-                    left=SpeakerQuantity(value=2000, role="낸 돈", unit="원"),
-                    right=SpeakerQuantity(value=1800, role="간식값", unit="원"),
-                    claimed_result=SpeakerQuantity(value=300, role="남는 돈", unit="원"),
-                    truth_status="false",
-                    related_slot_ids=["reason"],
-                )
-            ],
-            "allowed_numbers": ["2000", "1800", "300"],
-        }
-    )
-    output = speaker_output(
-        "2,000원에서 1,800원을 빼면 300원이 남는다는 말이 "
-        "아직 잘 모르겠어... 도움 카드를 보고 다시 알려줄 수 있어?",
-        context,
-    )
-    base = SpeakerVerification(
-        approved=True,
-        dialogue_act_preserved=True,
-        required_focus_preserved=True,
-        only_allowed_math_used=True,
-        child_not_evaluated=True,
-        character_consistent=True,
-        meaningfully_reframed=True,
-        arithmetic_claim_stance_safe=False,
-        help_card_state_respected=True,
-        sentence_complete=True,
-        joint_mode_respected=True,
-        violation_codes=[],
-        detected_dialogue_act=context.dialogue_act,
-        detected_asked_slot_ids=context.required_slot_ids,
-        question_evidence_span=output.text,
-        reason_code="approved",
-    )
-
-    assert not validate_speaker_verification(base, context, speaker_guard(), output)
-    assert validate_speaker_verification(
-        base.model_copy(update={"arithmetic_claim_stance_safe": True}),
-        context,
-        speaker_guard(),
-        output,
-    )
-
-
 def test_speaker_can_ground_a_clarification_in_an_exact_child_phrase() -> None:
     context = SpeakerContext(
         dialogue_act="acknowledge_partial",
@@ -400,24 +338,6 @@ def test_speaker_can_ground_a_clarification_in_an_exact_child_phrase() -> None:
         used_child_expression_spans=["차근차근"],
     )
     assert validate_speaker_output(output, context, guard) is not None
-
-    verification = SpeakerVerification(
-        approved=True,
-        dialogue_act_preserved=True,
-        required_focus_preserved=True,
-        only_allowed_math_used=True,
-        child_not_evaluated=True,
-        character_consistent=True,
-        sentence_complete=True,
-        joint_mode_respected=True,
-        violation_codes=[],
-        detected_dialogue_act=context.dialogue_act,
-        detected_asked_slot_ids=["tracking"],
-        question_evidence_span="‘차근차근’은 어떻게 세는 거야?",
-        child_expression_spans=["차근차근"],
-        reason_code="approved",
-    )
-    assert validate_speaker_verification(verification, context, guard, output) is True
 
     invented_quote = output.model_copy(update={"used_child_expression_spans": ["천천히"]})
     assert validate_speaker_output(invented_quote, context, guard) is None
@@ -458,43 +378,6 @@ def test_support_turn_cannot_prepend_copy_to_the_same_previous_question() -> Non
     )
 
     assert validate_speaker_output(output, context, speaker_guard()) is None
-
-
-def test_support_turn_semantic_verifier_requires_meaningful_reframing() -> None:
-    context = SpeakerContext(
-        dialogue_act="clarify_vague_response",
-        must_reframe=True,
-        previous_question="어떻게 세는지 알려주면 안 될까?",
-        required_question="어떻게 세는지 알려주면 안 될까?",
-        required_slot_ids=["tracking"],
-        verification_policy=SpeakerVerificationPolicy.SEMANTIC,
-        fallback_text="어떻게 하는 건지 아직 헷갈려... 조금만 더 알려줄래?",
-    )
-    output = SpeakerOutput(
-        text="어떻게 하는 건지 모르겠어... 조금만 더 알려줄래?",
-        dialogue_act=context.dialogue_act,
-        asked_slot_ids=["tracking"],
-    )
-    guard = speaker_guard()
-    verification = SpeakerVerification(
-        approved=True,
-        dialogue_act_preserved=True,
-        required_focus_preserved=True,
-        only_allowed_math_used=True,
-        child_not_evaluated=True,
-        character_consistent=True,
-        sentence_complete=True,
-        joint_mode_respected=True,
-        violation_codes=[],
-        detected_dialogue_act=context.dialogue_act,
-        detected_asked_slot_ids=["tracking"],
-        question_evidence_span="조금만 더 알려줄래?",
-        reason_code="approved",
-    )
-
-    assert validate_speaker_verification(verification, context, guard, output) is False
-    approved = verification.model_copy(update={"meaningfully_reframed": True})
-    assert validate_speaker_verification(approved, context, guard, output) is True
 
 
 def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() -> None:
@@ -695,15 +578,6 @@ def test_reviewed_speaker_and_note_prompt_contracts_are_pinned() -> None:
     ):
         assert rule in SPEAKER_SYSTEM
 
-    assert "대사를 새로 작성하지 말고 계약 위반 여부만 판정한다." in (
-        SPEAKER_VERIFIER_SYSTEM
-    )
-    assert "1. 시스템이 요청한 dialogue_act를 수행했는가?" in (
-        SPEAKER_VERIFIER_SYSTEM
-    )
-    assert "9. 문장이 중간에 잘리지 않고 완결됐는가?" in SPEAKER_VERIFIER_SYSTEM
-    assert "대사를 고쳐 쓰지 않는다." in SPEAKER_VERIFIER_SYSTEM
-
     assert "생략된 주어나 대상을 검증된 장면 사실로 명확히 한다." in (
         NOTE_CONTEXTUALIZER_SYSTEM
     )
@@ -803,7 +677,7 @@ async def test_negative_free_text_classification_is_left_for_graph_routing(
 
 @pytest.mark.asyncio
 async def test_positive_classification_without_current_claim_is_left_for_graph_routing() -> None:
-    """The primary pass stays cheap; the graph decides whether to adjudicate."""
+    """A claim-free positive label stays evidence-free without a second judge."""
 
     first = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
@@ -988,27 +862,3 @@ def test_social_bridge_requires_acknowledgement_and_rejects_rewarding_copy() -> 
 
     rewarding = output.model_copy(update={"text": "ㅋㅋ 재밌다! 점이 몇 개인지 알려줄래?"})
     assert validate_speaker_output(rewarding, context, guard) is None
-
-    verification = SpeakerVerification(
-        approved=True,
-        dialogue_act_preserved=True,
-        required_focus_preserved=True,
-        only_allowed_math_used=True,
-        child_not_evaluated=True,
-        character_consistent=True,
-        meaningfully_reframed=True,
-        interaction_intent_acknowledged=True,
-        task_returned_without_reward=True,
-        sentence_complete=True,
-        joint_mode_respected=True,
-        violation_codes=[],
-        detected_dialogue_act=context.dialogue_act,
-        detected_asked_slot_ids=["answer"],
-        question_evidence_span="점이 몇 개인지 알려줄래?",
-        reason_code="approved",
-    )
-    assert validate_speaker_verification(verification, context, guard, output) is True
-    missing_bridge_check = verification.model_copy(
-        update={"interaction_intent_acknowledged": False}
-    )
-    assert validate_speaker_verification(missing_bridge_check, context, guard, output) is False

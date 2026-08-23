@@ -35,6 +35,7 @@ from mormi_api.schemas import (
     SessionState,
     SkillProfile,
     SlotClaim,
+    SpeakerOutput,
     SupportTrigger,
     TaskRelation,
     UtteranceAnalysis,
@@ -1262,8 +1263,22 @@ async def test_meta_challenge_gets_one_bounded_bridge_without_learning_mutation(
         social_grounding_span=child_text,
         confidence=0.96,
     )
+    gateway = FakeGateway(
+        [analysis],
+        bridge_outputs=[
+            SpeakerOutput(
+                text=bridge_reply,
+                dialogue_act="acknowledge_meta_and_reask",
+                asked_slot_ids=(
+                    ["answer", "tracking"]
+                    if scene is SceneType.HOME_TEACH
+                    else ["left_count", "right_count"]
+                ),
+            )
+        ],
+    )
     engine = ConversationEngine(  # type: ignore[arg-type]
-        FakeGateway([analysis]),
+        gateway,
         show_internal_pedagogy=True,
     )
     if scene is SceneType.HOME_TEACH:
@@ -1310,6 +1325,7 @@ async def test_meta_challenge_gets_one_bounded_bridge_without_learning_mutation(
     assert turn.visual == initial.visual
     assert turn.note_update is None
     assert turn.completion is None
+    assert gateway.bridge_speak_calls == 1
     assert "진짜 몰라서" in turn.mormi.text
     assert turn.mormi.text != initial.mormi.text
 

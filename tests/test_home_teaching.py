@@ -36,9 +36,7 @@ from mormi_api.schemas import (
     SkillProfile,
     SlotClaim,
     SpeakerContext,
-    SpeakerGuardContract,
     SpeakerOutput,
-    SpeakerVerification,
     SpeakerVerificationPolicy,
     UtteranceAnalysis,
 )
@@ -1014,7 +1012,6 @@ async def test_method_first_followup_skips_redundant_verifier_and_preserves_ackn
 
     class VerificationTimeoutGateway(FakeGateway):
         speaker_context: SpeakerContext | None = None
-        verify_calls = 0
 
         async def speak(self, context: SpeakerContext) -> SpeakerOutput:
             self.speaker_context = context
@@ -1024,16 +1021,6 @@ async def test_method_first_followup_skips_redundant_verifier_and_preserves_ackn
                 asked_slot_ids=context.required_slot_ids,
                 used_verified_slots=["rule"],
             )
-
-        async def verify_speaker(
-            self,
-            context: SpeakerContext,
-            guard: SpeakerGuardContract,
-            output: SpeakerOutput,
-        ) -> SpeakerVerification:
-            self.verify_calls += 1
-            del context, guard, output
-            raise TimeoutError
 
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/method-first-timeout.db")
     await database.create_schema()
@@ -1073,7 +1060,6 @@ async def test_method_first_followup_skips_redundant_verifier_and_preserves_ackn
     assert state.verified_slots == {"rule": True}
     assert gateway.speaker_context is not None
     assert gateway.speaker_context.verification_policy is SpeakerVerificationPolicy.DETERMINISTIC
-    assert gateway.verify_calls == 0
     assert followed.turn.mormi.text == expected_text
     assert followed.turn.input.target_slots == ["answer"]
     assert followed.turn.help_card is None
@@ -1480,7 +1466,6 @@ async def test_safe_child_phrase_can_ground_a_natural_targeted_followup(
 
     class GroundedSpeakerGateway(FakeGateway):
         speaker_context: SpeakerContext | None = None
-        verify_calls = 0
 
         async def speak(self, context: SpeakerContext) -> SpeakerOutput:
             self.speaker_context = context
@@ -1491,31 +1476,6 @@ async def test_safe_child_phrase_can_ground_a_natural_targeted_followup(
                 used_verified_slots=["answer"],
                 used_child_expression=True,
                 used_child_expression_spans=["차근차근 세어봐"],
-            )
-
-        async def verify_speaker(
-            self,
-            context: SpeakerContext,
-            guard: SpeakerGuardContract,
-            output: SpeakerOutput,
-        ) -> SpeakerVerification:
-            self.verify_calls += 1
-            del guard
-            return SpeakerVerification(
-                approved=True,
-                dialogue_act_preserved=True,
-                required_focus_preserved=True,
-                only_allowed_math_used=True,
-                child_not_evaluated=True,
-                character_consistent=True,
-                sentence_complete=True,
-                joint_mode_respected=True,
-                violation_codes=[],
-                detected_dialogue_act=context.dialogue_act,
-                detected_asked_slot_ids=context.required_slot_ids,
-                question_evidence_span="‘차근차근 세어봐’는 어떻게 하는 거야?",
-                child_expression_spans=output.used_child_expression_spans,
-                reason_code="approved",
             )
 
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/grounded-followup.db")
@@ -1558,7 +1518,6 @@ async def test_safe_child_phrase_can_ground_a_natural_targeted_followup(
     assert gateway.speaker_context is not None
     assert gateway.speaker_context.child_expression == "차근차근 세어봐"
     assert gateway.speaker_context.verification_policy is SpeakerVerificationPolicy.SEMANTIC
-    assert gateway.verify_calls == 1
     assert gateway.speaker_context.required_slot_ids == ["tracking"]
     assert after_answer.turn.mormi.text == ("아, 세 개구나! ‘차근차근 세어봐’는 어떻게 하는 거야?")
     assert after_answer.turn.input.target_slots == ["tracking"]

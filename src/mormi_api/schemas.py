@@ -554,9 +554,9 @@ class UtteranceAnalysis(BaseModel):
     # summary is audit context only; it can never verify a learning slot.
     conversation_only: bool = False
     conversation_summary: str = Field(default="", max_length=160)
-    # For conversation-only turns Haiku may produce the one short bridge line
-    # in the same call.  Code still validates focus, safety, numbers and answer
-    # leakage before exposing it, and never treats it as learning evidence.
+    # Deprecated wire-compatibility field.  The primary understanding model
+    # never writes child-facing copy; a separate lightweight bridge speaker
+    # handles safe conversation-only turns.
     bridge_reply: str = Field(default="", max_length=120)
     entry_stance: EntryStance = EntryStance.NOT_APPLICABLE
     answer_status: SemanticAssessment = SemanticAssessment.NOT_APPLICABLE
@@ -564,6 +564,9 @@ class UtteranceAnalysis(BaseModel):
     claims: list[SlotClaim] = Field(default_factory=list)
     arithmetic_claims: list[ArithmeticClaim] = Field(default_factory=list)
     reference_resolutions: list[ReferenceResolution] = Field(default_factory=list)
+    # Deprecated wire-compatibility fields.  Runtime has one primary semantic
+    # understanding pass and represents uncertainty directly instead of
+    # invoking a second adjudicator.
     needs_adjudication: bool = False
     adjudication_reason: str = Field(default="", max_length=160)
     misconception_tag: str | None = None

@@ -22,7 +22,6 @@ from .schemas import (
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
-    SpeakerVerification,
     SpeakerVerificationPolicy,
     UtteranceAnalysis,
 )
@@ -164,69 +163,6 @@ class ClaudeGateway:
         )
         return await self._request_classification(prompt)
 
-    async def adjudicate(
-        self,
-        *,
-        state: SessionState,
-        task: TaskDefinition,
-        previous_question: str,
-        response: ChildResponse,
-        primary_analysis: UtteranceAnalysis,
-        dialogue_history: list[DialogueHistoryTurn] | None = None,
-    ) -> UtteranceAnalysis:
-        """Resolve only high-impact ambiguity with Sonnet.
-
-        The adjudicator sees the same closed task contract as the first pass
-        plus Haiku's structured result. It may reinterpret the child's actual
-        words, but it may not invent a claim or change reviewed mathematics.
-        """
-
-        if not self.client:
-            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
-        base_prompt = json.loads(
-            self._classifier_prompt(
-                state,
-                task,
-                previous_question,
-                response,
-                dialogue_history=dialogue_history,
-            )
-        )
-        base_prompt["primary_analysis"] = primary_analysis.model_dump(mode="json")
-        base_prompt["adjudication_contract"] = {
-            "purpose": "resolve_high_impact_semantic_ambiguity",
-            "rules": [
-                "아이 원문과 제공된 최근 대화에 직접 근거가 있는 의미만 인정한다.",
-                "Haiku의 판정을 그대로 따르지 말고 슬롯별 의미 충족도를 다시 판정한다.",
-                "검수된 장면 사실은 대명사 해소와 산술 정오 검증에만 사용한다.",
-                "아이에게 없는 답, 이유, 방법을 claim으로 만들지 않는다.",
-                "판정이 여전히 불확실하면 uncertain 상태와 낮은 confidence를 유지한다.",
-            ],
-        }
-        schema = structured_output_schema(UtteranceAnalysis)
-        try:
-            message = await self.client.messages.create(
-                model=self.settings.speaker_model,
-                max_tokens=1500,
-                temperature=0,
-                system=ADJUDICATOR_SYSTEM,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": json.dumps(base_prompt, ensure_ascii=False),
-                    }
-                ],
-                output_config={"format": {"type": "json_schema", "schema": schema}},
-            )
-        except (APIConnectionError, APIStatusError) as error:
-            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
-        if message.stop_reason in {"refusal", "max_tokens"}:
-            raise ModelOutputError(f"Adjudicator stopped with {message.stop_reason}")
-        try:
-            return UtteranceAnalysis.model_validate_json(_text_content(message.content))
-        except ValidationError as error:
-            raise ModelOutputError("Adjudicator output did not match schema") from error
-
     async def _request_classification(self, prompt: str) -> UtteranceAnalysis:
         if not self.client:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
@@ -296,7 +232,7 @@ class ClaudeGateway:
         schema = structured_output_schema(SpeakerOutput)
         try:
             message = await self.client.messages.create(
-                model=self.settings.classifier_model,
+                model=self.settings.bridge_model,
                 max_tokens=220,
                 temperature=0.25,
                 system=BRIDGE_SPEAKER_SYSTEM,
@@ -354,51 +290,6 @@ class ClaudeGateway:
             return NoteContextualizationOutput.model_validate_json(raw)
         except ValidationError as error:
             raise ModelOutputError("Note contextualizer output did not match schema") from error
-
-    async def verify_speaker(
-        self,
-        context: SpeakerContext,
-        guard: SpeakerGuardContract,
-        output: SpeakerOutput,
-    ) -> SpeakerVerification:
-        """Audit only semantically risky paraphrases with the fast classifier model."""
-
-        if not self.client:
-            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
-        schema = structured_output_schema(SpeakerVerification)
-        payload = {
-            "speaker_context": context.model_dump(mode="json"),
-            "validation_guard": guard.model_dump(mode="json"),
-            "candidate_output": output.model_dump(mode="json"),
-        }
-        try:
-            message = await self.client.messages.create(
-                model=self.settings.classifier_model,
-                max_tokens=320,
-                temperature=0,
-                system=SPEAKER_VERIFIER_SYSTEM,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": json.dumps(payload, ensure_ascii=False),
-                    }
-                ],
-                output_config={
-                    "format": {
-                        "type": "json_schema",
-                        "schema": schema,
-                    }
-                },
-            )
-        except (APIConnectionError, APIStatusError) as error:
-            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
-        if message.stop_reason in {"refusal", "max_tokens"}:
-            raise ModelOutputError(f"Speaker verifier stopped with {message.stop_reason}")
-        raw = _text_content(message.content)
-        try:
-            return SpeakerVerification.model_validate_json(raw)
-        except ValidationError as error:
-            raise ModelOutputError("Speaker verification did not match schema") from error
 
     @staticmethod
     def _slot_classifier_contract(slot: SlotDefinition) -> dict[str, Any]:
@@ -543,18 +434,25 @@ class ClaudeGateway:
                     "끼워 넣지 않는다. '그건 너무 쉽지'도 풀이가 아니라 conversation_only다."
                 ),
                 (
-                    "conversation_only=true이면 bridge_reply에 아이 말에 한 번 자연스럽게 "
-                    "반응하고 현재 미해결 질문 하나만 다시 도움 청하는 모르미 문장을 쓴다. "
-                    "같은 분류 호출 안에서 작성하며 완결된 한 문장, 물음표 하나, 50자 이내를 "
-                    "목표로 한다. 모르미는 착하고 조금 서툰 동생이며, 아이에게 명령하거나 "
-                    "퀴즈를 내지 않고 진짜 몰라서 알려 달라고 부탁한다. 아이를 평가하거나 "
-                    "정답·새 방법·도움 카드를 말하지 않는다. 장면·직전 질문에 검수되어 "
-                    "제시된 숫자 외에는 새 숫자를 만들지 않는다."
+                    "너는 아이에게 보일 대사를 작성하지 않는다. bridge_reply는 항상 빈 문자열이다. "
+                    "안전한 대화 브리지는 별도의 경량 화자 모델이 작성한다."
                 ),
                 (
-                    "학습 claim이 있거나 help_request이면 conversation_only=false이고 "
-                    "bridge_reply는 빈 문자열이다. 의미가 애매해서 학습 근거일 가능성이 있으면 "
-                    "conversation_only로 버리지 말고 needs_adjudication=true로 둔다."
+                    "두 번째 재판정 모델은 없다. needs_adjudication=false, "
+                    "adjudication_reason=''로 둔다. 의미가 불확실하면 "
+                    "semantic_assessment=uncertain과 낮은 confidence로 표현하되 아이가 "
+                    "말하지 않은 claim을 만들지 않는다."
+                ),
+                (
+                    "task_context, 정답 계약, reviewed_arithmetic_truth, recent_dialogue는 "
+                    "해석 문맥일 뿐 아이 발화의 증거가 아니다. 모든 claim과 "
+                    "arithmetic_claim은 이번 아이 원문 안의 정확한 evidence_span을 가져야 한다."
+                ),
+                (
+                    "순수한 거절·메타·장난·무관 발화는 conversation_only=true이며 claim과 "
+                    "arithmetic_claims를 비운다. 사회적 말과 실제 풀이가 섞인 발화는 "
+                    "conversation_only=false로 두고, 아이가 이번 원문에서 실제로 말한 학습 부분만 "
+                    "정확한 evidence_span과 함께 추출한다."
                 ),
                 (
                     "'너 알면서 일부러 물어보지?', '너 정답 알지?', '나 시험하는 거야?'는 "
@@ -678,9 +576,9 @@ class ClaudeGateway:
                     "판정한다. 말하지 않은 이유를 complete로 만들지 않는다."
                 ),
                 (
-                    "아이식 표현, 생략, 대명사, 비표준 계산 설명 때문에 교육적으로 중요한 "
-                    "판정이 불확실하면 needs_adjudication=true와 짧은 adjudication_reason을 "
-                    "반환한다. 단순하고 명확한 답에는 false로 둔다."
+                    "아이식 표현, 생략, 대명사, 비표준 계산 설명이 불확실하면 추측하지 말고 "
+                    "semantic_assessment=uncertain과 낮은 confidence를 반환한다. "
+                    "needs_adjudication은 항상 false다."
                 ),
             ],
         }
@@ -728,18 +626,18 @@ social_grounding_span은 안전한 메타·사회적 반응에 쓸 정확한 원
   정오를 바꾸지 않으며, 원문에 없는 감정을 추측하지 않는다.
 - 안전하지만 학습 근거나 명시적 도움 요청이 없는 발화는 conversation_only=true로 둔다.
   conversation_summary에는 그 말의 의미를 고정 라벨이 아닌 짧은 자연어로 기록한다.
-  그 발화가 학습 답일 가능성이 조금이라도 남으면 conversation_only로 버리지 말고
-  needs_adjudication=true로 둔다.
-- conversation_only=true이면 bridge_reply도 같은 응답에서 작성한다. 아이 말에 짧게 한 번
-  반응한 다음 현재 질문에서 아직 필요한 한 가지만 모르미가 진짜 몰라서 도움을 청한다.
-  예: 아이가 '그건 너무 쉽지'라고 하면 '오, 그렇게 느꼈구나. 그럼 모두 얼마인지 알려주면 안 돼?'
-  같은 방향이다. 모르미는 착하고 조금 서툰 동생이며, 명령하거나 퀴즈를 내지 않고 진짜
-  몰라서 아이에게 부탁한다. 아이를 평가하거나 재미있는 장난으로 보상하지 않고, 새 수학
-  지식·정답·도움 카드를 만들지 않는다. 장면·직전 질문에 검수되어 제시된 숫자 외에는
-  새 숫자를 만들지 않는다. 한 문장, 질문·요청과 물음표 하나, 50자 이내를 목표로 하되
-  자르지 않는다.
-- claim, arithmetic_claim 또는 명시적 help_request가 있으면 conversation_only=false이고
-  bridge_reply는 빈 문자열이어야 한다.
+- 너는 아이에게 보일 대사를 작성하지 않는다. bridge_reply는 항상 빈 문자열이다.
+  conversation_only 발화의 대사는 별도의 경량 화자 모델이 작성한다.
+- 두 번째 재판정 모델은 없다. needs_adjudication=false, adjudication_reason=''로 둔다.
+  의미가 불확실하면 semantic_assessment=uncertain과 낮은 confidence로 남기고, 아이가
+  말하지 않은 내용을 선의로 claim하지 않는다.
+- task_context, 정답 계약, reviewed_arithmetic_truth, recent_dialogue는 해석 문맥일 뿐
+  현재 아이 발화의 증거가 아니다. 모든 claim과 arithmetic_claim에는 이번 아이 원문에
+  실제로 존재하는 정확한 evidence_span이 있어야 한다.
+- 순수한 거절·메타·장난·무관 발화는 conversation_only=true이며 claim과
+  arithmetic_claims를 모두 비운다. 사회적 말과 실제 풀이가 섞인 경우에는
+  conversation_only=false로 두고, 이번 원문에 실제로 있는 학습 부분만 추출한다.
+- claim, arithmetic_claim 또는 명시적 help_request가 있으면 conversation_only=false다.
 - related_vague는 질문 주제에는 맞지만 필요한 행동·관계·이유가 너무 추상적이라
   claim을 만들 수 없는 말이다. 예: 방법을 물었을 때 '잘 해 봐', '차근차근',
   '그냥 하면 돼'. 안전한 원문 구절을 grounding_span에 그대로 보존한다.
@@ -775,21 +673,8 @@ social_grounding_span은 안전한 메타·사회적 반응에 쓸 정확한 원
   supported=true로 인정하고, 말하지 않은 답 슬롯은 보충하지 않는다. 반대로 답만
   말하면 답 슬롯만 인정한다. 둘 중 하나만 말했다는 이유로 전체 발화를 무관하거나
   틀린 발화로 처리하지 않는다.
-- 의미가 불확실하고 그 판정이 학습 진행에 영향을 주면 needs_adjudication=true로 둔다.
-""".strip()
-
-
-ADJUDICATOR_SYSTEM = """
-너는 경계선지능 아동의 생활수학 발화를 재판정하는 정밀 의미 판정기다.
-대사를 생성하지 않고 UtteranceAnalysis JSON만 반환한다.
-
-Haiku의 primary_analysis는 참고 의견일 뿐 정답이 아니다. 아이 원문, 직전 질문,
-검수된 슬롯 의미, 장면 사실, 제한된 최근 대화를 다시 읽고 독립적으로 판정한다.
-아이의 창의적인 풀이, 생략, 오타, 구어체와 대명사를 의미로 이해하되 아이가 말하지 않은
-답·이유·방법을 보충하지 않는다. 대명사를 해소했다면 근거 turn_id를 남긴다.
-검수된 장면 사실은 참·거짓 확인과 문맥 해소에만 사용하고 아이 발화의 증거로 복사하지 않는다.
-맞은 부분과 틀린 부분을 분리하고, 현재 질문의 답과 이유·방법 상태를 별도로 판정한다.
-끝까지 확신할 수 없으면 uncertain과 낮은 confidence를 유지한다.
+- 의미가 불확실하고 그 판정이 학습 진행에 영향을 주면 semantic_assessment=uncertain과
+  낮은 confidence를 사용한다. needs_adjudication은 항상 false다.
 """.strip()
 
 
@@ -913,38 +798,6 @@ SPEAKER_SYSTEM = """
   → "아, 덧셈을 하면 되는구나~ 그럼 모두 얼마인지 알려줄 수 있어?"
 - 확인된 답: 1,200원 / 아직 필요한 내용: 계산 방법
   → "아, 1,200원이구나~ 그런데 어떻게 계산한 건지 알려줄 수 있어?"
-""".strip()
-
-
-SPEAKER_VERIFIER_SYSTEM = """
-너는 아동에게 보여 주기 직전의 학생 AI 모르미 대사를 검사한다.
-대사를 새로 작성하지 말고 계약 위반 여부만 판정한다.
-
-다음을 검사한다.
-
-1. 시스템이 요청한 dialogue_act를 수행했는가?
-2. 검증된 아이의 설명만 받아들였는가?
-3. 검증되지 않았거나 틀린 주장을 사실처럼 인정하지 않았는가?
-4. 숨겨진 정답이나 아이가 알려주지 않은 방법을 말하지 않았는가?
-5. unresolved_focus에 있는 내용만 다시 물었는가?
-6. 아이에게 틀렸거나 맞았다고 평가하지 않았는가?
-7. 도움 카드가 보이지 않는데 도움 카드를 언급하지 않았는가?
-8. "같이 해결하자"는 표현이 L0에서만 사용됐는가?
-9. 문장이 중간에 잘리지 않고 완결됐는가?
-
-위반 여부와 위반 코드를 구조화된 JSON으로만 반환한다.
-대사를 고쳐 쓰지 않는다.
-
-JSON 근거 필드 작성 규칙:
-- detected_dialogue_act와 detected_asked_slot_ids에는 후보가 실제 수행한 행동과 질문 초점만 적는다.
-- question_evidence_span과 각 위반 span은 후보 원문에서 글자 그대로 복사한다.
-- 대화 브리지에서는 interaction_intent를 짧게 받아 준 뒤 학습 요청으로 돌아왔는지도 검사한다.
-- 틀린 산술 주장을 사실처럼 인정하지 않았을 때만 arithmetic_claim_stance_safe=true로 둔다.
-- 카드 노출 상태가 대사와 일치할 때만 help_card_state_respected=true로 둔다.
-- 문장이 완결됐을 때만 sentence_complete=true로 둔다.
-- L0 밖에서 공동 수행을 제안하지 않았을 때만 joint_mode_respected=true로 둔다.
-- 위반이 없을 때만 violation_codes를 빈 배열로, approved=true와 reason_code="approved"로 둔다.
-- 자연스러운 조사·어순·구어체 차이만으로는 위반 처리하지 않는다.
 """.strip()
 
 
@@ -1211,69 +1064,6 @@ def validate_note_contextualization(
     if any(number not in allowed for number in numbers):
         return None
     return text
-
-
-def _all_exact_spans(spans: list[str], source: str) -> bool:
-    return all(bool(span) and span in source for span in spans)
-
-
-def validate_speaker_verification(
-    verification: SpeakerVerification,
-    context: SpeakerContext,
-    guard: SpeakerGuardContract,
-    output: SpeakerOutput,
-) -> bool:
-    text = output.text.strip()
-    question_span_valid = (
-        bool(verification.question_evidence_span) and verification.question_evidence_span in text
-        if context.required_question
-        else verification.question_evidence_span == ""
-    )
-    child_spans_valid = (
-        verification.child_expression_spans == output.used_child_expression_spans
-        and _all_exact_spans(verification.child_expression_spans, text)
-    )
-    if verification.child_expression_spans:
-        child_spans_valid = child_spans_valid and _all_exact_spans(
-            verification.child_expression_spans,
-            guard.child_expression_source or "",
-        )
-    bridge_contract_ok = context.dialogue_act not in _SOCIAL_BRIDGE_ACTS or (
-        verification.interaction_intent_acknowledged and verification.task_returned_without_reward
-    )
-    arithmetic_contract_ok = not context.arithmetic_claims or (
-        verification.arithmetic_claim_stance_safe
-        and not verification.false_claim_confirmation_spans
-    )
-    card_contract_ok = (
-        verification.help_card_state_respected
-        if context.arithmetic_claims or re.search(r"(?:도움\s*)?카드", text)
-        else True
-    )
-    return bool(
-        verification.approved
-        and verification.reason_code == "approved"
-        and verification.dialogue_act_preserved
-        and verification.required_focus_preserved
-        and verification.only_allowed_math_used
-        and verification.child_not_evaluated
-        and verification.character_consistent
-        and verification.sentence_complete
-        and verification.joint_mode_respected
-        and not verification.violation_codes
-        and bridge_contract_ok
-        and arithmetic_contract_ok
-        and card_contract_ok
-        and (not context.must_reframe or verification.meaningfully_reframed)
-        and verification.detected_dialogue_act == context.dialogue_act
-        and set(verification.detected_asked_slot_ids) == set(context.required_slot_ids)
-        and question_span_valid
-        and not verification.unverified_claim_spans
-        and not verification.answer_leak_spans
-        and not verification.child_evaluation_spans
-        and _all_exact_spans(verification.false_claim_confirmation_spans, text)
-        and child_spans_valid
-    )
 
 
 def _text_content(content: list[Any]) -> str:

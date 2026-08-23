@@ -97,8 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gateway,
         show_internal_pedagogy=settings.show_internal_pedagogy,
         speaker_timeout_seconds=settings.speaker_timeout_seconds,
-        semantic_verifier_enabled=settings.speaker_verifier_enabled,
-        verifier_timeout_seconds=settings.speaker_verifier_timeout_seconds,
+        bridge_timeout_seconds=settings.bridge_timeout_seconds,
     )
     app.state.settings = settings
     app.state.database = database
