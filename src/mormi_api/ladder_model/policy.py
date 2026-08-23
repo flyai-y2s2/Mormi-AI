@@ -9,6 +9,32 @@ _LOWER = {
     LadderLevel.L0: LadderLevel.L0,
 }
 
+_HIGHER = {
+    LadderLevel.L0: LadderLevel.L2,
+    LadderLevel.L2: LadderLevel.L3,
+    LadderLevel.L3: LadderLevel.L4,
+    LadderLevel.L4: LadderLevel.L4,
+}
+
+_RANK = {
+    LadderLevel.L0: 0,
+    LadderLevel.L2: 1,
+    LadderLevel.L3: 2,
+    LadderLevel.L4: 3,
+}
+
+
+def one_step_lower(level: LadderLevel) -> LadderLevel:
+    return _LOWER[level]
+
+
+def one_step_higher(level: LadderLevel) -> LadderLevel:
+    return _HIGHER[level]
+
+
+def ladder_rank(level: LadderLevel) -> int:
+    return _RANK[level]
+
 
 def rule_recommendation(
     current_level: LadderLevel,
