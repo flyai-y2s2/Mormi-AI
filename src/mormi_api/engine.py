@@ -9,7 +9,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .content import StepDefinition, TaskDefinition, get_task
+from .content import PARK_SCENARIO_IDS, StepDefinition, TaskDefinition, get_task
 from .dictionary_models import dictionary_reference
 from .llm import (
     ClaudeGateway,
@@ -40,6 +40,7 @@ from .schemas import (
     NoteContextualizationOutput,
     NoteEvidence,
     NoteUpdate,
+    ParkSessionContext,
     PedagogicalDecision,
     PedagogySnapshot,
     ResponseCategory,
@@ -1498,6 +1499,30 @@ class ConversationEngine:
         return text
 
     @classmethod
+    def _arithmetic_result(
+        cls,
+        operation: str,
+        left: int,
+        right: int,
+    ) -> int | None:
+        """Compute only the four reviewed integer operations.
+
+        Exact division is required because every current learning contract has
+        one integer answer.  Returning ``None`` makes malformed or non-exact
+        relations false instead of silently rounding them.
+        """
+
+        if operation == "addition":
+            return left + right
+        if operation == "subtraction":
+            return left - right
+        if operation == "multiplication":
+            return left * right
+        if operation == "division" and right != 0 and left % right == 0:
+            return left // right
+        return None
+
+    @classmethod
     def _speaker_arithmetic_claims(
         cls,
         task: TaskDefinition,
@@ -1529,17 +1554,18 @@ class ConversationEngine:
                 and claim.left == contract.left
                 and claim.right == contract.right
             )
-            reversed_addition_alignment = bool(
+            reversed_commutative_alignment = bool(
                 contract
-                and claim.operation == contract.operation == "addition"
+                and claim.operation == contract.operation
+                and claim.operation in {"addition", "multiplication"}
                 and claim.left == contract.right
                 and claim.right == contract.left
             )
-            aligned = direct_alignment or reversed_addition_alignment
-            computed = (
-                claim.left + claim.right
-                if claim.operation == "addition"
-                else claim.left - claim.right
+            aligned = direct_alignment or reversed_commutative_alignment
+            computed = cls._arithmetic_result(
+                claim.operation,
+                claim.left,
+                claim.right,
             )
             unit = contract.unit if contract and aligned else ""
             output.append(
@@ -1550,7 +1576,7 @@ class ConversationEngine:
                         value=claim.left,
                         role=(
                             contract.right_label
-                            if contract and reversed_addition_alignment
+                            if contract and reversed_commutative_alignment
                             else contract.left_label
                             if contract and direct_alignment
                             else "첫 번째 수"
@@ -1561,7 +1587,7 @@ class ConversationEngine:
                         value=claim.right,
                         role=(
                             contract.left_label
-                            if contract and reversed_addition_alignment
+                            if contract and reversed_commutative_alignment
                             else contract.right_label
                             if contract and direct_alignment
                             else "두 번째 수"
@@ -1577,7 +1603,11 @@ class ConversationEngine:
                         ),
                         unit=unit,
                     ),
-                    truth_status="true" if claim.result == computed else "false",
+                    truth_status=(
+                        "true"
+                        if computed is not None and claim.result == computed
+                        else "false"
+                    ),
                     related_slot_ids=[
                         slot_id
                         for slot_id in claim.related_slot_ids
@@ -1924,6 +1954,17 @@ class ConversationEngine:
         are normalized into one small machine contract.
         """
 
+        if state.scenario_id in PARK_SCENARIO_IDS:
+            raw_context = state.scenario_data.get("park_context")
+            context = ParkSessionContext.model_validate(raw_context)
+            values = {fact.key: fact.value for fact in context.facts}
+            # This is the BE-authored and SessionCreate-validated contract.
+            # Do not derive completion facts from LLM prose or child text.
+            return {
+                key: values[key]
+                for key in context.required_verified_fact_keys
+            }
+
         facts = dict(state.verified_slots)
         child_menu = facts.get("child_menu") or state.scenario_data.get("child_menu_id")
         if isinstance(child_menu, str) and child_menu:
@@ -2126,6 +2167,10 @@ class ConversationEngine:
         result = cls._quantity_copy(claim.claimed_result)
         if claim.operation == "addition":
             relation = f"{left}과 {right}을 더하면 모두 {result}이라는 말이"
+        elif claim.operation == "multiplication":
+            relation = f"{left}에 {right}을 곱하면 {result}이라는 말이"
+        elif claim.operation == "division":
+            relation = f"{left}을 {right}으로 나누면 {result}이라는 말이"
         elif "거스름" in claim.claimed_result.role:
             relation = f"{left}에서 {right}을 빼면 거스름돈이 {result}이라는 말이"
         elif "남" in claim.claimed_result.role:
@@ -2459,12 +2504,12 @@ class ConversationEngine:
             evidence = cls._exact_child_evidence_text(child_text, arithmetic.evidence_span)
             if evidence is None:
                 continue
-            computed = (
-                arithmetic.left + arithmetic.right
-                if arithmetic.operation == "addition"
-                else arithmetic.left - arithmetic.right
+            computed = cls._arithmetic_result(
+                arithmetic.operation,
+                arithmetic.left,
+                arithmetic.right,
             )
-            if arithmetic.result == computed:
+            if computed is not None and arithmetic.result == computed:
                 continue
             found_false_relation = True
             false_slot_ids.update(
