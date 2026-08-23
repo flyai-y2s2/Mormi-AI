@@ -1537,7 +1537,8 @@
           "L1",
           "L0"
         ],
-        "title": "ExpressionLevel"
+        "title": "ExpressionLevel",
+        "description": "Expression-support levels exposed by the dialogue contract.\n\n``L1`` remains parseable only for conversations and profiles created\nbefore the four-level ladder migration. New dialogue content and new\ntransitions use ``L4 -> L3 -> L2 -> L0`` without renumbering the labels."
       },
       "HTTPValidationError": {
         "properties": {
@@ -1786,6 +1787,159 @@
           "attribution_label"
         ],
         "title": "NoteUpdate"
+      },
+      "ParkFact": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "value": {
+            "type": "integer",
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Value"
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 20,
+            "title": "Unit",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "value"
+        ],
+        "title": "ParkFact",
+        "description": "One backend-owned fact shown in an amusement-park stage."
+      },
+      "ParkSessionContext": {
+        "properties": {
+          "theme_id": {
+            "type": "string",
+            "const": "amusement_park",
+            "title": "Theme Id"
+          },
+          "stage_id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Stage Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "mission": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Mission"
+          },
+          "skill": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Skill"
+          },
+          "strategy": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Strategy"
+          },
+          "mormi_misconception": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Mormi Misconception",
+            "default": ""
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/ParkFact"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 3,
+            "title": "Facts"
+          },
+          "required_verified_fact_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 3,
+            "title": "Required Verified Fact Keys"
+          },
+          "transfer": {
+            "$ref": "#/components/schemas/ParkTransfer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "theme_id",
+          "stage_id",
+          "title",
+          "mission",
+          "skill",
+          "strategy",
+          "prompt",
+          "facts",
+          "required_verified_fact_keys",
+          "transfer"
+        ],
+        "title": "ParkSessionContext",
+        "description": "Backend-reviewed amusement content frozen for one conversation.\n\nAI consumes these exact facts and copy; it never invents stage numbers."
+      },
+      "ParkTransfer": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Prompt"
+          },
+          "equation": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Equation"
+          },
+          "conclusion": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Conclusion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt",
+          "equation",
+          "conclusion"
+        ],
+        "title": "ParkTransfer"
       },
       "PedagogySnapshot": {
         "properties": {
@@ -2442,7 +2596,8 @@
         "type": "string",
         "enum": [
           "home_teach",
-          "cafe"
+          "cafe",
+          "amusement_park"
         ],
         "title": "SceneType"
       },
@@ -2510,6 +2665,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/QueueSessionContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "park_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParkSessionContext"
               },
               {
                 "type": "null"

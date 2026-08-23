@@ -564,15 +564,9 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
                 assert slots[slot_id]["claim_contract"]["supported"] is True
                 assert slots[slot_id]["claim_contract"]["value"] is None
             else:
-                assert (
-                    slots[slot_id]["claim_contract"]["value"]
-                    == "actual_child_claim_normalized"
-                )
+                assert slots[slot_id]["claim_contract"]["value"] == "actual_child_claim_normalized"
                 assert slots[slot_id]["claim_contract"]["supported"] is None
-                assert (
-                    slots[slot_id]["claim_contract"]["evidence_span"]
-                    == "exact_child_substring"
-                )
+                assert slots[slot_id]["claim_contract"]["evidence_span"] == "exact_child_substring"
         method_contract = payload["method_acceptance_contract"]
         assert method_contract["policy"] == task.help_method_policy
         assert method_contract["reviewed_examples"] == task.accepted_methods
@@ -581,8 +575,7 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         )
         assert any("related_vague" in instruction for instruction in payload["instructions"])
         assert any(
-            "아이가 실제로 주장한 값" in instruction
-            for instruction in payload["instructions"]
+            "아이가 실제로 주장한 값" in instruction for instruction in payload["instructions"]
         )
 
 
@@ -835,7 +828,7 @@ async def test_number_rich_supported_explanation_without_relation_is_rechecked_o
 
     assert len(messages.prompts) == 2
     assert result.arithmetic_claims[0].operation == "subtraction"
-    assert "숫자 사이의 덧셈·뺄셈 관계" in messages.prompts[1]
+    assert "숫자 사이의 덧셈·뺄셈·곱셈·나눗셈 관계" in messages.prompts[1]
 
 
 @pytest.mark.asyncio

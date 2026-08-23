@@ -20,6 +20,7 @@ from .schemas import (
     HintLevel,
     InputContract,
     InputKind,
+    ParkSessionContext,
     QueueSessionContext,
     SceneType,
     SlotClaim,
@@ -203,13 +204,8 @@ class SlotDefinition(BaseModel):
         # they must never decide whether a reviewed numeric fact is accepted.
         # Keep the normalization deliberately narrow: units and surrounding
         # words still have to match an explicit alias below.
-        normalized = (
-            str(value)
-            .strip()
-            .lower()
-            .replace(" ", "")
-            .replace(",", "")
-        )
+        normalized = str(value).strip().lower().replace(" ", "").replace(",", "")
+
         # Language understanding already happened in the classifier. Compare
         # its structured numeric value with the reviewed numeric answer even
         # when curriculum copy stores that answer as ``"1,200원"``. Do not
@@ -236,8 +232,7 @@ class SlotDefinition(BaseModel):
             *(str(item) for item in self.accepted_values),
         ]
         return normalized in {
-            item.strip().lower().replace(" ", "").replace(",", "")
-            for item in candidates
+            item.strip().lower().replace(" ", "").replace(",", "") for item in candidates
         }
 
     def canonical(self, value: object) -> str | int | float | bool:
@@ -354,7 +349,7 @@ class ArithmeticValidationContract(BaseModel):
     one calculation strategy.
     """
 
-    operation: Literal["addition", "subtraction"]
+    operation: Literal["addition", "subtraction", "multiplication", "division"]
     left: int
     right: int
     result: int
@@ -365,11 +360,16 @@ class ArithmeticValidationContract(BaseModel):
 
     @model_validator(mode="after")
     def validate_result(self) -> ArithmeticValidationContract:
-        expected = (
-            self.left + self.right
-            if self.operation == "addition"
-            else self.left - self.right
-        )
+        if self.operation == "addition":
+            expected = self.left + self.right
+        elif self.operation == "subtraction":
+            expected = self.left - self.right
+        elif self.operation == "multiplication":
+            expected = self.left * self.right
+        else:
+            if self.right == 0 or self.left % self.right:
+                raise ValueError("division contract must have an exact non-zero divisor")
+            expected = self.left // self.right
         if self.result != expected:
             raise ValueError("arithmetic validation contract has an inconsistent result")
         return self
@@ -433,8 +433,7 @@ class TaskDefinition(BaseModel):
         }
         if set(self.steps) != canonical_levels:
             raise ValueError(
-                f"{self.id}: dialogue tasks need exactly L4, L3, L2 and L0 steps; "
-                "L1 is legacy-only"
+                f"{self.id}: dialogue tasks need exactly L4, L3, L2 and L0 steps; L1 is legacy-only"
             )
         if any(step.input.kind is not InputKind.CHOICES for step in self.steps[ExpressionLevel.L2]):
             raise ValueError(f"{self.id}: every L2 step must use a choice input")
@@ -449,13 +448,11 @@ class TaskDefinition(BaseModel):
                         f"{self.id}/{step.id}: unknown target slots {sorted(unknown_slots)}"
                     )
                 declared_input_slots = [*step.target_slots, *step.optional_slots]
-                if (
-                    len(declared_input_slots) != len(set(declared_input_slots))
-                    or set(declared_input_slots) != set(step.input.target_slots)
-                ):
+                if len(declared_input_slots) != len(set(declared_input_slots)) or set(
+                    declared_input_slots
+                ) != set(step.input.target_slots):
                     raise ValueError(
-                        f"{self.id}/{step.id}: required/optional and input target slots "
-                        "must match"
+                        f"{self.id}/{step.id}: required/optional and input target slots must match"
                     )
         required_levels = {HintLevel.H1, HintLevel.H2, HintLevel.H3}
         if set(self.hints) != required_levels:
@@ -471,9 +468,7 @@ class TaskDefinition(BaseModel):
         if len(normalized_methods) != len(self.accepted_methods):
             raise ValueError(f"{self.id}: accepted help methods must be non-empty and unique")
         if self.hints[HintLevel.H2].support_mode not in allowed_guided_modes:
-            raise ValueError(
-                f"{self.id}: H2 support mode does not match declared help skills"
-            )
+            raise ValueError(f"{self.id}: H2 support mode does not match declared help skills")
         bodies: set[str] = set()
         for level in (HintLevel.H1, HintLevel.H2, HintLevel.H3):
             hint = self.hints[level]
@@ -513,8 +508,7 @@ class TaskDefinition(BaseModel):
         missing_completion_slots = set(self.required_slots) - joint_completion_slots
         if missing_completion_slots:
             raise ValueError(
-                f"{self.id}: L0 cannot complete required slots "
-                f"{sorted(missing_completion_slots)}"
+                f"{self.id}: L0 cannot complete required slots {sorted(missing_completion_slots)}"
             )
         return self
 
@@ -588,11 +582,7 @@ class TaskDefinition(BaseModel):
 
     @property
     def semantic_support_slots(self) -> set[str]:
-        return {
-            slot_id
-            for slot_id, slot in self.slots.items()
-            if slot.is_semantic_support
-        }
+        return {slot_id for slot_id, slot in self.slots.items() if slot.is_semantic_support}
 
 
 class ScenarioDefinition(BaseModel):
@@ -1229,9 +1219,7 @@ def calculation_task(
     resolved_right_label = right_label or (
         "두 번째 금액" if operation == "addition" else "사용한 금액"
     )
-    resolved_result_label = result_label or (
-        "전체 금액" if operation == "addition" else "거스름돈"
-    )
+    resolved_result_label = result_label or ("전체 금액" if operation == "addition" else "거스름돈")
     return TaskDefinition(
         id=task_id,
         dictionary_card_id=(
@@ -1316,8 +1304,7 @@ def calculation_task(
                 StepDefinition(
                     id="short_method",
                     prompt=(
-                        f"나 자리 계산에서 {method_label}을 어떻게 하는지 "
-                        "헷갈려... 알려줄 수 있어?"
+                        f"나 자리 계산에서 {method_label}을 어떻게 하는지 헷갈려... 알려줄 수 있어?"
                     ),
                     target_slots=["method"],
                     input=text_input("method", placeholder="방법만 짧게 알려줘"),
@@ -1451,8 +1438,18 @@ if set(KOREAN_COUNTS) != set(range(QUEUE_MIN_COUNT, QUEUE_MAX_COUNT + 1)):
 # 숫자를 소리 내어 읽었을 때 마지막 음절에 받침이 있는지.
 # 일(ㄹ) 삼(ㅁ) 육(ㄱ) 칠(ㄹ) 팔(ㄹ) 은 받침이 있고, 이 사 오 구 는 없다.
 # 0으로 끝나면 십·백·천 처럼 받침이 있는 소리로 읽는다.
-_DIGIT_HAS_FINAL = {0: True, 1: True, 2: False, 3: True, 4: False,
-                    5: False, 6: True, 7: True, 8: True, 9: False}
+_DIGIT_HAS_FINAL = {
+    0: True,
+    1: True,
+    2: False,
+    3: True,
+    4: False,
+    5: False,
+    6: True,
+    7: True,
+    8: True,
+    9: False,
+}
 
 
 def has_final_consonant(value: str | int) -> bool:
@@ -1491,12 +1488,9 @@ def queue_task(
     note_policy: str = "stage",
 ) -> TaskDefinition:
     if not (
-        QUEUE_MIN_COUNT <= left <= QUEUE_MAX_COUNT
-        and QUEUE_MIN_COUNT <= right <= QUEUE_MAX_COUNT
+        QUEUE_MIN_COUNT <= left <= QUEUE_MAX_COUNT and QUEUE_MIN_COUNT <= right <= QUEUE_MAX_COUNT
     ):
-        raise ValueError(
-            f"queue counts must be between {QUEUE_MIN_COUNT} and {QUEUE_MAX_COUNT}"
-        )
+        raise ValueError(f"queue counts must be between {QUEUE_MIN_COUNT} and {QUEUE_MAX_COUNT}")
     if left == right:
         raise ValueError("queue counts must differ")
     task = QUEUE_TASK.model_copy(deep=True)
@@ -1571,17 +1565,15 @@ def queue_task(
         choice.id: {"right_count": int(choice.id)}
         for choice in task.steps[ExpressionLevel.L2][1].input.choices
     }
-    task.steps[ExpressionLevel.L3][2].prompt = (
-        f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 알려줄 수 있어?"
-    )
-    task.steps[ExpressionLevel.L3][2].fallback_text = (
-        "나는 왜 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?"
-    )
+    task.steps[ExpressionLevel.L3][
+        2
+    ].prompt = f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 알려줄 수 있어?"
+    task.steps[ExpressionLevel.L3][
+        2
+    ].fallback_text = "나는 왜 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?"
     for level, step_index in ((ExpressionLevel.L2, 3),):
         reason_step = task.steps[level][step_index]
-        reason_step.prompt = (
-            f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
-        )
+        reason_step.prompt = f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
         reason_step.input = choice_input(
             ["reason"],
             [
@@ -1674,8 +1666,7 @@ def menu_selection_task(
         fallback = f"예산은 {budget:,}원이야. 네 메뉴 하나를 골라줄래?"
     else:
         prompt = (
-            f"나는 {mormi_menu.name}{particle(mormi_menu.name, '을', '를')} 골랐어. "
-            "너는 뭘 고를래?"
+            f"나는 {mormi_menu.name}{particle(mormi_menu.name, '을', '를')} 골랐어. 너는 뭘 고를래?"
         )
         fallback = "계산할 메뉴를 하나 골라줄래?"
     if len(prompt) > 50:
@@ -1764,9 +1755,7 @@ def menu_selection_task(
                     else "모르미가 고른 메뉴를 먼저 확인해 보자."
                 ),
                 support_mode="attention",
-                fact_refs=(
-                    ["budget", "mormi_menu"] if budget is not None else ["mormi_menu"]
-                ),
+                fact_refs=(["budget", "mormi_menu"] if budget is not None else ["mormi_menu"]),
             ),
             HintLevel.H2: reviewed_help_card(
                 HintLevel.H2,
@@ -1777,9 +1766,7 @@ def menu_selection_task(
                 ),
                 support_mode="guided_equation" if budget is not None else "guided_choice",
                 fact_refs=(
-                    ["budget", "mormi_menu"]
-                    if budget is not None
-                    else ["mormi_menu", "menu_items"]
+                    ["budget", "mormi_menu"] if budget is not None else ["mormi_menu", "menu_items"]
                 ),
                 action=(
                     "예산에서 모르미 메뉴값을 빼기"
@@ -2107,8 +2094,10 @@ def home_teaching_task(
             if isinstance(labels, list)
             else []
         )
-        if isinstance(amounts, list) and amounts and all(
-            isinstance(amount, int) and not isinstance(amount, bool) for amount in amounts
+        if (
+            isinstance(amounts, list)
+            and amounts
+            and all(isinstance(amount, int) and not isinstance(amount, bool) for amount in amounts)
         ):
             if "subtraction" in spec.help_skills and isinstance(visual.get("paid"), int):
                 paid = int(visual["paid"])
@@ -2119,9 +2108,7 @@ def home_teaching_task(
                     right=spent,
                     result=paid - spent,
                     left_label="낸 돈",
-                    right_label=(
-                        f"{item_labels[0]}값" if len(item_labels) == 1 else "물건값"
-                    ),
+                    right_label=(f"{item_labels[0]}값" if len(item_labels) == 1 else "물건값"),
                     result_label="남는 돈",
                     unit="원",
                 )
@@ -2133,13 +2120,9 @@ def home_teaching_task(
                     left=left,
                     right=right,
                     result=left + right,
-                    left_label=(
-                        f"{item_labels[0]} 가격" if item_labels else "첫 번째 물건값"
-                    ),
+                    left_label=(f"{item_labels[0]} 가격" if item_labels else "첫 번째 물건값"),
                     right_label=(
-                        f"{item_labels[1]} 가격"
-                        if len(item_labels) == 2
-                        else "나머지 물건값"
+                        f"{item_labels[1]} 가격" if len(item_labels) == 2 else "나머지 물건값"
                     ),
                     result_label="전체 금액",
                     unit="원",
@@ -2641,6 +2624,735 @@ def _configure_number_compare_task(
     }
 
 
+PARK_SCENARIO_IDS = {
+    "amusement_ticket_multiply",
+    "amusement_snack_divide",
+    "amusement_pass_compare",
+}
+PARK_PRIMARY_TASK_IDS = {scenario_id: f"{scenario_id}_primary" for scenario_id in PARK_SCENARIO_IDS}
+PARK_TRANSFER_TASK_IDS = {
+    scenario_id: f"{scenario_id}_transfer" for scenario_id in PARK_SCENARIO_IDS
+}
+
+
+def representative_park_context(scenario_id: str) -> ParkSessionContext:
+    """Return one reviewed contract used only by audits and regression tests."""
+
+    payloads: dict[str, dict[str, Any]] = {
+        "amusement_ticket_multiply": {
+            "stage_id": "ticket",
+            "title": "놀이동산 표 값 계산하기",
+            "mission": "표 여러 장의 전체 값을 구한다.",
+            "skill": "같은 값 여러 번 더하기",
+            "strategy": "표 한 장 값에 사람 수를 곱하면 전체 표 값을 구할 수 있어.",
+            "mormi_misconception": "표 한 장 값만 내면 된다고 생각함",
+            "prompt": "표 한 장이 3,000원이고 둘이 가면 모두 얼마인지 알려줄 수 있어?",
+            "facts": [
+                {"key": "ticket_price", "label": "표 한 장 값", "value": 3000, "unit": "원"},
+                {"key": "party_count", "label": "함께 갈 사람", "value": 2, "unit": "명"},
+                {"key": "total_price", "label": "전체 표 값", "value": 6000, "unit": "원"},
+            ],
+            "required_verified_fact_keys": ["ticket_price", "party_count", "total_price"],
+            "transfer": {
+                "prompt": "표 한 장이 3,500원이고 네 명이 가면 모두 얼마인지 알려줄 수 있어?",
+                "equation": "3500×4=14000",
+                "conclusion": "3,500원짜리 표 네 장은 모두 14,000원이야.",
+            },
+        },
+        "amusement_snack_divide": {
+            "stage_id": "snack_split",
+            "title": "간식 값 나누어 내기",
+            "mission": "간식 값을 똑같이 나누어 낸다.",
+            "skill": "똑같이 나누기",
+            "strategy": "간식의 전체 값을 함께 낼 사람 수로 나누면 한 사람 값을 구할 수 있어.",
+            "mormi_misconception": "한 사람이 전체 값을 다 내야 한다고 생각함",
+            "prompt": "6,000원인 간식을 세 명이 똑같이 내려면 한 명은 얼마씩 내야 해?",
+            "facts": [
+                {"key": "snack_total", "label": "간식의 전체 값", "value": 6000, "unit": "원"},
+                {"key": "payer_count", "label": "함께 낼 사람", "value": 3, "unit": "명"},
+                {"key": "per_person", "label": "한 사람의 값", "value": 2000, "unit": "원"},
+            ],
+            "required_verified_fact_keys": ["snack_total", "payer_count", "per_person"],
+            "transfer": {
+                "prompt": "8,000원인 간식을 네 명이 똑같이 내려면 한 명은 얼마씩 내야 해?",
+                "equation": "8000÷4=2000",
+                "conclusion": "8,000원을 네 명이 나누면 한 명은 2,000원씩 내면 돼.",
+            },
+        },
+        "amusement_pass_compare": {
+            "stage_id": "pass_break_even",
+            "title": "자유이용권 값 비교하기",
+            "mission": "몇 번부터 자유이용권이 더 나은지 비교한다.",
+            "skill": "값을 나누고 비교하기",
+            "strategy": "자유이용권 값을 한 번 타는 값으로 나누고 이용 횟수와 비교하면 돼.",
+            "mormi_misconception": "자유이용권은 언제나 더 비싸다고 생각함",
+            "prompt": (
+                "한 번에 2,000원이고 자유이용권은 10,000원이야. 몇 번부터 자유이용권이 더 나아?"
+            ),
+            "facts": [
+                {"key": "single_ride_price", "label": "한 번 타는 값", "value": 2000, "unit": "원"},
+                {"key": "day_pass_price", "label": "자유이용권 값", "value": 10000, "unit": "원"},
+                {
+                    "key": "break_even_rides",
+                    "label": "값이 같아지는 횟수",
+                    "value": 5,
+                    "unit": "번",
+                },
+                {
+                    "key": "benefit_from_rides",
+                    "label": "자유이용권이 나은 시작 횟수",
+                    "value": 6,
+                    "unit": "번",
+                },
+            ],
+            "required_verified_fact_keys": [
+                "single_ride_price",
+                "day_pass_price",
+                "break_even_rides",
+                "benefit_from_rides",
+            ],
+            "transfer": {
+                "prompt": (
+                    "한 번에 3,000원이고 자유이용권은 12,000원이야. 몇 번부터 자유이용권이 더 나아?"
+                ),
+                "equation": "12000÷3000=4",
+                "conclusion": "4번이면 값이 같고 5번부터 자유이용권이 더 나아.",
+            },
+        },
+    }
+    try:
+        payload = payloads[scenario_id]
+    except KeyError as error:
+        raise ValueError(f"unsupported amusement scenario: {scenario_id}") from error
+    return ParkSessionContext(theme_id="amusement_park", **payload)
+
+
+def _park_context_from_data(data: Mapping[str, Any]) -> ParkSessionContext:
+    raw_context = data.get("park_context")
+    if not isinstance(raw_context, Mapping):
+        raise ValueError("scenario_data.park_context is required")
+    return ParkSessionContext.model_validate(raw_context)
+
+
+def _park_fact_values(context: ParkSessionContext) -> dict[str, int]:
+    return {fact.key: fact.value for fact in context.facts}
+
+
+def _park_fact_labels(context: ParkSessionContext) -> dict[str, str]:
+    return {fact.key: fact.label for fact in context.facts}
+
+
+def _park_amount_aliases(value: int, unit: str) -> list[str]:
+    aliases = [str(value), f"{value:,}"]
+    if unit:
+        aliases.extend([f"{value}{unit}", f"{value:,}{unit}"])
+    return list(dict.fromkeys(aliases))
+
+
+def _park_number_choices(
+    answer: int,
+    *,
+    unit: str,
+    money: bool,
+) -> tuple[
+    list[ChoiceOption],
+    dict[str, dict[str, str | int | float | bool]],
+]:
+    step = max(100, min(1_000, answer // 5 or 100)) if money else 1
+    values = {answer, max(0, answer - step), answer + step}
+    while len(values) < 3:
+        values.add(max(values) + step)
+    choices = [option(f"value_{value}", f"{value:,}{unit}") for value in sorted(values)]
+    effects: dict[str, dict[str, str | int | float | bool]] = {
+        f"value_{value}": {"answer": value} for value in values
+    }
+    return choices, effects
+
+
+def _park_strategy_choices(
+    correct_label: str,
+) -> tuple[
+    list[ChoiceOption],
+    dict[str, dict[str, str | int | float | bool]],
+]:
+    choices = [
+        option("strategy_correct", correct_label),
+        option("strategy_add", "두 수를 더해"),
+        option("strategy_subtract", "큰 수에서 작은 수를 빼"),
+    ]
+    # A structured choice stores the reviewed strategy text. Free child
+    # language remains open-method and is interpreted by the classifier.
+    return choices, {
+        "strategy_correct": {"strategy": correct_label},
+        "strategy_add": {"strategy": "두 수를 더해"},
+        "strategy_subtract": {"strategy": "큰 수에서 작은 수를 빼"},
+    }
+
+
+def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
+    values = _park_fact_values(context)
+    labels = _park_fact_labels(context)
+    visual_facts = [fact.model_dump(mode="json") for fact in context.facts]
+    common_visual = {
+        "theme_id": context.theme_id,
+        "stage_id": context.stage_id,
+        "title": context.title,
+        "mission": context.mission,
+        "facts": visual_facts,
+        "hide_required_results": True,
+    }
+
+    if context.stage_id == "ticket":
+        left_key, right_key, answer_key = (
+            "ticket_price",
+            "party_count",
+            "total_price",
+        )
+        operation: Literal["multiplication", "division"] = "multiplication"
+        symbol = "×"
+        answer_unit = next(fact.unit for fact in context.facts if fact.key == answer_key)
+        dictionary_card_id = "dictionary.home.multiply-groups"
+        help_skills: list[HelpSkill] = ["grouping"]
+        skill_id = "amusement_ticket_multiply"
+        strategy_choice = "표 한 장 값에 사람 수를 곱해"
+        short_answer_prompt = "그럼 표 값은 모두 얼마인지 알려줄 수 있어?"
+        short_strategy_prompt = "그 금액을 어떻게 구하는지 알려줄 수 있어?"
+        h1 = "표 한 장 값과 함께 갈 사람 수를 살펴보자."
+        h2 = f"{values[left_key]:,}×{values[right_key]}=□로 나타내 보자."
+        h3 = (
+            f"{values[left_key]:,}원씩 {values[right_key]}명이면 모두 {values[answer_key]:,}원이야."
+        )
+        note_context = "놀이동산 표 여러 장의 전체 값을 구하는 방법"
+        note_conclusion = f"표 값은 모두 {values[answer_key]:,}원이야."
+        misconception_tags = ["repeated_addition_confusion", "multiplication_error"]
+    elif context.stage_id == "snack_split":
+        left_key, right_key, answer_key = "snack_total", "payer_count", "per_person"
+        operation = "division"
+        symbol = "÷"
+        answer_unit = next(fact.unit for fact in context.facts if fact.key == answer_key)
+        dictionary_card_id = "dictionary.home.divide-share"
+        help_skills = ["grouping"]
+        skill_id = "amusement_snack_divide"
+        strategy_choice = "전체 값을 사람 수로 나눠"
+        short_answer_prompt = "그럼 한 사람은 얼마씩 내면 되는지 알려줄 수 있어?"
+        short_strategy_prompt = "한 사람 값을 어떻게 구하는지 알려줄 수 있어?"
+        h1 = "간식의 전체 값과 함께 낼 사람 수를 살펴보자."
+        h2 = f"{values[left_key]:,}÷{values[right_key]}=□로 나타내 보자."
+        h3 = (
+            f"{values[left_key]:,}원을 {values[right_key]}명이 똑같이 내면 "
+            f"한 사람은 {values[answer_key]:,}원이야."
+        )
+        note_context = "간식 값을 여러 사람이 똑같이 나누어 내는 방법"
+        note_conclusion = f"한 사람은 {values[answer_key]:,}원씩 내면 돼."
+        misconception_tags = ["equal_share_confusion", "division_error"]
+    elif context.stage_id == "pass_break_even":
+        left_key, right_key, answer_key = (
+            "day_pass_price",
+            "single_ride_price",
+            "break_even_rides",
+        )
+        operation = "division"
+        symbol = "÷"
+        answer_unit = next(fact.unit for fact in context.facts if fact.key == answer_key)
+        dictionary_card_id = "dictionary.home.number-compare"
+        help_skills = ["comparison", "grouping"]
+        skill_id = "amusement_pass_compare"
+        strategy_choice = "자유이용권 값과 여러 번 탄 값을 비교해"
+        short_answer_prompt = "몇 번 타면 두 값이 같아지는지 알려줄 수 있어?"
+        short_strategy_prompt = "몇 번부터 자유이용권이 나은지도 알려줄 수 있어?"
+        h1 = "한 번 타는 값과 자유이용권 값을 살펴보자."
+        h2 = f"{values[left_key]:,}÷{values[right_key]:,}=□로 나타내 보자."
+        h3 = (
+            f"{values[answer_key]}번이면 값이 같고, "
+            f"{values['benefit_from_rides']}번부터 자유이용권이 더 나아."
+        )
+        note_context = "놀이기구 이용 횟수와 자유이용권 값을 비교하는 방법"
+        note_conclusion = (
+            f"{values[answer_key]}번이면 값이 같고 "
+            f"{values['benefit_from_rides']}번부터 자유이용권이 더 나아."
+        )
+        misconception_tags = ["break_even_confusion", "comparison_error"]
+    else:  # ParkSessionContext already constrains stage IDs at the API boundary.
+        raise ValueError(f"unsupported amusement stage: {context.stage_id}")
+
+    answer_choices, answer_effects = _park_number_choices(
+        values[answer_key],
+        unit=answer_unit,
+        money=answer_unit == "원",
+    )
+    strategy_choices, strategy_effects = _park_strategy_choices(strategy_choice)
+    slots: dict[str, SlotDefinition] = {
+        "answer": SlotDefinition(
+            id="answer",
+            description=labels[answer_key],
+            semantic_role="conclusion",
+            expected=values[answer_key],
+            aliases=_park_amount_aliases(values[answer_key], answer_unit),
+            fact_sentence=f"{labels[answer_key]}은 {values[answer_key]:,}{answer_unit}이야.",
+        ),
+        "strategy": SlotDefinition(
+            id="strategy",
+            description="값을 구한 방법",
+            semantic_role="method",
+            expected=context.strategy,
+            aliases=[strategy_choice],
+            fact_sentence=context.strategy,
+        ),
+    }
+    required_slots = ["answer", "strategy"]
+    l3_steps = [
+        StepDefinition(
+            id="short_answer",
+            prompt=short_answer_prompt,
+            target_slots=["answer"],
+            input=text_input("answer", placeholder="답만 짧게 알려줘"),
+            fallback_text=short_answer_prompt,
+        ),
+    ]
+    l2_steps = [
+        StepDefinition(
+            id="choose_answer",
+            prompt=short_answer_prompt,
+            target_slots=["answer"],
+            input=choice_input(["answer"], answer_choices),
+            choice_effects=answer_effects,
+            fallback_text="여기서 골라서 알려줄 수 있어?",
+        ),
+    ]
+    completion_values: dict[str, str | int] = {
+        "answer": values[answer_key],
+        "strategy": context.strategy,
+    }
+
+    if context.stage_id == "pass_break_even":
+        benefit = values["benefit_from_rides"]
+        benefit_choices, benefit_effects = _park_number_choices(
+            benefit,
+            unit="번",
+            money=False,
+        )
+        # Choice helpers use the generic answer key; remap it to this slot.
+        benefit_effects = {
+            choice_id: {"benefit_from_rides": effect["answer"]}
+            for choice_id, effect in benefit_effects.items()
+        }
+        slots["benefit_from_rides"] = SlotDefinition(
+            id="benefit_from_rides",
+            description=labels["benefit_from_rides"],
+            semantic_role="conclusion",
+            expected=benefit,
+            aliases=_park_amount_aliases(benefit, "번"),
+            fact_sentence=f"{benefit}번부터 자유이용권이 더 나아.",
+        )
+        required_slots = ["answer", "benefit_from_rides", "strategy"]
+        l3_steps.append(
+            StepDefinition(
+                id="short_benefit",
+                prompt=short_strategy_prompt,
+                target_slots=["benefit_from_rides"],
+                input=text_input("benefit_from_rides", placeholder="몇 번부터인지 알려줘"),
+                fallback_text=short_strategy_prompt,
+            )
+        )
+        l2_steps.append(
+            StepDefinition(
+                id="choose_benefit",
+                prompt=short_strategy_prompt,
+                target_slots=["benefit_from_rides"],
+                input=choice_input(["benefit_from_rides"], benefit_choices),
+                choice_effects=benefit_effects,
+                fallback_text="몇 번부터인지 골라서 알려줄 수 있어?",
+            )
+        )
+        completion_values["benefit_from_rides"] = benefit
+
+    l3_steps.append(
+        StepDefinition(
+            id="short_strategy",
+            prompt=(
+                "그렇게 비교하는 방법도 알려줄 수 있어?"
+                if context.stage_id == "pass_break_even"
+                else short_strategy_prompt
+            ),
+            target_slots=["strategy"],
+            input=text_input("strategy", placeholder="계산 방법을 짧게 알려줘"),
+            fallback_text=short_strategy_prompt,
+        )
+    )
+    l2_steps.append(
+        StepDefinition(
+            id="choose_strategy",
+            prompt="어떻게 구하는지 여기서 골라서 알려줄 수 있어?",
+            target_slots=["strategy"],
+            input=choice_input(["strategy"], strategy_choices),
+            choice_effects=strategy_effects,
+            fallback_text="여기서 방법을 골라서 알려줄 수 있어?",
+        )
+    )
+
+    return TaskDefinition(
+        id=PARK_PRIMARY_TASK_IDS[context_for_scenario(context)],
+        dictionary_card_id=dictionary_card_id,
+        scene=SceneType.AMUSEMENT_PARK,
+        stage_id=context.stage_id,
+        skill_id=skill_id,
+        help_skills=help_skills,
+        help_method_policy=(
+            "open_methods" if context.stage_id == "pass_break_even" else "target_method"
+        ),
+        accepted_methods=list(dict.fromkeys([context.strategy, strategy_choice])),
+        title=context.title,
+        goal=context.mission,
+        visible_facts={
+            left_key: values[left_key],
+            right_key: values[right_key],
+            "skill": context.skill,
+            "mormi_misconception": context.mormi_misconception,
+        },
+        arithmetic_contract=ArithmeticValidationContract(
+            operation=operation,
+            left=values[left_key],
+            right=values[right_key],
+            result=values[answer_key],
+            left_label=labels[left_key],
+            right_label=labels[right_key],
+            result_label=labels[answer_key],
+            unit=answer_unit,
+        ),
+        slots=slots,
+        required_slots=required_slots,
+        steps={
+            ExpressionLevel.L4: [
+                StepDefinition(
+                    id="free_teaching",
+                    prompt=context.prompt,
+                    target_slots=required_slots,
+                    input=text_input(*required_slots, placeholder="답과 방법을 알려줘"),
+                    fallback_text=context.prompt,
+                )
+            ],
+            ExpressionLevel.L3: l3_steps,
+            ExpressionLevel.L2: l2_steps,
+            ExpressionLevel.L0: [
+                StepDefinition(
+                    id="joint_solution",
+                    prompt="도움 카드의 풀이를 나와 같이 확인해 볼까?",
+                    target_slots=required_slots,
+                    input=InputContract(
+                        kind=InputKind.JOINT,
+                        target_slots=required_slots,
+                        config={
+                            "text": h3,
+                            "completion_values": completion_values,
+                        },
+                    ),
+                    fallback_text="도움 카드의 풀이를 나와 같이 확인해 볼까?",
+                )
+            ],
+        },
+        hints={
+            HintLevel.H1: reviewed_help_card(
+                HintLevel.H1,
+                body=h1,
+                support_mode="attention",
+                fact_refs=[left_key, right_key],
+            ),
+            HintLevel.H2: reviewed_help_card(
+                HintLevel.H2,
+                body=h2,
+                support_mode="guided_equation",
+                fact_refs=[left_key, right_key],
+                action="주어진 수를 식에 넣고 빈칸 확인하기",
+                visual_type="amusement_equation",
+                visual_data={
+                    "left": values[left_key],
+                    "right": values[right_key],
+                    "symbol": symbol,
+                    "result_hidden": True,
+                },
+            ),
+            HintLevel.H3: reviewed_help_card(
+                HintLevel.H3,
+                body=h3,
+                support_mode="joint_model",
+                fact_refs=[left_key, right_key, *required_slots],
+                action="완성된 풀이를 함께 확인하기",
+                visual_type="amusement_joint_solution",
+                visual_data={**common_visual, "result_hidden": False},
+            ),
+        },
+        base_visual=VisualContract(type="amusement_park", data=common_visual),
+        misconception_tags=misconception_tags,
+        coauthored_note=f"{context.strategy} {note_conclusion}",
+        note_context=note_context,
+        note_direct_conclusion=note_conclusion,
+        note_slots=required_slots,
+        text_explanation_slots=["strategy"],
+        behavior="amusement_teaching",
+        note_policy="stage",
+        transition_text="네가 알려준 방법으로 다른 수도 해보고 싶어.",
+    )
+
+
+def context_for_scenario(context: ParkSessionContext) -> str:
+    by_stage = {
+        "ticket": "amusement_ticket_multiply",
+        "snack_split": "amusement_snack_divide",
+        "pass_break_even": "amusement_pass_compare",
+    }
+    try:
+        return by_stage[context.stage_id]
+    except KeyError as error:
+        raise ValueError(f"unsupported amusement stage: {context.stage_id}") from error
+
+
+_TRANSFER_EQUATION = re.compile(r"^\s*([\d,]+)\s*([+\-×xX*÷/])\s*([\d,]+)\s*=\s*([\d,]+)\s*$")
+
+
+def _parse_park_transfer_equation(
+    equation: str,
+) -> tuple[int, Literal["addition", "subtraction", "multiplication", "division"], int, int]:
+    match = _TRANSFER_EQUATION.fullmatch(equation)
+    if match is None:
+        raise ValueError("park transfer equation must be one reviewed arithmetic equation")
+    left = int(match.group(1).replace(",", ""))
+    symbol = match.group(2)
+    right = int(match.group(3).replace(",", ""))
+    result = int(match.group(4).replace(",", ""))
+    operations: dict[str, Literal["addition", "subtraction", "multiplication", "division"]] = {
+        "+": "addition",
+        "-": "subtraction",
+        "×": "multiplication",
+        "x": "multiplication",
+        "X": "multiplication",
+        "*": "multiplication",
+        "÷": "division",
+        "/": "division",
+    }
+    operation = operations[symbol]
+    ArithmeticValidationContract(
+        operation=operation,
+        left=left,
+        right=right,
+        result=result,
+    )
+    return left, operation, right, result
+
+
+def _park_transfer_task(context: ParkSessionContext) -> TaskDefinition:
+    scenario_id = context_for_scenario(context)
+    left, operation, right, result = _parse_park_transfer_equation(context.transfer.equation)
+    expected_operation = {
+        "ticket": "multiplication",
+        "snack_split": "division",
+        "pass_break_even": "division",
+    }[context.stage_id]
+    if operation != expected_operation:
+        raise ValueError("park transfer equation operation does not match stage")
+    symbol = {
+        "addition": "+",
+        "subtraction": "-",
+        "multiplication": "×",
+        "division": "÷",
+    }[operation]
+    unit = "번" if context.stage_id == "pass_break_even" else "원"
+    choices, effects = _park_number_choices(
+        result,
+        unit=unit,
+        money=unit == "원",
+    )
+    required_slots = ["answer"]
+    slots: dict[str, SlotDefinition] = {
+        "answer": SlotDefinition(
+            id="answer",
+            description="새로운 수로 구한 답",
+            semantic_role="conclusion",
+            expected=result,
+            aliases=_park_amount_aliases(result, unit),
+            fact_sentence=f"새로운 수로 구한 답은 {result:,}{unit}이야.",
+        )
+    }
+    completion_values: dict[str, int] = {"answer": result}
+    l3_steps = [
+        StepDefinition(
+            id="short_transfer_answer",
+            prompt="새로운 수로 구한 답도 알려줄 수 있어?",
+            target_slots=["answer"],
+            input=text_input("answer", placeholder="답만 짧게 알려줘"),
+            fallback_text="새로운 수로 구한 답도 알려줄 수 있어?",
+        )
+    ]
+    l2_steps = [
+        StepDefinition(
+            id="choose_transfer_answer",
+            prompt="새로운 수로 구한 답을 여기서 골라줄 수 있어?",
+            target_slots=["answer"],
+            input=choice_input(["answer"], choices),
+            choice_effects=effects,
+            fallback_text="여기서 골라서 알려줄 수 있어?",
+        )
+    ]
+    if context.stage_id == "pass_break_even":
+        benefit = result + 1
+        benefit_choices, raw_effects = _park_number_choices(
+            benefit,
+            unit="번",
+            money=False,
+        )
+        benefit_effects = {
+            choice_id: {"benefit_from_rides": effect["answer"]}
+            for choice_id, effect in raw_effects.items()
+        }
+        slots["benefit_from_rides"] = SlotDefinition(
+            id="benefit_from_rides",
+            description="새로운 값에서 자유이용권이 나은 횟수",
+            semantic_role="conclusion",
+            expected=benefit,
+            aliases=_park_amount_aliases(benefit, "번"),
+            fact_sentence=f"새로운 값에서는 {benefit}번부터 자유이용권이 더 나아.",
+        )
+        required_slots.append("benefit_from_rides")
+        completion_values["benefit_from_rides"] = benefit
+        l3_steps.append(
+            StepDefinition(
+                id="short_transfer_benefit",
+                prompt="그럼 몇 번부터 자유이용권이 더 나은지도 알려줄 수 있어?",
+                target_slots=["benefit_from_rides"],
+                input=text_input("benefit_from_rides", placeholder="몇 번부터인지 알려줘"),
+                fallback_text="몇 번부터 자유이용권이 나은지 알려줄 수 있어?",
+            )
+        )
+        l2_steps.append(
+            StepDefinition(
+                id="choose_transfer_benefit",
+                prompt="몇 번부터 더 나은지 여기서 골라줄 수 있어?",
+                target_slots=["benefit_from_rides"],
+                input=choice_input(["benefit_from_rides"], benefit_choices),
+                choice_effects=benefit_effects,
+                fallback_text="몇 번부터인지 골라서 알려줄 수 있어?",
+            )
+        )
+
+    dictionary_card_id = {
+        "amusement_ticket_multiply": "dictionary.home.multiply-groups",
+        "amusement_snack_divide": "dictionary.home.divide-share",
+        "amusement_pass_compare": "dictionary.home.number-compare",
+    }[scenario_id]
+    help_skill: HelpSkill = "comparison" if scenario_id == "amusement_pass_compare" else "grouping"
+    return TaskDefinition(
+        id=PARK_TRANSFER_TASK_IDS[scenario_id],
+        dictionary_card_id=dictionary_card_id,
+        scene=SceneType.AMUSEMENT_PARK,
+        stage_id=f"{context.stage_id}_transfer",
+        skill_id=f"{scenario_id}_transfer",
+        help_skills=[help_skill],
+        help_method_policy=(
+            "open_methods" if context.stage_id == "pass_break_even" else "target_method"
+        ),
+        accepted_methods=[context.strategy],
+        title=f"{context.title} 다시 해보기",
+        goal="같은 생활수학 기능을 새로운 수에도 적용한다.",
+        visible_facts={
+            "left": left,
+            "right": right,
+            "operation": operation,
+            "source_prompt": context.transfer.prompt,
+        },
+        arithmetic_contract=ArithmeticValidationContract(
+            operation=operation,
+            left=left,
+            right=right,
+            result=result,
+            unit=unit,
+        ),
+        slots=slots,
+        required_slots=required_slots,
+        steps={
+            ExpressionLevel.L4: [
+                StepDefinition(
+                    id="free_transfer",
+                    prompt=context.transfer.prompt,
+                    target_slots=required_slots,
+                    input=text_input(*required_slots, placeholder="새로운 수도 알려줘"),
+                    fallback_text=context.transfer.prompt,
+                )
+            ],
+            ExpressionLevel.L3: l3_steps,
+            ExpressionLevel.L2: l2_steps,
+            ExpressionLevel.L0: [
+                StepDefinition(
+                    id="joint_transfer",
+                    prompt="도움 카드의 새로운 예를 나와 같이 확인해 볼까?",
+                    target_slots=required_slots,
+                    input=InputContract(
+                        kind=InputKind.JOINT,
+                        target_slots=required_slots,
+                        config={
+                            "text": context.transfer.conclusion,
+                            "completion_values": completion_values,
+                        },
+                    ),
+                    fallback_text="도움 카드의 새로운 예를 나와 같이 확인해 볼까?",
+                )
+            ],
+        },
+        hints={
+            HintLevel.H1: reviewed_help_card(
+                HintLevel.H1,
+                body="새로운 문제에 나온 두 수를 살펴보자.",
+                support_mode="attention",
+                fact_refs=["left", "right"],
+            ),
+            HintLevel.H2: reviewed_help_card(
+                HintLevel.H2,
+                body=f"{left:,}{symbol}{right:,}=□로 나타내 보자.",
+                support_mode=(
+                    "guided_choice"
+                    if scenario_id == "amusement_pass_compare"
+                    else "guided_equation"
+                ),
+                fact_refs=["left", "right", "operation"],
+                action="새로운 수를 식에 넣고 빈칸 확인하기",
+                visual_type="amusement_transfer_equation",
+                visual_data={
+                    "left": left,
+                    "right": right,
+                    "symbol": symbol,
+                    "result_hidden": True,
+                },
+            ),
+            HintLevel.H3: reviewed_help_card(
+                HintLevel.H3,
+                body=context.transfer.conclusion,
+                support_mode="joint_model",
+                fact_refs=["left", "right", *required_slots],
+                action="새로운 수로 완성한 풀이 확인하기",
+                visual_type="amusement_transfer_solution",
+                visual_data={
+                    "equation": context.transfer.equation,
+                    "conclusion": context.transfer.conclusion,
+                },
+            ),
+        },
+        base_visual=VisualContract(
+            type="amusement_park_transfer",
+            data={
+                "theme_id": context.theme_id,
+                "stage_id": context.stage_id,
+                "prompt": context.transfer.prompt,
+                "left": left,
+                "right": right,
+                "operation": operation,
+                "result_hidden": True,
+            },
+        ),
+        misconception_tags=["transfer_error"],
+        coauthored_note=context.transfer.conclusion,
+        note_policy="none",
+        behavior="amusement_transfer",
+    )
+
+
 QUEUE_TASK_ID = "cafe_queue"
 HOME_TEACH_TASK_ID = "home_teaching"
 BUDGET_MENU_TASK_ID = "cafe_budget_menu_pick"
@@ -2687,6 +3399,33 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         title="4단계 거스름돈 받기",
         task_ids=[CHANGE_TASK_ID],
     ),
+    "amusement_ticket_multiply": ScenarioDefinition(
+        id="amusement_ticket_multiply",
+        scene=SceneType.AMUSEMENT_PARK,
+        title="놀이동산 표 값 계산하기",
+        task_ids=[
+            PARK_PRIMARY_TASK_IDS["amusement_ticket_multiply"],
+            PARK_TRANSFER_TASK_IDS["amusement_ticket_multiply"],
+        ],
+    ),
+    "amusement_snack_divide": ScenarioDefinition(
+        id="amusement_snack_divide",
+        scene=SceneType.AMUSEMENT_PARK,
+        title="간식 값 나누어 내기",
+        task_ids=[
+            PARK_PRIMARY_TASK_IDS["amusement_snack_divide"],
+            PARK_TRANSFER_TASK_IDS["amusement_snack_divide"],
+        ],
+    ),
+    "amusement_pass_compare": ScenarioDefinition(
+        id="amusement_pass_compare",
+        scene=SceneType.AMUSEMENT_PARK,
+        title="자유이용권 값 비교하기",
+        task_ids=[
+            PARK_PRIMARY_TASK_IDS["amusement_pass_compare"],
+            PARK_TRANSFER_TASK_IDS["amusement_pass_compare"],
+        ],
+    ),
 }
 
 
@@ -2696,6 +3435,7 @@ def create_scenario_data(
     rng: Any | None = None,
     *,
     queue_context: QueueSessionContext | None = None,
+    park_context: ParkSessionContext | None = None,
     curriculum_session_id: str | None = None,
     skill_id: str | None = None,
     practice_result_id: str | None = None,
@@ -2717,6 +3457,14 @@ def create_scenario_data(
         if cafe_context is None:
             raise ValueError("cafe_context is required for menu scenarios")
         data.update(cafe_context.model_dump(mode="json", exclude_none=True))
+    if scenario_id in PARK_SCENARIO_IDS:
+        if park_context is None:
+            raise ValueError("park_context is required for amusement scenarios")
+        if context_for_scenario(park_context) != scenario_id:
+            raise ValueError("park_context.stage_id does not match scenario_id")
+        # Freeze the complete BE-reviewed contract for all turns and retries.
+        # AI must never regenerate stage numbers or instructional copy.
+        data["park_context"] = park_context.model_dump(mode="json")
     if scenario_id == "home_teach":
         if not curriculum_session_id:
             raise ValueError("curriculum_session_id is required for home_teach")
@@ -2774,6 +3522,18 @@ def get_task(task_id: str, scenario_data: Mapping[str, Any] | None = None) -> Ta
         if not isinstance(skill_id, str) or not skill_id:
             raise ValueError("scenario_data.skill_id is required")
         return home_teaching_task(HomeTeachingSpec.model_validate(raw_spec), skill_id=skill_id)
+    for scenario_id, primary_task_id in PARK_PRIMARY_TASK_IDS.items():
+        if task_id == primary_task_id:
+            context = _park_context_from_data(data)
+            if context_for_scenario(context) != scenario_id:
+                raise ValueError("park task and context scenario do not match")
+            return _park_primary_task(context)
+    for scenario_id, transfer_task_id in PARK_TRANSFER_TASK_IDS.items():
+        if task_id == transfer_task_id:
+            context = _park_context_from_data(data)
+            if context_for_scenario(context) != scenario_id:
+                raise ValueError("park task and context scenario do not match")
+            return _park_transfer_task(context)
     menu_items = _menu_items_from_data(data)
     mormi_menu = _menu_from_data(data, "mormi_menu_id", menu_items)
     if task_id == BUDGET_MENU_TASK_ID:
@@ -2866,6 +3626,7 @@ def validate_content() -> None:
         mormi_menu_id="sample-a",
         budget=10000,
     )
+    tasks_to_validate: list[TaskDefinition] = []
     for scenario in SCENARIOS.values():
         if scenario.id == "home_teach":
             for spec in HOME_TEACHING_CATALOG.values():
@@ -2874,37 +3635,21 @@ def validate_content() -> None:
                     curriculum_session_id=spec.id,
                     skill_id=spec.id,
                 )
-                get_task(HOME_TEACH_TASK_ID, scenario_data)
+                tasks_to_validate.append(get_task(HOME_TEACH_TASK_ID, scenario_data))
             continue
+        park_context = (
+            representative_park_context(scenario.id) if scenario.id in PARK_SCENARIO_IDS else None
+        )
         scenario_data = create_scenario_data(
             scenario.id,
             validation_context if scenario.id in MENU_SCENARIO_IDS else None,
+            park_context=park_context,
         )
         for task_id in scenario.task_ids:
             task_data = scenario_data
             if task_id == TOTAL_CALC_TASK_ID:
                 task_data = {**scenario_data, "child_menu_id": "sample-b"}
-            get_task(task_id, task_data)
-    task_ids = {
-        task_id
-        for scenario in SCENARIOS.values()
-        if scenario.id != "home_teach"
-        for task_id in scenario.task_ids
-    }
-    sample_data = {
-        **create_scenario_data("cafe_menu_total", validation_context),
-        "child_menu_id": "sample-b",
-    }
-    tasks_to_validate = [
-        get_task(
-            task_id,
-            sample_data if task_id != QUEUE_TASK_ID else {},
-        )
-        for task_id in task_ids
-    ]
-    tasks_to_validate.extend(
-        home_teaching_task(spec, skill_id=spec.id) for spec in HOME_TEACHING_CATALOG.values()
-    )
+            tasks_to_validate.append(get_task(task_id, task_data))
     for task in tasks_to_validate:
         if set(task.required_slots) - set(task.slots):
             raise ValueError(f"{task.id}: required slot is undefined")
