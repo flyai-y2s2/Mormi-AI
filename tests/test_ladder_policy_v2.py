@@ -16,4 +16,3 @@ def test_non_speech_responses_use_deterministic_ladder_policy() -> None:
 def test_text_responses_are_delegated_to_speech_model() -> None:
     assert rule_recommendation(LadderLevel.L4, ResponseMode.FREE_TEXT) is None
     assert rule_recommendation(LadderLevel.L3, ResponseMode.SHORT_ANSWER) is None
-

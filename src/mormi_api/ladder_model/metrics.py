@@ -48,4 +48,3 @@ def evaluate_label_ids(
         confusion_matrix=confusion,
         support=support,
     )
-

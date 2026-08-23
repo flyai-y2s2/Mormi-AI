@@ -44,4 +44,3 @@ def test_label_order_follows_support_ladder() -> None:
         LadderLevel.L3: 2,
         LadderLevel.L4: 3,
     }
-

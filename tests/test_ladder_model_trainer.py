@@ -27,7 +27,6 @@ def test_loader_returns_only_model_text_and_integer_label(tmp_path) -> None:
         {"input_text": "[현재단계=L4] 아이 응답", "label": 2}
     ]
 
-
 def test_loader_rejects_label_target_disagreement(tmp_path) -> None:
     path = tmp_path / "bad.jsonl"
     path.write_text(

@@ -48,4 +48,3 @@ def rule_recommendation(
     if response_mode is ResponseMode.SOLVE_TOGETHER:
         return LadderLevel.L0
     return None
-

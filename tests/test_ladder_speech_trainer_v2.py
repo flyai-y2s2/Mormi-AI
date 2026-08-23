@@ -40,4 +40,3 @@ def test_speech_confusion_csv_uses_three_model_labels(tmp_path) -> None:
         "L3,0,3,0",
         "L4,0,0,4",
     ]
-
