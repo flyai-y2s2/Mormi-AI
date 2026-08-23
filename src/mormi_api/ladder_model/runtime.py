@@ -54,8 +54,8 @@ class LadderModelRuntime:
         if not self._model_dir.is_dir():
             return "MODEL_NOT_FOUND"
         try:
-            import torch
-            from transformers import (
+            import torch  # type: ignore[import-not-found]
+            from transformers import (  # type: ignore[import-not-found]
                 AutoModelForSequenceClassification,
                 AutoTokenizer,
             )

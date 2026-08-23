@@ -83,10 +83,10 @@ def _metric_dict(metrics: LadderMetrics) -> dict[str, float]:
 
 def train_speech_model(config: SpeechTrainConfig) -> LadderMetrics:
     try:
-        import numpy as np
-        import torch
-        from datasets import Dataset  # type: ignore[import-untyped]
-        from transformers import (
+        import numpy as np  # type: ignore[import-not-found]
+        import torch  # type: ignore[import-not-found]
+        from datasets import Dataset  # type: ignore[import-not-found, import-untyped]
+        from transformers import (  # type: ignore[import-not-found]
             AutoModelForSequenceClassification,
             AutoTokenizer,
             DataCollatorWithPadding,
