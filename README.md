@@ -1,6 +1,6 @@
 # Mormi AI Dialogue Service
 
-경계선지능 아동이 AI 동생 모르미를 가르치며 기초 수학을 복습하고, 카페 같은 생활 장면에 적용하도록 돕는 독립 AI 대화 서비스입니다.
+경계선지능 아동이 AI 동생 모르미를 가르치며 기초 수학을 복습하고, 카페·놀이동산 같은 생활 장면에 적용하도록 돕는 독립 AI 대화 서비스입니다.
 
 이 저장소는 화면을 직접 렌더링하거나 일반 서비스 백엔드를 대신하지 않습니다.
 다음 교육적 결정을 담당하고 Spring 백엔드가 프론트엔드에 전달할 수 있는
@@ -10,6 +10,7 @@
 - 모든 새 집 가르치기는 오개념 낚시 없이 모르미의 진짜 L4 도움 요청으로 시작
 - 현재 집 커리큘럼 36개 세션의 검수된 가르치기 시나리오 생성
 - 카페의 줄 서기, 예산 메뉴 선택, 메뉴값 덧셈, 거스름돈 진행
+- 놀이동산의 표 값 곱셈, 간식값 똑같이 나누기, 자유이용권 손익분기 비교 진행
 - 발화사다리 `L4 → L3 → L2(선택지) → L0`와 힌트사다리 `H0~H3`를 독립적으로 조절
   (단계명은 재번호화하지 않으며, 과거 L1 기록만 L2로 읽음)
 - 도움 카드 자동 공개
@@ -127,7 +128,7 @@ pip install -r requirements.txt
 | Method | Path | 역할 |
 |---|---|---|
 | POST | `/v1/practice-results` | 집 반복학습 결과 저장 |
-| POST | `/v1/conversations` | 가르치기/카페 대화 시작 |
+| POST | `/v1/conversations` | 가르치기/카페/놀이동산 대화 시작 |
 | POST | `/v1/conversations/{conversation_id}/responses` | 발화·선택·조작 응답 제출 |
 | POST | `/v1/conversations/{conversation_id}/responses/stream` | SSE 진행 상태와 검증된 다음 턴 스트리밍 |
 | GET | `/v1/conversations/{conversation_id}` | 최신 상태와 턴 복구 |
@@ -142,6 +143,13 @@ pip install -r requirements.txt
 않습니다. 줄 인원은 AI가 세션 시작 시 정하고, 메뉴판·모르미 메뉴·예산은 프론트가
 `cafe_context`로 전달합니다. 이 값들은 세션 상태에 보존되어 재시도나 복구 때
 바뀌지 않습니다.
+
+놀이동산은 `amusement_ticket_multiply`, `amusement_snack_divide`,
+`amusement_pass_compare`의 3개 독립 시나리오를 지원합니다. 인증된 Spring BE가
+화면에 표시한 제목·미션·숫자·전이 문제를 `park_context`로 전달하며, AI는 이 스냅샷의
+산술 정합성과 필수 완료 사실을 검증한 뒤 같은 값만 사용합니다. 각 시나리오는 기본
+문제를 완료한 뒤 BE가 준 새로운 수의 전이 문제까지 진행하고, 완료 응답에는
+`required_verified_fact_keys`에 지정된 사실만 반환합니다.
 
 집 가르치기는 `scenario_id=home_teach`로 시작합니다. AI가 반복 결과의
 `curriculum_session_id`를 검수된 카탈로그에서 찾아 발화사다리 질문, 도움 카드,

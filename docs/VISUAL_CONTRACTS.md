@@ -7,6 +7,52 @@
 기계 판독 가능한 JSON Schema는
 [`visual-contract.schema.json`](./visual-contract.schema.json)에 있습니다.
 
+## 놀이동산 시각 계약
+
+놀이동산 시각자료는 Spring BE가 대화 시작 시 보낸 `park_context`의 숫자와 문구만
+사용합니다. `facts`는 `{key,label,value,unit}` 배열이며 FE는 필수 결과 키를 추측하지
+않고 전달받은 값만 표시합니다.
+
+### `amusement_park`와 `amusement_joint_solution`
+
+```json
+{
+  "type": "amusement_park",
+  "data": {
+    "theme_id": "amusement_park",
+    "stage_id": "ticket",
+    "title": "놀이동산 표 사기",
+    "mission": "함께 갈 사람들의 표 값을 구한다.",
+    "facts": [
+      {"key": "ticket_price", "label": "표 한 장 값", "value": 3000, "unit": "원"}
+    ],
+    "hide_required_results": true
+  }
+}
+```
+
+- `amusement_park`: 기본 문제에서 필수 결과를 숨깁니다.
+- `amusement_joint_solution`: H3/L0 공동 수행에서 같은 장면을 유지하고
+  `result_hidden=false`로 완성된 결과를 보여 줍니다.
+
+### `amusement_equation`과 `amusement_transfer_equation`
+
+```json
+{
+  "type": "amusement_equation",
+  "data": {"left": 3000, "right": 2, "symbol": "×", "result_hidden": true}
+}
+```
+
+H2에서 `×` 또는 `÷` 식의 결과 칸을 숨겨 표시합니다.
+
+### `amusement_park_transfer`와 `amusement_transfer_solution`
+
+`amusement_park_transfer`는 BE가 준 새 숫자의 문제를 표시합니다. 필드는
+`theme_id`, `stage_id`, `prompt`, `left`, `right`, `operation`, `result_hidden`입니다.
+H3 공동 수행에서는 `amusement_transfer_solution`의 검수된 `equation`과
+`conclusion`을 그대로 보여 줍니다.
+
 ## `cafe_queues`
 
 ```json

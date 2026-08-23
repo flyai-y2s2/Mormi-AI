@@ -11,12 +11,14 @@ from pydantic import BaseModel, Field
 from .content import (
     HOME_TEACHING_CATALOG,
     MENU_SCENARIO_IDS,
+    PARK_SCENARIO_IDS,
     SCENARIOS,
     TOTAL_CALC_TASK_ID,
     TaskDefinition,
     create_scenario_data,
     get_task,
     home_teaching_task,
+    representative_park_context,
 )
 from .schemas import (
     CafeMenuItem,
@@ -119,6 +121,11 @@ def registered_help_tasks() -> list[RegisteredHelpTask]:
             cafe_context if scenario.id in MENU_SCENARIO_IDS else None,
             rng=random.Random(0),
             queue_context=queue_context if scenario.id == "cafe_queue" else None,
+            park_context=(
+                representative_park_context(scenario.id)
+                if scenario.id in PARK_SCENARIO_IDS
+                else None
+            ),
         )
         for task_id in scenario.task_ids:
             task_data = scenario_data
