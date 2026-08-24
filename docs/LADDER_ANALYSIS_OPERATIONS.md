@@ -45,6 +45,29 @@ python scripts/check_ladder_runtime.py \
 `MODEL_OK`가 출력되지 않으면 배포를 중단하고 기존 컨테이너를 유지합니다. 이미지에는
 CPU 전용 PyTorch를 사용하므로 GPU·CUDA 패키지는 필요하지 않습니다.
 
+## 최초 모델 배치
+
+모델 아카이브는 저장소나 Docker 이미지에 넣지 않고 AI EC2에 한 번만 업로드합니다.
+현재 검증된 아카이브와 가중치의 SHA-256은 다음과 같습니다.
+
+```text
+ladder-v2-pytorch.tar.gz  3e36c36790dbfa37fd5199fd3a85409657a38cf1de52ca5d70e993070df9eb50
+model.safetensors         3c4c373427701ad496ca177f6af805f9b4f26e2086a4370db8c1017f086d8057
+```
+
+EC2에서 업로드한 파일을 검사하고 영구 경로에 풉니다.
+
+```bash
+sha256sum /tmp/ladder-v2-pytorch.tar.gz
+sudo install -d -m 755 /opt/mormi/models/ladder-v2
+sudo tar -xzf /tmp/ladder-v2-pytorch.tar.gz \
+  -C /opt/mormi/models/ladder-v2
+sudo sha256sum /opt/mormi/models/ladder-v2/model/model.safetensors
+```
+
+두 해시가 위 값과 정확히 같을 때만 배포합니다. 배치가 끝난 뒤에도 컨테이너에는
+`/opt/mormi/models`를 읽기 전용으로만 연결합니다.
+
 ### Spring BE 서버
 
 ```dotenv
@@ -77,6 +100,15 @@ MORMI_DIALOGUE_SERVICE_KEY=<AI의 MORMI_SERVICE_API_KEY와 같은 값>
 5. 승급 또는 하향 추천에서 `이 단계로 적용`을 누르고 `적용 완료`를 확인합니다.
 6. 다음 해당 소단원 대화가 승인된 시작 단계에서 시작하는지 확인합니다.
 
+컨테이너 상태는 다음처럼 확인합니다. API만 8000 포트를 공개하고 Worker는 포트를
+공개하지 않아야 합니다.
+
+```bash
+docker ps --filter name=mormi-ai --filter name=mormi-ladder-worker
+docker stats --no-stream mormi-ai mormi-ladder-worker
+docker logs --tail=100 mormi-ladder-worker
+```
+
 ## 장애 대응
 
 - `MODEL_NOT_FOUND`: 모델 경로와 볼륨 마운트를 확인합니다.
@@ -97,3 +129,8 @@ MORMI_DIALOGUE_SERVICE_KEY=<AI의 MORMI_SERVICE_API_KEY와 같은 값>
 ```bash
 python scripts/requeue_ladder_analyses.py --confirm
 ```
+
+새 Worker가 반복 종료되면 API는 유지한 채 Worker만 중지하고 직전 정상 이미지로 다시
+실행합니다. 모델 smoke가 실패한 이미지는 API까지 교체하지 않습니다. GitHub Actions의
+직전 성공 배포에 기록된 ECR 이미지 URI를 사용해 재배포한 뒤 `/health`와 Worker 상태를
+다시 확인합니다. 롤백 중에도 모델 폴더를 수정하거나 쓰기 가능으로 연결하지 않습니다.
