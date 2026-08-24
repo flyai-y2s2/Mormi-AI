@@ -29,6 +29,7 @@ from mormi_api.schemas import (
     LearnerProfile,
     PracticeResult,
     ResponseCategory,
+    ResponseType,
     SafetyCategory,
     SessionCreate,
     SessionEnvelope,
@@ -176,6 +177,43 @@ def test_every_home_task_declares_semantic_roles_instead_of_relying_on_slot_name
             assert task.slots["reason"].semantic_role == "reason"
         else:
             assert task.slots["rule"].semantic_role == "explanation"
+
+
+def test_free_text_may_satisfy_multiple_unresolved_slots_but_taps_stay_step_scoped() -> None:
+    """The rule is catalog-wide, not a special case for multiplication.
+
+    A child may answer a narrow follow-up with a complete sentence that also
+    supplies another still-missing requirement.  Free text therefore exposes
+    every unresolved required slot to the normal grounding checks.  A tap is
+    deliberately different: it can only mean what the displayed step offered.
+    """
+
+    engine = ConversationEngine(FakeGateway())  # type: ignore[arg-type]
+    saw_narrow_followup = False
+
+    for spec in HOME_TEACHING_CATALOG.values():
+        task = home_teaching_task(spec, skill_id=spec.id)
+        step = task.steps[ExpressionLevel.L3][0]
+        step_slots = {*step.target_slots, *step.optional_slots}
+
+        free_text_slots = engine._progress_eligible_slots(
+            task,
+            {},
+            step,
+            ResponseType.TEXT,
+        )
+        choice_slots = engine._progress_eligible_slots(
+            task,
+            {},
+            step,
+            ResponseType.CHOICE,
+        )
+
+        assert set(task.required_slots) <= free_text_slots
+        assert choice_slots == step_slots
+        saw_narrow_followup |= free_text_slots > step_slots
+
+    assert saw_narrow_followup
 
 
 @pytest.mark.asyncio
@@ -1106,6 +1144,72 @@ async def test_no_response_from_genuine_l4_lowers_one_step_and_opens_first_help_
     assert supported.turn.visual == original_visual
     assert supported.turn.help_card is not None
     assert supported.turn.input.kind is InputKind.TEXT
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_l3_narrow_followup_accepts_answer_and_rule_from_one_free_text(
+    tmp_path: object,
+) -> None:
+    """A narrowed question must not discard another valid slot in the same sentence.
+
+    This reproduces the catalog-wide failure mode behind answers such as
+    ``2+2+2+2``: the UI may currently ask for only one missing part, while the
+    child naturally supplies the result and the method together.
+    """
+
+    child_text = "600원이야. 500원과 100원을 더했어"
+    expected_rule = HOME_TEACHING_CATALOG["money-count"].learned_line
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="600원",
+                factual=True,
+                evidence_span="600원이야",
+            ),
+            SlotClaim(
+                slot_id="rule",
+                value=expected_rule,
+                factual=True,
+                evidence_span="500원과 100원을 더했어",
+            ),
+        ],
+        confidence=1,
+    )
+    database, repository, service, started = await _start_money_count_conversation(
+        tmp_path,
+        [analysis],
+        "l3-multi-slot",
+    )
+
+    supported = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="5a1dbf5d-6038-4658-971d-39d719d807ea",
+            type="no_response",
+        ),
+    )
+    assert supported.turn.input.target_slots == ["answer"]
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=supported.turn.turn_id,
+            response_id="5a2dbf5d-6038-4658-971d-39d719d807ea",
+            type="text",
+            text=child_text,
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert completed.turn.status.value == "completed"
+    assert set(state.verified_slots) == {"answer", "rule"}
+    assert completed.turn.note_update is not None
     await database.dispose()
 
 
