@@ -177,13 +177,20 @@ class TaskRelation(StrEnum):
     """How a safe utterance relates to the current learning conversation."""
 
     CURRENT_TASK = "current_task"
+    META_ABOUT_TASK = "meta_about_task"
     META_ABOUT_MORMI = "meta_about_mormi"
     OFF_TOPIC = "off_topic"
     UNKNOWN = "unknown"
 
 
 class InteractionIntent(StrEnum):
-    """Social intent kept separate from mathematical correctness."""
+    """Legacy/broad social telemetry, never a required routing taxonomy.
+
+    New safe utterances do not need a new enum member.  The understanding
+    model can use ``OTHER_SAFE_SOCIAL`` or ``NONE`` and describe the meaning
+    in ``conversation_summary`` instead.  Pedagogical state changes must not
+    depend on a perfect choice from this finite list.
+    """
 
     NONE = "none"
     AUTHENTICITY_CHALLENGE = "authenticity_challenge"
@@ -191,6 +198,25 @@ class InteractionIntent(StrEnum):
     FRUSTRATION = "frustration"
     REFUSAL = "refusal"
     OTHER_SAFE_SOCIAL = "other_safe_social"
+
+
+class SemanticAssessment(StrEnum):
+    """Meaning-level status for one requested part of the child's response."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    MISSING = "missing"
+    INCORRECT = "incorrect"
+    UNCERTAIN = "uncertain"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class UnderstandingRoute(StrEnum):
+    """The graph path selected after the fast first-pass understanding."""
+
+    NORMAL = "normal"
+    ADJUDICATE = "adjudicate"
+    BRIDGE = "bridge"
 
 
 class SafetyCategory(StrEnum):
@@ -594,6 +620,25 @@ class SpeakerArithmeticClaim(BaseModel):
     related_slot_ids: list[str] = Field(default_factory=list)
 
 
+class DialogueHistoryTurn(BaseModel):
+    """A bounded, plaintext dialogue excerpt used only for current-session context."""
+
+    turn_id: str
+    mormi: str
+    child: str | None = None
+    response_type: ResponseType | None = None
+    response_category: ResponseCategory | None = None
+
+
+class ReferenceResolution(BaseModel):
+    """An auditable resolution of a pronoun or reference in the child's words."""
+
+    source_span: str
+    resolved_to: str
+    confidence: float = Field(default=0, ge=0, le=1)
+    evidence_turn_ids: list[str] = Field(default_factory=list)
+
+
 class UtteranceAnalysis(BaseModel):
     safety_category: SafetyCategory = SafetyCategory.UNKNOWN
     response_category: ResponseCategory = ResponseCategory.RECOGNITION_OR_INPUT_ERROR
@@ -602,9 +647,27 @@ class UtteranceAnalysis(BaseModel):
     # never verify a mathematical claim or change a ladder by themselves.
     task_relation: TaskRelation = TaskRelation.UNKNOWN
     interaction_intent: InteractionIntent = InteractionIntent.NONE
+    # Open-set conversational understanding.  A safe utterance that contains
+    # no answer/reason/method/help request can be handled conversationally
+    # without forcing its exact intent into a growing enum.  The free-text
+    # summary is audit context only; it can never verify a learning slot.
+    conversation_only: bool = False
+    conversation_summary: str = Field(default="", max_length=160)
+    # Deprecated wire-compatibility field.  The primary understanding model
+    # never writes child-facing copy; a separate lightweight bridge speaker
+    # handles safe conversation-only turns.
+    bridge_reply: str = Field(default="", max_length=120)
     entry_stance: EntryStance = EntryStance.NOT_APPLICABLE
+    answer_status: SemanticAssessment = SemanticAssessment.NOT_APPLICABLE
+    reason_status: SemanticAssessment = SemanticAssessment.NOT_APPLICABLE
     claims: list[SlotClaim] = Field(default_factory=list)
     arithmetic_claims: list[ArithmeticClaim] = Field(default_factory=list)
+    reference_resolutions: list[ReferenceResolution] = Field(default_factory=list)
+    # Deprecated wire-compatibility fields.  Runtime has one primary semantic
+    # understanding pass and represents uncertainty directly instead of
+    # invoking a second adjudicator.
+    needs_adjudication: bool = False
+    adjudication_reason: str = Field(default="", max_length=160)
     misconception_tag: str | None = None
     bottleneck: str = "unknown"
     # A short, exact substring of the child's response that is safe and useful
@@ -812,9 +875,8 @@ class SpeakerQuestionIntent(BaseModel):
 
 
 class SpeakerGuardContract(BaseModel):
-    """Validation-only facts that are never sent to the Sonnet speaker."""
+    """Closed-world provenance kept outside the speaker prompt."""
 
-    forbidden_answer_forms: list[str] = Field(default_factory=list)
     child_expression_source: str | None = None
 
 
@@ -853,6 +915,14 @@ class SpeakerContext(BaseModel):
     interaction_repeat_count: int = 0
     support_trigger: SupportTrigger = SupportTrigger.NONE
     help_card_event: HelpCardEvent = HelpCardEvent.NONE
+    expression_level: ExpressionLevel = ExpressionLevel.L4
+    hint_level: HintLevel = HintLevel.H0
+    # Slot id -> child-facing meaning that remains unresolved. This is a
+    # narrower contract than the full task goal and prevents topic drift.
+    unresolved_focus: dict[str, str] = Field(default_factory=dict)
+    # The main speaker receives only a short tail. The understanding model may
+    # receive a slightly longer history through its own prompt.
+    recent_dialogue: list[DialogueHistoryTurn] = Field(default_factory=list, max_length=3)
     # When true, adding a generic preface to the previous question is not a
     # valid response. The speaker must acknowledge the transition and reframe.
     must_reframe: bool = False
@@ -926,6 +996,9 @@ class SpeakerVerification(BaseModel):
     # reveal the reviewed correct answer.
     arithmetic_claim_stance_safe: bool = False
     help_card_state_respected: bool = False
+    sentence_complete: bool = False
+    joint_mode_respected: bool = False
+    violation_codes: list[str] = Field(default_factory=list)
     detected_dialogue_act: str = ""
     detected_asked_slot_ids: list[str] = Field(default_factory=list)
     question_evidence_span: str = ""
@@ -957,6 +1030,8 @@ class SpeakerRuntimeAudit(BaseModel):
     speaker_source: Literal[
         "reviewed_fallback",
         "llm",
+        "bridge_llm",
+        "classifier_bridge",
         "generation_fallback",
         "deterministic_validation_fallback",
         "semantic_verification_fallback",
@@ -969,6 +1044,10 @@ class SpeakerRuntimeAudit(BaseModel):
         "error",
     ] = "not_required"
     fallback_reason: str | None = Field(default=None, max_length=120)
+    understanding_route: UnderstandingRoute = UnderstandingRoute.NORMAL
+    adjudicator_used: bool = False
+    speaker_latency_ms: int | None = Field(default=None, ge=0)
+    verifier_latency_ms: int | None = Field(default=None, ge=0)
 
 
 class SessionEnvelope(BaseModel):

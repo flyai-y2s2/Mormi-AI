@@ -15,11 +15,11 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "sqlite+aiosqlite:///./data/mormi.db"
     anthropic_api_key: str | None = None
-    classifier_model: str = "claude-haiku-4-5-20251001"
+    classifier_model: str = "claude-sonnet-4-6"
+    bridge_model: str = "claude-haiku-4-5-20251001"
     speaker_model: str = "claude-sonnet-4-6"
-    speaker_timeout_seconds: float = Field(default=8.0, ge=0.5, le=30)
-    speaker_verifier_enabled: bool = True
-    speaker_verifier_timeout_seconds: float = Field(default=1.8, ge=0.2, le=10)
+    speaker_timeout_seconds: float = Field(default=10.0, ge=0.5, le=30)
+    bridge_timeout_seconds: float = Field(default=4.0, ge=0.5, le=10)
     raw_data_encryption_key: str | None = None
     service_api_key: str | None = None
     skip_startup_maintenance: bool = False

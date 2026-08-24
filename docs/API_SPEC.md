@@ -529,8 +529,9 @@ turn.completed     최종 { conversation_id, turn }
 done
 ```
 
-`mormi.delta`는 모델이 생성 중인 원시 토큰이 아닙니다. 전체 후보가 결정형 검증과
-필요한 경우 의미 검증까지 통과하고 DB에 원자적으로 저장된 뒤에만 나누어 전송합니다.
+`mormi.delta`는 모델이 생성 중인 원시 토큰이 아닙니다. 전체 후보가 코드 신뢰 경계와
+구조·근거 출력 계약을 통과하고 DB에 원자적으로 저장된 뒤에만
+나누어 전송합니다.
 따라서 프론트는 진행 단계를 먼저 보여 줄 수 있으면서도, 검증되지 않은 오개념이나
 부적절한 문구를 잠깐이라도 화면에 노출하지 않습니다. 화면과 상태의 최종 단일 출처는
 항상 `turn.completed`의 전체 `TurnContract`입니다.
@@ -570,7 +571,7 @@ type TurnContract = {
     stage_id: string;
     task_index: number;
     mormi: {
-      text: string; // 최대 50자, 최대 두 줄
+      text: string; // 50자 이내 작성 목표, 문장 완결 우선, 최대 두 줄
       mood: "curious" | "listening" | "thinking" | "relieved" | "celebrating";
       max_lines: 1 | 2;
     };
@@ -603,7 +604,7 @@ type TurnContract = {
     task_anchor: null | {
       anchor_id: string; // task + 현재 subgoal의 안정적인 식별자
       title: "지금 모르미에게 알려줄 것";
-      prompt: string; // 검수된 StepDefinition.prompt, 최대 50자
+      prompt: string; // 검수된 StepDefinition.prompt, 50자 이내 작성 목표
       completed_items: Array<{
         slot_id: string;
         label: string;

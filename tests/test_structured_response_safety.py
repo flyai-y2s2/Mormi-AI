@@ -35,6 +35,7 @@ from mormi_api.schemas import (
     SessionState,
     SkillProfile,
     SlotClaim,
+    SpeakerOutput,
     SupportTrigger,
     TaskRelation,
     UtteranceAnalysis,
@@ -190,7 +191,7 @@ async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> Non
 
 @pytest.mark.asyncio
 async def test_false_arithmetic_relation_cannot_verify_or_enter_the_star_note() -> None:
-    """Haiku interprets wording; code rejects only the structured false equation."""
+    """The understanding model interprets wording; code rejects the false equation."""
 
     child_text = "2000원에서 1800원 내면 300원 남아"
     analysis = UtteranceAnalysis(
@@ -522,8 +523,9 @@ async def test_bare_comparison_conclusion_is_kept_but_does_not_create_a_note() -
         ],
         confidence=1,
     )
+    gateway = FakeGateway([analysis])
     engine = ConversationEngine(  # type: ignore[arg-type]
-        FakeGateway([analysis]),
+        gateway,
         show_internal_pedagogy=True,
     )
     state = home_state(
@@ -551,8 +553,17 @@ async def test_bare_comparison_conclusion_is_kept_but_does_not_create_a_note() -
     assert turn.note_update is None
     assert turn.input.target_slots == ["reason"]
     assert turn.mormi.text == (
-        "아, 오른쪽이 더 많구나! 나 3이랑 5를 어떻게 비교할지 헷갈려... 알려줄 수 있어?"
+        "아, 오른쪽이 더 많구나! 왜 오른쪽에 점이 더 많은지 알려줄 수 있어?"
     )
+    speaker_context = gateway.speaker_contexts[-1]
+    assert speaker_context.required_question == (
+        "왜 오른쪽에 점이 더 많은지 알려줄 수 있어?"
+    )
+    assert speaker_context.unresolved_focus == {
+        "reason": "오른쪽에 점이 더 많은 이유 또는 왼쪽과 오른쪽을 비교한 방법"
+    }
+    assert speaker_context.allowed_numbers == []
+    assert speaker_context.verified_facts == {"answer": "오른쪽에 점이 더 많아."}
 
 
 @pytest.mark.asyncio
@@ -861,7 +872,8 @@ async def test_repeated_count_evidence_moves_from_targeted_text_to_choices(
     assert turn.input.kind is InputKind.CHOICES
     assert turn.input.target_slots == ["tracking"]
     assert turn.mormi.text != initial.mormi.text
-    assert "같이 골라 볼까?" in turn.mormi.text
+    assert "여기서 골라서 알려줄 수 있어?" in turn.mormi.text
+    assert "같이" not in turn.mormi.text
     assert turn.note_update is None
 
 
@@ -1241,20 +1253,42 @@ async def test_meta_challenge_gets_one_bounded_bridge_without_learning_mutation(
     scene: SceneType,
     reported_category: ResponseCategory,
 ) -> None:
-    """A safe challenge is acknowledged, but never becomes learning evidence."""
+    """Open-set conversation routing overrides a legacy response category."""
 
     child_text = "너 알면서 일부러 물어보지?"
+    bridge_reply = (
+        "나 진짜 몰라서 그래... 점이 몇 개인지랑 어떻게 세는지 알려줄 수 있어?"
+        if scene is SceneType.HOME_TEACH
+        else "나 진짜 몰라서 그래... 두 줄에 각각 몇 명인지 알려줄 수 있어?"
+    )
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
         response_category=reported_category,
         difficulty_class=DifficultyClass.ENGAGEMENT,
         task_relation=TaskRelation.META_ABOUT_MORMI,
         interaction_intent=InteractionIntent.AUTHENTICITY_CHALLENGE,
+        conversation_only=True,
+        conversation_summary="모르미가 정말 모르는지 의심함",
+        bridge_reply=bridge_reply,
         social_grounding_span=child_text,
         confidence=0.96,
     )
+    gateway = FakeGateway(
+        [analysis],
+        bridge_outputs=[
+            SpeakerOutput(
+                text=bridge_reply,
+                dialogue_act="acknowledge_meta_and_reask",
+                asked_slot_ids=(
+                    ["answer", "tracking"]
+                    if scene is SceneType.HOME_TEACH
+                    else ["left_count", "right_count"]
+                ),
+            )
+        ],
+    )
     engine = ConversationEngine(  # type: ignore[arg-type]
-        FakeGateway([analysis]),
+        gateway,
         show_internal_pedagogy=True,
     )
     if scene is SceneType.HOME_TEACH:
@@ -1301,6 +1335,7 @@ async def test_meta_challenge_gets_one_bounded_bridge_without_learning_mutation(
     assert turn.visual == initial.visual
     assert turn.note_update is None
     assert turn.completion is None
+    assert gateway.bridge_speak_calls == 1
     assert "진짜 몰라서" in turn.mormi.text
     assert turn.mormi.text != initial.mormi.text
 

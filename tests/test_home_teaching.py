@@ -36,9 +36,7 @@ from mormi_api.schemas import (
     SkillProfile,
     SlotClaim,
     SpeakerContext,
-    SpeakerGuardContract,
     SpeakerOutput,
-    SpeakerVerification,
     SpeakerVerificationPolicy,
     UtteranceAnalysis,
 )
@@ -155,9 +153,7 @@ def test_number_count_support_does_not_force_pointing_as_the_only_method() -> No
     reviewed_choice = next(
         choice for choice in choice_method.input.choices if choice.label == spec.short_correct
     )
-    assert choice_method.choice_effects[reviewed_choice.id] == {
-        "tracking": "count_each_once"
-    }
+    assert choice_method.choice_effects[reviewed_choice.id] == {"tracking": "count_each_once"}
 
 
 def test_every_home_task_declares_semantic_roles_instead_of_relying_on_slot_names() -> None:
@@ -397,7 +393,7 @@ async def test_home_structured_numeric_answer_advances_without_repeating(
     expected_answer: str,
     tmp_path: object,
 ) -> None:
-    """A Haiku-interpreted amount is compared as a value, not Korean copy."""
+    """A model-interpreted amount is compared as a value, not Korean copy."""
 
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,
@@ -511,8 +507,10 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
         if spec.id == "number-compare":
             assert "어느 쪽" in l2_answer.prompt
             assert [choice.label for choice in l2_answer.input.choices] == expected_answers
-            assert "헷갈려" in l2_method.prompt
-            assert "같이 골라 볼까?" in l2_method.prompt
+            assert "왜 오른쪽" in l2_method.prompt
+            assert "3" not in l2_method.prompt
+            assert "5" not in l2_method.prompt
+            assert "같이 골라 볼까?" not in l2_method.prompt
             assert [choice.label for choice in l2_method.input.choices] == [
                 "왼쪽은 3개, 오른쪽은 5개라서",
                 "왼쪽은 5개, 오른쪽은 3개라서",
@@ -527,7 +525,8 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
             # a text box.  L2 must therefore sound different and expose real
             # choice support instead of visually repeating the same turn.
             assert l2_method.prompt != spec.short_prompt
-            assert "같이 골라 볼까?" in l2_method.prompt
+            assert "같이" not in l2_method.prompt
+            assert "골라서 알려줄 수 있어?" in l2_method.prompt
             assert l2_method.input.kind is InputKind.CHOICES
             continue
 
@@ -750,9 +749,7 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
         evidence_link = (await db.execute(select(NoteEvidenceLinkRecord))).scalar_one()
         outboxes = list((await db.execute(select(OutboxEventRecord))).scalars())
         observation_outbox = next(
-            event
-            for event in outboxes
-            if event.event_type == "mormi.dialogue.observation.recorded"
+            event for event in outboxes if event.event_type == "mormi.dialogue.observation.recorded"
         )
         star_note_outbox = next(
             event for event in outboxes if event.event_type == "mormi.star_note.created"
@@ -770,8 +767,7 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert {claim.slot_id for claim in claims} == {"answer", "rule"}
     assert all(claim.validation_status == "verified" for claim in claims)
     assert all(
-        claim.evidence_span_encrypted
-        and claim.evidence_span_encrypted.startswith("plain:")
+        claim.evidence_span_encrypted and claim.evidence_span_encrypted.startswith("plain:")
         for claim in claims
     )
     assert outcome.completion_outcome == "taught"
@@ -784,9 +780,7 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert observation_outbox.payload_json["bottleneck_candidate"] == observation.bottleneck
     assert observation_outbox.payload_json["help_used"] is observation.help_card_shown
     assert observation_outbox.payload_json["fallback_occurred"] is False
-    assert observation_outbox.payload_json["completion_outcome"] == (
-        observation.completion_outcome
-    )
+    assert observation_outbox.payload_json["completion_outcome"] == (observation.completion_outcome)
     assert observation_outbox.payload_json["observed_at"].removesuffix("+00:00") == (
         observation.created_at.isoformat()
     )
@@ -853,9 +847,7 @@ async def test_persistence_keeps_classifier_category_but_reports_reconciled_resu
     async with database.sessions() as db:
         observation = (await db.execute(select(DialogueTurnObservationRecord))).scalar_one()
         answered_turn = (
-            await db.execute(
-                select(TurnRecord).where(TurnRecord.response_id.is_not(None))
-            )
+            await db.execute(select(TurnRecord).where(TurnRecord.response_id.is_not(None)))
         ).scalar_one()
 
     assert answered_turn.response_category == "correct_full"
@@ -906,6 +898,186 @@ async def test_genuine_l4_answer_only_keeps_l4_and_asks_only_for_method(
     assert followed.turn.mormi.text.endswith(HOME_TEACHING_CATALOG["money-count"].short_prompt)
     assert followed.turn.input.target_slots == ["rule"]
     assert followed.turn.help_card is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_genuine_l4_method_only_keeps_l4_and_asks_only_for_answer(
+    tmp_path: object,
+) -> None:
+    child_text = "그건 간단한 덧셈이야"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="rule",
+                factual=True,
+                supported=True,
+                support_confidence=0.99,
+                evidence_span="덧셈이야",
+            )
+        ],
+        grounding_span="덧셈이야",
+        confidence=1,
+    )
+
+    class MethodFirstSpeakerGateway(FakeGateway):
+        speaker_context: SpeakerContext | None = None
+
+        async def speak(self, context: SpeakerContext) -> SpeakerOutput:
+            self.speaker_context = context
+            return SpeakerOutput(
+                text="아, 덧셈을 하면 되는구나~ 그럼 모두 얼마인지 알려줄 수 있어?",
+                dialogue_act=context.dialogue_act,
+                asked_slot_ids=context.required_slot_ids,
+                used_verified_slots=["rule"],
+            )
+
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/method-first-money-price.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    gateway = MethodFirstSpeakerGateway([analysis])
+    service = ConversationService(
+        repository,
+        ConversationEngine(gateway),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=32,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="method-first-money-price",
+            practice_result_id="method-first-money-price-practice",
+            practice_summary={
+                "curriculum_session_id": "money-price",
+                "skill_id": "money-price",
+                "question_count": 5,
+                "first_try_correct_count": 5,
+            },
+        )
+    )
+    original_visual = started.turn.visual
+
+    followed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="e7cc6862-b91d-4dd6-978f-56ef272bbb7a",
+            type="text",
+            text=child_text,
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.verified_slots == {"rule": True}
+    assert state.expression_level is ExpressionLevel.L4
+    assert state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
+    assert state.hint_level is HintLevel.H0
+    assert followed.turn.status.value == "active"
+    assert gateway.speaker_context is not None
+    assert gateway.speaker_context.required_slot_ids == ["answer"]
+    assert gateway.speaker_context.safe_child_utterance == child_text
+    assert gateway.speaker_context.verified_facts.keys() == {"rule"}
+    assert followed.turn.mormi.text == (
+        "아, 덧셈을 하면 되는구나~ 그럼 모두 얼마인지 알려줄 수 있어?"
+    )
+    assert followed.turn.input.kind is InputKind.TEXT
+    assert followed.turn.input.target_slots == ["answer"]
+    assert followed.turn.visual == original_visual
+    assert followed.turn.help_card is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_method_first_followup_skips_redundant_verifier_and_preserves_acknowledgement(
+    tmp_path: object,
+) -> None:
+    child_text = "그건 간단한 덧셈이야"
+    expected_text = "아, 덧셈을 하면 되는구나~ 그럼 모두 얼마인지 알려줄 수 있어?"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_PARTIAL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="rule",
+                factual=True,
+                supported=True,
+                support_confidence=0.99,
+                evidence_span="덧셈이야",
+            )
+        ],
+        grounding_span="덧셈이야",
+        confidence=1,
+    )
+
+    class VerificationTimeoutGateway(FakeGateway):
+        speaker_context: SpeakerContext | None = None
+
+        async def speak(self, context: SpeakerContext) -> SpeakerOutput:
+            self.speaker_context = context
+            return SpeakerOutput(
+                text=expected_text,
+                dialogue_act=context.dialogue_act,
+                asked_slot_ids=context.required_slot_ids,
+                used_verified_slots=["rule"],
+            )
+
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/method-first-timeout.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    gateway = VerificationTimeoutGateway([analysis])
+    service = ConversationService(
+        repository,
+        ConversationEngine(gateway),  # type: ignore[arg-type]
+    )
+    started = await service.create_conversation(
+        SessionCreate(
+            learner_id=33,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="method-first-timeout",
+            practice_result_id="method-first-timeout-practice",
+            practice_summary={
+                "curriculum_session_id": "money-price",
+                "skill_id": "money-price",
+                "question_count": 5,
+                "first_try_correct_count": 5,
+            },
+        )
+    )
+
+    followed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id="2b460314-bf6b-4aa5-aad0-812aa10d2164",
+            type="text",
+            text=child_text,
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.verified_slots == {"rule": True}
+    assert gateway.speaker_context is not None
+    assert gateway.speaker_context.verification_policy is SpeakerVerificationPolicy.DETERMINISTIC
+    assert followed.turn.mormi.text == expected_text
+    assert followed.turn.input.target_slots == ["answer"]
+    assert followed.turn.help_card is None
+    async with database.sessions() as db:
+        observation = (
+            await db.execute(
+                select(DialogueTurnObservationRecord).where(
+                    DialogueTurnObservationRecord.response_id
+                    == "2b460314-bf6b-4aa5-aad0-812aa10d2164"
+                )
+            )
+        ).scalar_one()
+        assert observation.runtime_json["verifier_status"] == "not_required"
+        assert isinstance(observation.runtime_json["speaker_latency_ms"], int)
+        assert observation.runtime_json["verifier_latency_ms"] is None
     await database.dispose()
 
 
@@ -1016,26 +1188,42 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-teaching.db")
     await database.create_schema()
     repository = Repository(database, TextCipher("test-encryption-key"))
-    expected_rule = HOME_TEACHING_CATALOG["money-count"].learned_line
     child_text = "돈의 개수가 아니라 적힌 값을 모두 더해야 해"
-    analysis = UtteranceAnalysis(
-        safety_category=SafetyCategory.NORMAL,
-        response_category=ResponseCategory.CORRECT_FULL,
-        difficulty_class=DifficultyClass.UNKNOWN,
-        claims=[
-            SlotClaim(
-                slot_id="rule",
-                value=expected_rule,
-                factual=True,
-                evidence_span=child_text,
-            )
-        ],
-        note_candidate=child_text,
-        confidence=1,
-    )
+    analyses = [
+        UtteranceAnalysis(
+            safety_category=SafetyCategory.NORMAL,
+            response_category=ResponseCategory.CORRECT_PARTIAL,
+            difficulty_class=DifficultyClass.UNKNOWN,
+            claims=[
+                SlotClaim(
+                    slot_id="rule",
+                    factual=True,
+                    supported=True,
+                    support_confidence=1,
+                    evidence_span=child_text,
+                )
+            ],
+            note_candidate=child_text,
+            confidence=1,
+        ),
+        UtteranceAnalysis(
+            safety_category=SafetyCategory.NORMAL,
+            response_category=ResponseCategory.CORRECT_FULL,
+            difficulty_class=DifficultyClass.UNKNOWN,
+            claims=[
+                SlotClaim(
+                    slot_id="answer",
+                    value="600원",
+                    factual=True,
+                    evidence_span="600원",
+                )
+            ],
+            confidence=1,
+        ),
+    ]
     service = ConversationService(
         repository,
-        ConversationEngine(FakeGateway([analysis])),  # type: ignore[arg-type]
+        ConversationEngine(FakeGateway(analyses)),  # type: ignore[arg-type]
     )
 
     practice = PracticeResult(
@@ -1067,13 +1255,28 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
     assert started.turn.mormi.text == HOME_TEACHING_CATALOG["money-count"].effective_l4_prompt
     assert started.turn.visual.data["curriculum_session_id"] == "money-count"
 
-    completed = await service.respond(
+    after_method = await service.respond(
         started.conversation_id,
         ChildResponse(
             turn_id=started.turn.turn_id,
             response_id="f48fd07e-3e4c-4752-873a-54d7e42cb068",
             type="text",
             text=child_text,
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+
+    assert after_method.turn.status.value == "active"
+    assert after_method.turn.input.target_slots == ["answer"]
+    assert state.verified_slots == {"rule": True}
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=after_method.turn.turn_id,
+            response_id="a6f59963-417a-41eb-8de9-3a497f9aadba",
+            type="text",
+            text="600원",
         ),
     )
 
@@ -1086,6 +1289,8 @@ async def test_saved_practice_result_generates_home_scenario_and_stores_raw_turn
     transcript = await repository.raw_turns(started.conversation_id)
     assert transcript[0]["question"] == started.turn.mormi.text
     assert transcript[0]["response"] == child_text
+    assert transcript[1]["question"] == after_method.turn.mormi.text
+    assert transcript[1]["response"] == "600원"
     async with database.sessions() as db:
         answered = (
             await db.execute(select(TurnRecord).where(TurnRecord.turn_id == started.turn.turn_id))
@@ -1208,9 +1413,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
         assert record.state_json["child_note_evidence"]["tracking"] == child_method
         tracking_claim = (
             await db.execute(
-                select(DialogueClaimRecord).where(
-                    DialogueClaimRecord.slot_id == "tracking"
-                )
+                select(DialogueClaimRecord).where(DialogueClaimRecord.slot_id == "tracking")
             )
         ).scalar_one()
         assert tracking_claim.validation_status == "verified"
@@ -1219,8 +1422,7 @@ async def test_concrete_answer_is_preserved_and_only_the_method_is_asked_next(
         note_link = (
             await db.execute(
                 select(NoteEvidenceLinkRecord).where(
-                    NoteEvidenceLinkRecord.observation_id
-                    == tracking_claim.observation_id
+                    NoteEvidenceLinkRecord.observation_id == tracking_claim.observation_id
                 )
             )
         ).scalar_one()
@@ -1277,27 +1479,6 @@ async def test_safe_child_phrase_can_ground_a_natural_targeted_followup(
                 used_verified_slots=["answer"],
                 used_child_expression=True,
                 used_child_expression_spans=["차근차근 세어봐"],
-            )
-
-        async def verify_speaker(
-            self,
-            context: SpeakerContext,
-            guard: SpeakerGuardContract,
-            output: SpeakerOutput,
-        ) -> SpeakerVerification:
-            del guard
-            return SpeakerVerification(
-                approved=True,
-                dialogue_act_preserved=True,
-                required_focus_preserved=True,
-                only_allowed_math_used=True,
-                child_not_evaluated=True,
-                character_consistent=True,
-                detected_dialogue_act=context.dialogue_act,
-                detected_asked_slot_ids=context.required_slot_ids,
-                question_evidence_span="‘차근차근 세어봐’는 어떻게 하는 거야?",
-                child_expression_spans=output.used_child_expression_spans,
-                reason_code="approved",
             )
 
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/grounded-followup.db")
@@ -1633,6 +1814,8 @@ async def test_inline_home_practice_starts_full_turn_and_retries_keep_first_snap
     assert stored.curriculum_session_id == "money-count"
     assert stored.skill_id == "money_count"
     await database.dispose()
+
+
 def test_home_teaching_dialogue_copy_may_exceed_fifty_characters() -> None:
     current = HOME_TEACHING_CATALOG["number-count"].model_dump(mode="json")
     l4_question = (

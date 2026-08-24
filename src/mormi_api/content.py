@@ -703,6 +703,10 @@ class HomeTeachingSpec(BaseModel):
     fill_correct: str
     fill_options: list[str] = Field(min_length=2, max_length=6)
     short_prompt: str = Field(min_length=1)
+    # Reviewed wording used only after the child has already supplied the
+    # method/reason and the concrete answer is the sole unresolved part.  Old
+    # snapshots can omit it and safely fall back to the sample question.
+    answer_followup_prompt: str | None = Field(default=None, min_length=1)
     short_correct: str
     short_options: list[str] = Field(min_length=2, max_length=6)
     help_plan: HomeHelpPlan
@@ -1051,14 +1055,14 @@ QUEUE_TASK = TaskDefinition(
                 prompt="왼쪽과 오른쪽 줄에 각각 몇 명이 있어?",
                 target_slots=["left_count", "right_count"],
                 input=text_input("left_count", "right_count", placeholder="사람 수만 짧게 알려줘"),
-                fallback_text="내가 한꺼번에 물어봤네. 사람 수만 알려줘.",
+                fallback_text="그러면 왼쪽과 오른쪽 줄에 몇 명이 있는지 먼저 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="short_choice",
-                prompt="어느 줄에서 내 차례가 더 빨리 올까?",
+                prompt="어느 줄에 서야 내 차례가 더 빨리 올지 알려줄 수 있어?",
                 target_slots=["final_choice"],
                 input=text_input("final_choice", placeholder="왼쪽 또는 오른쪽"),
-                fallback_text="내 차례가 빨리 올 줄만 알려줘.",
+                fallback_text="어느 줄인지 짧게 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="short_reason",
@@ -1081,7 +1085,7 @@ QUEUE_TASK = TaskDefinition(
                     "3": {"left_count": 3},
                     "4": {"left_count": 4},
                 },
-                fallback_text="말로 말하기 어려우면 같이 골라 보자.",
+                fallback_text="왼쪽 줄 사람 수를 골라서 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="choose_right_count",
@@ -1095,11 +1099,11 @@ QUEUE_TASK = TaskDefinition(
                     "4": {"right_count": 4},
                     "5": {"right_count": 5},
                 },
-                fallback_text="오른쪽 줄 사람 수도 같이 골라 보자.",
+                fallback_text="오른쪽 줄 사람 수를 골라서 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="choose_side",
-                prompt="내 차례가 더 빨리 올 줄은 어느 쪽이야?",
+                prompt="내 차례가 더 빨리 올 줄을 골라서 알려줄 수 있어?",
                 target_slots=["final_choice"],
                 input=choice_input(
                     ["final_choice"], [option("left", "왼쪽 줄"), option("right", "오른쪽 줄")]
@@ -1108,11 +1112,11 @@ QUEUE_TASK = TaskDefinition(
                     "left": {"final_choice": "left"},
                     "right": {"final_choice": "right"},
                 },
-                fallback_text="내 차례가 빨리 올 줄을 같이 골라 보자.",
+                fallback_text="내 차례가 더 빨리 올 줄을 골라서 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="choose_reason",
-                prompt="나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 같이 골라 볼까?",
+                prompt="왜 그 줄에서 내 차례가 더 빨리 오는지 골라서 알려줄 수 있어?",
                 target_slots=["reason"],
                 input=choice_input(
                     ["reason"],
@@ -1125,7 +1129,7 @@ QUEUE_TASK = TaskDefinition(
                     "fewer": {"reason": "fewer_people"},
                     "more": {"reason": "more_people"},
                 },
-                fallback_text="내 차례가 빨리 오는 이유를 같이 골라 보자.",
+                fallback_text="내 차례가 더 빨리 오는 이유를 골라서 알려줄 수 있어?",
             ),
         ],
         ExpressionLevel.L0: [
@@ -1283,38 +1287,36 @@ def calculation_task(
                     prompt="나 모두 얼마인지랑 어떻게 계산하는지 헷갈려... 알려줄 수 있어?",
                     target_slots=["operation", "result", "method"],
                     input=text_input("operation", "result", "method"),
-                    fallback_text="결과와 계산 방법을 네 말로 알려줘.",
+                    fallback_text="계산한 결과와 방법을 알려줄 수 있어?",
                 )
             ],
             ExpressionLevel.L3: [
                 StepDefinition(
                     id="short_result",
-                    prompt="계산한 값은 얼마야?",
+                    prompt="계산한 값이 얼마인지 알려줄 수 있어?",
                     target_slots=["result"],
                     input=text_input("result", placeholder="금액만 알려줘"),
-                    fallback_text="내가 많이 물어봤네. 금액부터 알려줘.",
+                    fallback_text="계산한 금액부터 알려줄 수 있어?",
                 ),
                 StepDefinition(
                     id="short_operation",
-                    prompt="두 금액을 더해야 해, 빼야 해?",
+                    prompt="이 금액들은 어떻게 계산해야 하는지 알려줄 수 있어?",
                     target_slots=["operation"],
                     input=text_input("operation", placeholder="더하기 또는 빼기"),
-                    fallback_text="어떤 계산인지부터 짧게 알려줘.",
+                    fallback_text="어떤 계산을 해야 하는지 짧게 알려줄 수 있어?",
                 ),
                 StepDefinition(
                     id="short_method",
-                    prompt=(
-                        f"나 자리 계산에서 {method_label}을 어떻게 하는지 헷갈려... 알려줄 수 있어?"
-                    ),
+                    prompt="나 자리 계산을 어떻게 해야 하는지 헷갈려... 알려줄 수 있어?",
                     target_slots=["method"],
                     input=text_input("method", placeholder="방법만 짧게 알려줘"),
-                    fallback_text=f"{method_label} 방법만 짧게 알려줘.",
+                    fallback_text="자리 계산 방법만 짧게 알려줄 수 있어?",
                 ),
             ],
             ExpressionLevel.L2: [
                 StepDefinition(
                     id="choose_operation",
-                    prompt="어떤 계산을 해야 할까?",
+                    prompt="어떤 계산을 해야 하는지 골라서 알려줄 수 있어?",
                     target_slots=["operation"],
                     input=choice_input(
                         ["operation"], [option("add", "더하기"), option("subtract", "빼기")]
@@ -1323,11 +1325,11 @@ def calculation_task(
                         "add": {"operation": "addition"},
                         "subtract": {"operation": "subtraction"},
                     },
-                    fallback_text="말 대신 필요한 계산을 같이 골라 보자.",
+                    fallback_text="필요한 계산을 골라서 알려줄 수 있어?",
                 ),
                 StepDefinition(
                     id="choose_result",
-                    prompt="계산한 값은 어느 쪽이야?",
+                    prompt="계산한 값을 골라서 알려줄 수 있어?",
                     target_slots=["result"],
                     input=choice_input(
                         ["result"],
@@ -1342,18 +1344,18 @@ def calculation_task(
                         str(result): {"result": result},
                         str(result + 1000): {"result": result + 1000},
                     },
-                    fallback_text="계산한 금액도 같이 골라 보자.",
+                    fallback_text="계산한 금액을 골라서 알려줄 수 있어?",
                 ),
                 StepDefinition(
                     id="choose_method",
-                    prompt="자리 계산에서 무엇을 해야 할까?",
+                    prompt="자리 계산 방법을 골라서 알려줄 수 있어?",
                     target_slots=["method"],
                     input=choice_input(
                         ["method"],
                         [option(method, method_label), option("ignore", "그대로 계산하기")],
                     ),
                     choice_effects={method: {"method": method}, "ignore": {"method": "ignore"}},
-                    fallback_text="자리 계산 방법도 같이 골라 보자.",
+                    fallback_text="자리 계산 방법을 골라서 알려줄 수 있어?",
                 ),
             ],
             ExpressionLevel.L0: [
@@ -1565,15 +1567,17 @@ def queue_task(
         choice.id: {"right_count": int(choice.id)}
         for choice in task.steps[ExpressionLevel.L2][1].input.choices
     }
-    task.steps[ExpressionLevel.L3][
-        2
-    ].prompt = f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 알려줄 수 있어?"
-    task.steps[ExpressionLevel.L3][
-        2
-    ].fallback_text = "나는 왜 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?"
+    task.steps[ExpressionLevel.L3][2].prompt = (
+        "나는 왜 그 줄에서 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?"
+    )
+    task.steps[ExpressionLevel.L3][2].fallback_text = (
+        "나는 왜 내 차례가 더 빨리 오는지 헷갈려... 알려줄 수 있어?"
+    )
     for level, step_index in ((ExpressionLevel.L2, 3),):
         reason_step = task.steps[level][step_index]
-        reason_step.prompt = f"나는 왜 {side_label} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
+        reason_step.prompt = (
+            "왜 그 줄에서 내 차례가 더 빨리 오는지 골라서 알려줄 수 있어?"
+        )
         reason_step.input = choice_input(
             ["reason"],
             [
@@ -1870,19 +1874,19 @@ def simple_calculation_task(
         ),
         target_slots=["operation", "result"],
         input=text_input("operation", "result", placeholder="값과 계산 방법을 알려줘"),
-        fallback_text="계산한 값과 어떤 계산인지 알려줘.",
+        fallback_text="계산한 값과 어떤 계산인지 알려줄 수 있어?",
     )
     l3 = [
         StepDefinition(
             id="short_result",
             prompt=(
-                "그럼 두 메뉴는 모두 얼마야?"
+                "그럼 두 메뉴가 모두 얼마인지 알려줄 수 있어?"
                 if operation == "addition"
-                else "그럼 거스름돈은 얼마야?"
+                else "그럼 거스름돈이 얼마인지 알려줄 수 있어?"
             ),
             target_slots=["result"],
             input=text_input("result", placeholder="금액만 알려줘"),
-            fallback_text="내가 많이 물어봤네. 금액부터 알려줘.",
+            fallback_text="계산한 금액부터 알려줄 수 있어?",
         ),
         StepDefinition(
             id="short_operation",
@@ -1895,19 +1899,19 @@ def simple_calculation_task(
     l2 = [
         StepDefinition(
             id="choose_operation",
-            prompt="어떤 계산을 해야 할까?",
+            prompt="어떤 계산을 해야 하는지 골라서 알려줄 수 있어?",
             target_slots=["operation"],
             input=choice_input(["operation"], operation_choices),
             choice_effects=operation_effects,
-            fallback_text="필요한 계산을 같이 골라 보자.",
+            fallback_text="필요한 계산을 골라서 알려줄 수 있어?",
         ),
         StepDefinition(
             id="choose_result",
-            prompt="계산한 금액은 어느 쪽이야?",
+            prompt="계산한 금액을 골라서 알려줄 수 있어?",
             target_slots=["result"],
             input=choice_input(["result"], result_choices),
             choice_effects=result_effects,
-            fallback_text="계산한 금액도 같이 골라 보자.",
+            fallback_text="계산한 금액을 골라서 알려줄 수 있어?",
         ),
     ]
     joint = StepDefinition(
@@ -2147,10 +2151,10 @@ def home_teaching_task(
         },
         arithmetic_contract=arithmetic_contract,
         slots={
-            # The concrete answer is useful partial evidence: when a child only
-            # corrects Mormi's answer, preserve it and ask only for the method.
-            # It is intentionally not required for completion because the
-            # teaching goal and star-note evidence are the general rule.
+            # Answer and method are independent teaching claims.  Either may
+            # arrive first; the engine preserves the verified claim and asks
+            # only for the unresolved one.  Star-note authorship remains
+            # method-only through ``note_slots`` below.
             "answer": SlotDefinition(
                 id="answer",
                 description=f"화면의 {spec.title} 예시 문제 답",
@@ -2161,7 +2165,11 @@ def home_teaching_task(
             ),
             "rule": SlotDefinition(
                 id="rule",
-                description=f"{spec.title}를 해결하는 사실이 맞는 설명 또는 검수된 방법",
+                description=(
+                    f"{spec.title}를 해결하는 사실이 맞는 설명, 필요한 연산 종류 또는 "
+                    "검수된 방법. 아이가 짧게 말한 연산 종류도 방법으로 인정하되, "
+                    "구체적인 답을 말했다고 보충하지 않는다."
+                ),
                 semantic_role="explanation",
                 expected=expected_rule,
                 aliases=list(
@@ -2176,14 +2184,13 @@ def home_teaching_task(
                 fact_sentence=expected_rule,
             ),
         },
-        required_slots=["rule"],
+        required_slots=["answer", "rule"],
         steps={
             ExpressionLevel.L4: [
                 StepDefinition(
                     id="free_explanation",
                     prompt=spec.effective_l4_prompt,
-                    target_slots=["rule"],
-                    optional_slots=["answer"],
+                    target_slots=["answer", "rule"],
                     input=text_input(
                         "answer",
                         "rule",
@@ -2195,17 +2202,17 @@ def home_teaching_task(
             ExpressionLevel.L3: [
                 StepDefinition(
                     id="short_answer",
-                    prompt=str(sample["prompt"]),
+                    prompt=spec.answer_followup_prompt or str(sample["prompt"]),
                     target_slots=["answer"],
                     input=text_input("answer", placeholder="답만 짧게 알려줘"),
-                    fallback_text="내가 한꺼번에 물어봤네. 답부터 알려줘.",
+                    fallback_text=spec.answer_followup_prompt or str(sample["prompt"]),
                 ),
                 StepDefinition(
                     id="short_explanation",
                     prompt=spec.short_prompt,
                     target_slots=["rule"],
                     input=text_input("rule", placeholder="방법만 짧게 알려줘"),
-                    fallback_text="내가 길게 물어봤네. 방법만 짧게 알려줘.",
+                    fallback_text="그 방법만 짧게 알려줄 수 있어?",
                 ),
             ],
             ExpressionLevel.L2: [
@@ -2215,7 +2222,7 @@ def home_teaching_task(
                     target_slots=["answer"],
                     input=choice_input(["answer"], answer_choices),
                     choice_effects=answer_effects,
-                    fallback_text="말로 어렵다면 답부터 같이 골라 보자.",
+                    fallback_text="여기서 답을 골라서 알려줄 수 있어?",
                 ),
                 StepDefinition(
                     id="choose_method",
@@ -2223,20 +2230,23 @@ def home_teaching_task(
                     target_slots=["rule"],
                     input=choice_input(["rule"], short_choices),
                     choice_effects=short_effects,
-                    fallback_text="말로 어렵다면 필요한 방법을 같이 골라 보자.",
+                    fallback_text="여기서 필요한 방법을 골라서 알려줄 수 있어?",
                 ),
             ],
             ExpressionLevel.L0: [
                 StepDefinition(
                     id="joint_reading",
                     prompt="도움 카드 문장을 나와 같이 읽어볼까?",
-                    target_slots=["rule"],
+                    target_slots=["answer", "rule"],
                     input=InputContract(
                         kind=InputKind.JOINT,
-                        target_slots=["rule"],
+                        target_slots=["answer", "rule"],
                         config={
                             "text": spec.help_plan.H3.body,
-                            "completion_values": {"rule": expected_rule},
+                            "completion_values": {
+                                "answer": expected_answer,
+                                "rule": expected_rule,
+                            },
                         },
                     ),
                     fallback_text="도움 카드 문장을 나와 같이 읽어볼까?",
@@ -2432,7 +2442,7 @@ def _configure_number_count_task(
                     "answer",
                     placeholder="센 수를 짧게 알려줘",
                 ),
-                fallback_text="내가 한꺼번에 물어봤네. 점이 몇 개인지 먼저 알려줘.",
+                fallback_text="점이 몇 개인지 먼저 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="short_tracking",
@@ -2452,11 +2462,11 @@ def _configure_number_count_task(
                 target_slots=["answer"],
                 input=choice_input(["answer"], answer_choices),
                 choice_effects=answer_effects,
-                fallback_text="말로만 들으려니 헷갈려. 점이 몇 개인지 골라 볼까?",
+                fallback_text="점이 몇 개인지 여기서 골라서 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="choose_tracking",
-                prompt="나 점을 셀 때 뭘 해야 할지 헷갈려... 같이 골라 볼까?",
+                prompt="나 점을 셀 때 뭘 해야 할지 헷갈려... 여기서 골라서 알려줄 수 있어?",
                 target_slots=["tracking"],
                 input=choice_input(
                     ["tracking"],
@@ -2471,7 +2481,7 @@ def _configure_number_count_task(
                     )
                     for index, label in enumerate(short_options)
                 },
-                fallback_text="나 점을 셀 때 뭘 해야 할지 헷갈려... 같이 골라 볼까?",
+                fallback_text="나 점을 셀 때 뭘 해야 할지 헷갈려... 여기서 골라서 알려줄 수 있어?",
             ),
         ],
         ExpressionLevel.L0: [
@@ -2523,9 +2533,7 @@ def _configure_number_compare_task(
         ),
         "reason": SlotDefinition(
             id="reason",
-            description=(
-                "왼쪽 3개와 오른쪽 5개를 세거나 3과 5를 비교해 오른쪽이 더 많음을 설명한 근거"
-            ),
+            description="오른쪽에 점이 더 많은 이유 또는 왼쪽과 오른쪽을 비교한 방법",
             semantic_role="reason",
             expected="count_comparison",
             aliases=[
@@ -2563,14 +2571,17 @@ def _configure_number_compare_task(
                 prompt="왼쪽과 오른쪽 중 어느 쪽에 점이 더 많아?",
                 target_slots=["answer"],
                 input=text_input("answer", placeholder="어느 쪽인지 짧게 알려줘"),
-                fallback_text="내가 한꺼번에 물어봤네. 어느 쪽이 더 많아?",
+                fallback_text="그러면 어느 쪽에 점이 더 많은지 먼저 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="short_reason",
-                prompt="나 3이랑 5를 어떻게 비교할지 헷갈려... 알려줄 수 있어?",
+                prompt="왜 오른쪽에 점이 더 많은지 알려줄 수 있어?",
                 target_slots=["reason"],
-                input=text_input("reason", placeholder="3이랑 5를 보고 알려줘"),
-                fallback_text="나 3이랑 5를 어떻게 비교할지 헷갈려... 알려줄 수 있어?",
+                input=text_input("reason", placeholder="왜 오른쪽인지 알려줘"),
+                fallback_text=(
+                    "아 그렇구나~ 그런데 나 아직 좀 헷갈려... "
+                    "왜 그런지도 알려줄 수 있어?"
+                ),
             ),
         ],
         ExpressionLevel.L2: [
@@ -2580,11 +2591,11 @@ def _configure_number_compare_task(
                 target_slots=["answer"],
                 input=choice_input(["answer"], answer_choices),
                 choice_effects=answer_effects,
-                fallback_text="말로 어렵다면 어느 쪽인지 같이 골라 보자.",
+                fallback_text="어느 쪽에 점이 더 많은지 골라서 알려줄 수 있어?",
             ),
             StepDefinition(
                 id="choose_reason",
-                prompt="나 3이랑 5를 보고도 헷갈려... 같이 골라 볼까?",
+                prompt="왜 오른쪽에 점이 더 많은지 여기서 골라서 알려줄 수 있어?",
                 target_slots=["reason"],
                 input=choice_input(
                     ["reason"],
@@ -2599,7 +2610,7 @@ def _configure_number_compare_task(
                     "counts_left": {},
                     "counts_same": {},
                 },
-                fallback_text="나 두 쪽에서 센 수가 헷갈려... 같이 골라 볼까?",
+                fallback_text="왜 오른쪽에 점이 더 많은지 골라서 알려줄 수 있어?",
             ),
         ],
         ExpressionLevel.L0: [

@@ -46,4 +46,3 @@ def test_confusion_csv_has_fixed_ladder_order(tmp_path) -> None:
         "actual\\predicted,L0,L2,L3,L4",
         "L0,1,2,3,4",
     ]
-

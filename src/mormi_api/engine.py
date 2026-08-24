@@ -3,26 +3,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .content import PARK_SCENARIO_IDS, StepDefinition, TaskDefinition, get_task
+from .content import PARK_SCENARIO_IDS, SlotDefinition, StepDefinition, TaskDefinition, get_task
 from .dictionary_models import dictionary_reference
 from .llm import (
     ClaudeGateway,
     extract_numeric_values,
     validate_note_contextualization,
     validate_speaker_output,
-    validate_speaker_verification,
 )
 from .schemas import (
     CafeMenuItem,
     ChildResponse,
     CompletionContract,
     CompletionOutcome,
+    DialogueHistoryTurn,
     DifficultyClass,
     EntryPhase,
     EntryStance,
@@ -57,13 +58,13 @@ from .schemas import (
     SpeakerQuantity,
     SpeakerQuestionIntent,
     SpeakerRuntimeAudit,
-    SpeakerVerification,
     SpeakerVerificationPolicy,
     SupportTrigger,
     TaskAnchorCompletedItem,
     TaskAnchorContract,
     TaskRelation,
     TurnContract,
+    UnderstandingRoute,
     UtteranceAnalysis,
     VisualContract,
     new_id,
@@ -95,8 +96,11 @@ class ConversationGraphState(TypedDict, total=False):
     session: dict[str, Any]
     response: dict[str, Any]
     previous_question: str
+    recent_dialogue: list[dict[str, Any]]
     analysis: dict[str, Any]
     classifier_response_category: str
+    understanding_route: str
+    adjudicator_used: bool
     decision: dict[str, Any]
     speaker_output: dict[str, Any]
     speaker_text: str
@@ -111,15 +115,13 @@ class ConversationEngine:
         gateway: ClaudeGateway,
         *,
         show_internal_pedagogy: bool = False,
-        speaker_timeout_seconds: float = 8.0,
-        semantic_verifier_enabled: bool = True,
-        verifier_timeout_seconds: float = 1.8,
+        speaker_timeout_seconds: float = 10.0,
+        bridge_timeout_seconds: float = 4.0,
     ) -> None:
         self.gateway = gateway
         self.show_internal_pedagogy = show_internal_pedagogy
         self.speaker_timeout_seconds = speaker_timeout_seconds
-        self.semantic_verifier_enabled = semantic_verifier_enabled
-        self.verifier_timeout_seconds = verifier_timeout_seconds
+        self.bridge_timeout_seconds = bridge_timeout_seconds
         self.graph = self._build_graph()
 
     def _build_graph(self) -> Any:
@@ -128,6 +130,7 @@ class ConversationEngine:
         # cleanly in mypy even though they are supported at runtime.
         builder.add_node("understand", self._understand_node)  # type: ignore[call-overload]
         builder.add_node("orchestrate", self._orchestrate_node)  # type: ignore[call-overload]
+        builder.add_node("bridge_speak", self._bridge_speak_node)  # type: ignore[call-overload]
         builder.add_node("speak", self._speak_node)  # type: ignore[call-overload]
         builder.add_node(  # type: ignore[call-overload]
             "validate_and_compose",
@@ -135,7 +138,15 @@ class ConversationEngine:
         )
         builder.add_edge(START, "understand")
         builder.add_edge("understand", "orchestrate")
-        builder.add_edge("orchestrate", "speak")
+        builder.add_conditional_edges(
+            "orchestrate",
+            self._route_after_orchestration,
+            {
+                "bridge_speak": "bridge_speak",
+                "speak": "speak",
+            },
+        )
+        builder.add_edge("bridge_speak", "validate_and_compose")
         builder.add_edge("speak", "validate_and_compose")
         builder.add_edge("validate_and_compose", END)
         # Canonical state is committed atomically to the access-controlled application
@@ -148,9 +159,15 @@ class ConversationEngine:
         state: SessionState,
         response: ChildResponse,
         previous_question: str,
+        recent_dialogue: list[DialogueHistoryTurn] | None = None,
     ) -> tuple[SessionState, UtteranceAnalysis, TurnContract]:
         result: EngineTurnResult | None = None
-        async for event in self.run_turn_stream(state, response, previous_question):
+        async for event in self.run_turn_stream(
+            state,
+            response,
+            previous_question,
+            recent_dialogue=recent_dialogue,
+        ):
             if isinstance(event, EngineTurnResult):
                 result = event
         if result is None:  # pragma: no cover - LangGraph always reaches END
@@ -162,6 +179,8 @@ class ConversationEngine:
         state: SessionState,
         response: ChildResponse,
         previous_question: str,
+        *,
+        recent_dialogue: list[DialogueHistoryTurn] | None = None,
     ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
         """Expose safe graph milestones without leaking unvalidated model text."""
 
@@ -172,6 +191,7 @@ class ConversationEngine:
         node_stages: dict[str, EngineProgress] = {
             "understand": EngineProgress("understanding"),
             "orchestrate": EngineProgress("planning"),
+            "bridge_speak": EngineProgress("speaking"),
             "speak": EngineProgress("speaking"),
             "validate_and_compose": EngineProgress("validating"),
         }
@@ -180,6 +200,9 @@ class ConversationEngine:
                 "session": normalized_state.model_dump(mode="json"),
                 "response": response.model_dump(mode="json"),
                 "previous_question": previous_question,
+                "recent_dialogue": [
+                    turn.model_dump(mode="json") for turn in (recent_dialogue or [])[-6:]
+                ],
             },
             stream_mode=["updates", "values"],
         ):
@@ -248,7 +271,7 @@ class ConversationEngine:
                 bottleneck="expression",
                 confidence=1,
             )
-            return self._understanding_result(analysis)
+            return self._understanding_result(analysis, UnderstandingRoute.NORMAL)
 
         text = response.text or self._response_as_text(response)
         deterministic_category = deterministic_safety(text)
@@ -273,32 +296,82 @@ class ConversationEngine:
                 ),
                 confidence=1,
             )
-            return self._understanding_result(analysis)
+            route = (
+                UnderstandingRoute.BRIDGE
+                if deterministic_category is SafetyCategory.PLAYFUL_OFFTOPIC
+                else UnderstandingRoute.NORMAL
+            )
+            return self._understanding_result(analysis, route)
 
         if response.type is ResponseType.TEXT:
+            recent_dialogue = [
+                DialogueHistoryTurn.model_validate(turn)
+                for turn in graph_state.get("recent_dialogue", [])
+            ]
             analysis = await self.gateway.classify(
                 state=state,
                 task=task,
                 previous_question=previous_question,
                 response=response,
+                dialogue_history=recent_dialogue,
             )
             # Deterministic safety always wins; model safety may make the result
             # stricter but can never downgrade an explicit local match.
             if analysis.safety_category is SafetyCategory.UNKNOWN:
                 analysis.safety_category = SafetyCategory.NORMAL
-            return self._understanding_result(analysis)
+            analysis = self._enforce_claim_provenance(task, text, analysis)
+            route = self._select_understanding_route(analysis)
+            return self._understanding_result(analysis, route)
 
         analysis = self._deterministic_analysis(state, task, response)
-        return self._understanding_result(analysis)
+        return self._understanding_result(analysis, UnderstandingRoute.NORMAL)
 
     @staticmethod
-    def _understanding_result(analysis: UtteranceAnalysis) -> dict[str, Any]:
+    def _understanding_result(
+        analysis: UtteranceAnalysis,
+        route: UnderstandingRoute,
+    ) -> dict[str, Any]:
         """Keep the understanding model's label before code reconciliation."""
 
         return {
             "analysis": analysis.model_dump(mode="json"),
             "classifier_response_category": analysis.response_category.value,
+            "understanding_route": route.value,
+            "adjudicator_used": False,
         }
+
+    @staticmethod
+    def _is_reviewed_conversation_only(analysis: UtteranceAnalysis) -> bool:
+        """Return true only when no child-grounded learning evidence remains."""
+
+        return (
+            analysis.conversation_only
+            and not analysis.claims
+            and not analysis.arithmetic_claims
+            and analysis.response_category is not ResponseCategory.HELP_REQUEST
+        )
+
+    def _select_understanding_route(
+        self,
+        analysis: UtteranceAnalysis,
+    ) -> UnderstandingRoute:
+        """Use the separate cheap bridge only for safe non-learning turns."""
+
+        if analysis.safety_category is not SafetyCategory.NORMAL:
+            return (
+                UnderstandingRoute.BRIDGE
+                if analysis.safety_category is SafetyCategory.PLAYFUL_OFFTOPIC
+                else UnderstandingRoute.NORMAL
+            )
+        # Do not require an unexpected safe utterance to fit a closed intent
+        # taxonomy. The primary understanding model establishes whether this
+        # turn contains child-grounded learning evidence; a separate cheap
+        # bridge model writes child-facing copy only after that evidence is
+        # frozen. Contradictory outputs that contain a grounded learning claim
+        # stay on the normal pedagogical path.
+        if self._is_reviewed_conversation_only(analysis):
+            return UnderstandingRoute.BRIDGE
+        return UnderstandingRoute.NORMAL
 
     async def _orchestrate_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
         state = SessionState.model_validate(graph_state["session"])
@@ -312,6 +385,19 @@ class ConversationEngine:
             analysis,
             graph_state["previous_question"],
         )
+        recent_dialogue = [
+            DialogueHistoryTurn.model_validate(turn)
+            for turn in graph_state.get("recent_dialogue", [])[-3:]
+        ]
+        speaker_context = decision.speaker_context.model_copy(
+            update={
+                "expression_level": decision.state.expression_level,
+                "hint_level": decision.state.hint_level,
+                "unresolved_focus": dict(decision.speaker_context.required_slot_descriptions),
+                "recent_dialogue": recent_dialogue,
+            }
+        )
+        decision = decision.model_copy(update={"speaker_context": speaker_context})
         return {
             "session": decision.state.model_dump(mode="json"),
             # ``_decide`` may reconcile correctness from validated slot claims.
@@ -319,6 +405,87 @@ class ConversationEngine:
             # the classifier's original label in its own audit field.
             "analysis": analysis.model_dump(mode="json"),
             "decision": decision.model_dump(mode="json"),
+        }
+
+    @staticmethod
+    def _route_after_orchestration(graph_state: ConversationGraphState) -> str:
+        """Use the cheap bridge speaker only for a safe social bridge act.
+
+        The understanding route alone cannot bypass the pedagogical decision:
+        the orchestrator must first preserve the unresolved learning focus and
+        choose the state-preserving bridge dialogue act.
+        """
+
+        decision = PedagogicalDecision.model_validate(graph_state["decision"])
+        if graph_state.get(
+            "understanding_route"
+        ) == UnderstandingRoute.BRIDGE.value and decision.dialogue_act in {
+            "acknowledge_non_learning_and_reask",
+            "acknowledge_task_comment_and_reask",
+            "acknowledge_meta_and_reask",
+            "brief_ack_and_redirect",
+        }:
+            return "bridge_speak"
+        return "speak"
+
+    async def _bridge_speak_node(
+        self,
+        graph_state: ConversationGraphState,
+    ) -> dict[str, Any]:
+        """Generate one cheap social bridge after learning evidence is frozen.
+
+        The primary understanding model never writes child-facing copy.  The
+        bridge receives only the already reviewed speaker contract, and the
+        same structural/provenance guard used for the main speaker is applied before
+        its sentence can reach a child.
+        """
+
+        decision = PedagogicalDecision.model_validate(graph_state["decision"])
+        state = SessionState.model_validate(graph_state["session"])
+        context = decision.speaker_context
+        task = get_task(state.current_task_id, state.scenario_data)
+        started_at = time.perf_counter()
+        source: Literal[
+            "deterministic_validation_fallback",
+            "generation_fallback",
+        ]
+        try:
+            async with asyncio.timeout(self.bridge_timeout_seconds):
+                output = await self.gateway.bridge_speak(context)
+            guard = self._speaker_guard(task, decision.state, context)
+            validated = validate_speaker_output(output, context, guard)
+            if validated is not None:
+                output.text = validated
+                runtime = SpeakerRuntimeAudit(
+                    dialogue_act=decision.dialogue_act,
+                    speaker_source="bridge_llm",
+                    verifier_status="not_required",
+                    speaker_latency_ms=self._elapsed_ms(started_at),
+                )
+                return {
+                    "speaker_output": output.model_dump(mode="json"),
+                    "runtime": runtime.model_dump(mode="json"),
+                }
+            reason = "bridge_contract_rejected"
+            source = "deterministic_validation_fallback"
+            logger.warning("speaker_fallback stage=bridge_validation")
+        except Exception as error:
+            reason = type(error).__name__
+            source = "generation_fallback"
+            logger.warning(
+                "speaker_fallback stage=bridge_generation error_type=%s",
+                reason,
+            )
+        runtime = SpeakerRuntimeAudit(
+            dialogue_act=decision.dialogue_act,
+            speaker_source=source,
+            verifier_status="not_required",
+            fallback_reason=reason,
+            speaker_latency_ms=self._elapsed_ms(started_at),
+        )
+        return {
+            "speaker_text": context.fallback_text,
+            "runtime": runtime.model_dump(mode="json"),
         }
 
     async def _speak_node(self, graph_state: ConversationGraphState) -> dict[str, Any]:
@@ -358,38 +525,15 @@ class ConversationEngine:
                         type(error).__name__,
                     )
             return result
-        if (
-            any(
-                claim.truth_status == "false"
-                for claim in context.arithmetic_claims
-            )
-            and not self.semantic_verifier_enabled
-        ):
-            # Reflecting a false child claim is useful for natural dialogue,
-            # but only the semantic verifier can distinguish an uncertain
-            # question from accidental confirmation.  Without that verifier,
-            # use the reviewed fallback instead of trusting generated copy.
-            return {
-                "speaker_text": context.fallback_text,
-                "runtime": SpeakerRuntimeAudit(
-                    dialogue_act=decision.dialogue_act,
-                    speaker_source="reviewed_fallback",
-                    verifier_status="disabled",
-                    fallback_reason="false_claim_requires_semantic_verifier",
-                ).model_dump(mode="json"),
-            }
+        started_at = time.perf_counter()
         try:
             async with asyncio.timeout(self.speaker_timeout_seconds):
                 output = await self.gateway.speak(context)
             runtime = SpeakerRuntimeAudit(
                 dialogue_act=decision.dialogue_act,
                 speaker_source="llm",
-                verifier_status=(
-                    "disabled"
-                    if context.verification_policy is SpeakerVerificationPolicy.SEMANTIC
-                    and not self.semantic_verifier_enabled
-                    else "not_required"
-                ),
+                verifier_status="not_required",
+                speaker_latency_ms=self._elapsed_ms(started_at),
             )
             return {
                 "speaker_output": output.model_dump(mode="json"),
@@ -405,6 +549,7 @@ class ConversationEngine:
                 speaker_source="generation_fallback",
                 verifier_status="not_required",
                 fallback_reason=type(error).__name__,
+                speaker_latency_ms=self._elapsed_ms(started_at),
             )
             return {
                 "speaker_text": context.fallback_text,
@@ -419,6 +564,17 @@ class ConversationEngine:
         task = get_task(decision.state.current_task_id, decision.state.scenario_data)
         guard = self._speaker_guard(task, decision.state, decision.speaker_context)
         runtime = SpeakerRuntimeAudit.model_validate(graph_state["runtime"])
+        runtime = runtime.model_copy(
+            update={
+                "understanding_route": UnderstandingRoute(
+                    graph_state.get(
+                        "understanding_route",
+                        UnderstandingRoute.NORMAL.value,
+                    )
+                ),
+                "adjudicator_used": bool(graph_state.get("adjudicator_used", False)),
+            }
+        )
         text = graph_state.get("speaker_text")
         if not text and graph_state.get("speaker_output"):
             output = SpeakerOutput.model_validate(graph_state["speaker_output"])
@@ -430,54 +586,6 @@ class ConversationEngine:
                         "fallback_reason": "speaker_contract_rejected",
                     }
                 )
-            if (
-                text
-                and decision.speaker_context.verification_policy
-                is SpeakerVerificationPolicy.SEMANTIC
-                and self.semantic_verifier_enabled
-            ):
-                try:
-                    async with asyncio.timeout(self.verifier_timeout_seconds):
-                        verification = await self.gateway.verify_speaker(
-                            decision.speaker_context,
-                            guard,
-                            output,
-                        )
-                    verified = SpeakerVerification.model_validate(verification)
-                    if not validate_speaker_verification(
-                        verified,
-                        decision.speaker_context,
-                        guard,
-                        output,
-                    ):
-                        text = None
-                        runtime = runtime.model_copy(
-                            update={
-                                "speaker_source": "semantic_verification_fallback",
-                                "verifier_status": "rejected",
-                                "fallback_reason": verified.reason_code,
-                            }
-                        )
-                        logger.info(
-                            "speaker_fallback stage=semantic reason=%s dialogue_act=%s",
-                            verified.reason_code,
-                            decision.dialogue_act,
-                        )
-                    else:
-                        runtime = runtime.model_copy(update={"verifier_status": "approved"})
-                except Exception as error:
-                    text = None
-                    runtime = runtime.model_copy(
-                        update={
-                            "speaker_source": "semantic_verification_fallback",
-                            "verifier_status": "error",
-                            "fallback_reason": type(error).__name__,
-                        }
-                    )
-                    logger.warning(
-                        "speaker_fallback stage=verification error_type=%s",
-                        type(error).__name__,
-                    )
         text = text or decision.speaker_context.fallback_text
         note_update = decision.note_update
         note_context = decision.note_contextualization
@@ -516,6 +624,10 @@ class ConversationEngine:
         analysis: UtteranceAnalysis,
         previous_question: str,
     ) -> PedagogicalDecision:
+        # ``_orchestrate_node`` has already established the provenance boundary
+        # for open text.  Keep this exact analysis instance here: arithmetic
+        # reconciliation below intentionally mutates its effective category,
+        # and that corrected value must be written back to LangGraph state.
         next_state = state.model_copy(deep=True)
         self._normalize_expression_ladder(next_state)
         self._normalize_terminal_support(next_state)
@@ -563,42 +675,17 @@ class ConversationEngine:
                 previous_question=previous_question,
             )
 
-        # Conversational relation is independent of mathematical correctness.
-        # Route a safely grounded social intent before any ladder or claim
-        # logic so a classifier's secondary correctness label cannot turn a
-        # meta remark into a concept failure or learning evidence.
-        social_grounding = self._safe_social_grounding_span(
-            response.text,
-            analysis,
-            allowed_numbers=extract_numeric_values(
-                " ".join(
-                    [
-                        previous_question,
-                        *(str(value) for value in task.visible_facts.values()),
-                    ]
-                )
-            ),
-        )
-        if (
-            social_grounding
-            and analysis.interaction_intent is not InteractionIntent.NONE
-            and analysis.task_relation
-            in {TaskRelation.META_ABOUT_MORMI, TaskRelation.OFF_TOPIC}
-        ):
+        # Open-set conversational bridge.  The detailed intent enums remain
+        # useful telemetry, but an unexpected safe utterance does not have to
+        # fit one of them before it can receive a natural response.  This path
+        # can never verify a slot, alter L/H, or write a star note.
+        if self._is_reviewed_conversation_only(analysis):
             next_state.unrelated_count += 1
-            meta_turn = analysis.task_relation is TaskRelation.META_ABOUT_MORMI
             return self._decision_for_current_step(
                 next_state,
                 task,
-                dialogue_act=(
-                    "acknowledge_meta_and_reask"
-                    if meta_turn
-                    else "brief_ack_and_redirect"
-                ),
-                fallback=self._social_bridge_fallback(
-                    analysis.interaction_intent,
-                    next_state.unrelated_count,
-                ),
+                dialogue_act="acknowledge_non_learning_and_reask",
+                fallback=self._open_conversation_fallback(next_state.unrelated_count),
                 child_text=response.text,
                 analysis=analysis,
                 previous_question=previous_question,
@@ -830,11 +917,32 @@ class ConversationEngine:
                         task,
                         understood_claims,
                     )
-                    fallback = self._preface_question(acknowledgement, next_step.prompt)
+                    # The support contract may have changed to L2 even when
+                    # an authored L2 prompt accidentally duplicates the L4
+                    # question.  In that case, use the reviewed choice-stage
+                    # sentence so the child can hear that the response mode
+                    # changed.  ``같이`` remains reserved for L0 joint work.
+                    next_question = (
+                        self._smooth_ladder_fallback(next_state, task)
+                        if next_state.expression_level is ExpressionLevel.L2
+                        else self._complete_mormi_text(next_step.prompt)
+                    )
+                    fallback = (
+                        self._preface_question(acknowledgement, next_question)
+                        if acknowledgement
+                        else next_question
+                    )
                 else:
-                    fallback = self._preface_question(
-                        "앗, 내가 한 번에 많이 물어봤네.",
-                        next_step.prompt,
+                    # No mathematical fact was understood, so a canned
+                    # acknowledgement would pretend that Mormi learned
+                    # something and make the lower-step question sound like a
+                    # mechanical retry.  The reviewed step prompt is the
+                    # complete safe fallback; the speaker model may still
+                    # bridge to it naturally on the normal path.
+                    fallback = (
+                        self._smooth_ladder_fallback(next_state, task)
+                        if next_state.expression_level is ExpressionLevel.L2
+                        else self._complete_mormi_text(next_step.prompt)
                     )
             return self._decision_for_current_step(
                 next_state,
@@ -846,6 +954,11 @@ class ConversationEngine:
                 previous_question=previous_question,
                 newly_verified=understood_claims,
                 accepted_claims=understood_claims,
+                # The expression contract has just changed.  Requiring the
+                # catalog question verbatim would append it to the complete
+                # L2 bridge and recreate the robotic duplicate prompt that
+                # this branch exists to prevent.
+                must_reframe=True,
             )
 
         category = analysis.response_category
@@ -1219,7 +1332,11 @@ class ConversationEngine:
                 entry_active=state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE,
             )
             state.subgoal_id = next_step.id
-            fallback = self._success_then_question(contribution, next_step.prompt)
+            fallback = self._task_transition_then_question(
+                task,
+                contribution,
+                next_step.prompt,
+            )
             return PedagogicalDecision(
                 state=state,
                 dialogue_act="task_transition",
@@ -1321,10 +1438,7 @@ class ConversationEngine:
             help_card_visible=help_card is not None,
             must_reframe=must_reframe,
         )
-        if (
-            not must_reframe
-            or context.verification_policy is SpeakerVerificationPolicy.DETERMINISTIC
-        ):
+        if not must_reframe:
             context.fallback_text = self._ensure_required_question(fallback, step.prompt)
         return PedagogicalDecision(
             state=state,
@@ -1351,8 +1465,7 @@ class ConversationEngine:
         if state.task_start_level is not None:
             state.task_start_level = state.task_start_level.canonical()
         state.task_start_levels = {
-            task_id: level.canonical()
-            for task_id, level in state.task_start_levels.items()
+            task_id: level.canonical() for task_id, level in state.task_start_levels.items()
         }
 
     @staticmethod
@@ -1407,8 +1520,13 @@ class ConversationEngine:
         required_slot_descriptions = {
             slot: task.slots[slot].description for slot in required_slot_ids
         }
+        # A reviewed follow-up question describes what the child should teach
+        # next; it is not evidence that the child has already taught every
+        # number appearing in that question.  Only child-confirmed facts and
+        # grounded child arithmetic claims may enter the speaker's numerical
+        # knowledge boundary.
         reviewed_numbers = sorted(
-            extract_numeric_values(" ".join([*verified_facts.values(), required_question or ""]))
+            extract_numeric_values(" ".join(verified_facts.values()))
         )
         arithmetic_claims = self._speaker_arithmetic_claims(
             task,
@@ -1429,6 +1547,8 @@ class ConversationEngine:
             allowed_numbers=set(allowed_numbers),
         )
         if dialogue_act in {
+            "acknowledge_non_learning_and_reask",
+            "acknowledge_task_comment_and_reask",
             "acknowledge_meta_and_reask",
             "brief_ack_and_redirect",
         }:
@@ -1437,6 +1557,10 @@ class ConversationEngine:
                 analysis,
                 allowed_numbers=set(allowed_numbers),
             )
+        elif not set(required_slot_ids).intersection(task.text_explanation_slots):
+            # Do not offer a quotable child phrase to the speaker when the
+            # only unresolved focus is a reviewed canonical answer.
+            expression = None
         mode: Literal["none", "quote_safe"] = "quote_safe" if expression else "none"
         question_intent = SpeakerQuestionIntent(
             operation=task.skill_id,
@@ -1448,14 +1572,22 @@ class ConversationEngine:
             referents=[task.title, *allowed_numbers] if required_question else [],
             required_meanings=required_slot_descriptions,
         )
+        # The speaker never decides pedagogy or mathematical truth.  The
+        # redundant verifier model is gone, but a semantic *wording policy* is
+        # still useful when the speaker needs to refer to the child's own
+        # expression or ask for an open explanation.  In that case the main
+        # speaker may paraphrase the reviewed question naturally.  Child-facing
+        # wording policy is enforced by the prompt and offline regressions; the
+        # runtime boundary only enforces dialogue act, slot ids, declared
+        # verified-fact ids and exact child-quote provenance.
         verification_policy = self._speaker_verification_policy(
             task,
-            dialogue_act,
             required_slot_ids,
             has_child_grounding=bool(expression),
+            has_unverified_arithmetic=any(
+                claim.truth_status != "true" for claim in arithmetic_claims
+            ),
         )
-        if arithmetic_claims and self.semantic_verifier_enabled:
-            verification_policy = SpeakerVerificationPolicy.SEMANTIC
         safe_child_utterance = self._safe_child_utterance(child_text, analysis)
         return SpeakerContext(
             dialogue_act=dialogue_act,
@@ -1464,6 +1596,9 @@ class ConversationEngine:
             interaction_repeat_count=state.unrelated_count,
             support_trigger=support_trigger,
             help_card_event=help_card_event,
+            expression_level=state.expression_level,
+            hint_level=state.hint_level,
+            unresolved_focus=required_slot_descriptions,
             must_reframe=must_reframe,
             previous_question=previous_question,
             required_question=required_question,
@@ -1481,6 +1616,28 @@ class ConversationEngine:
             verification_policy=verification_policy,
             fallback_text=fallback,
         )
+
+    @staticmethod
+    def _speaker_verification_policy(
+        task: TaskDefinition,
+        required_slot_ids: list[str],
+        *,
+        has_child_grounding: bool,
+        has_unverified_arithmetic: bool,
+    ) -> SpeakerVerificationPolicy:
+        """Choose strict-copy vs natural wording without another model call.
+
+        ``SEMANTIC`` now describes the main speaker's permitted surface form;
+        it no longer schedules a verifier LLM.  Mathematical truth and state
+        transitions have already been frozen by the orchestrator.
+        """
+
+        needs_open_explanation = bool(
+            set(required_slot_ids).intersection(task.text_explanation_slots)
+        )
+        if has_child_grounding or has_unverified_arithmetic or needs_open_explanation:
+            return SpeakerVerificationPolicy.SEMANTIC
+        return SpeakerVerificationPolicy.DETERMINISTIC
 
     @staticmethod
     def _safe_child_utterance(
@@ -1531,16 +1688,13 @@ class ConversationEngine:
     ) -> list[SpeakerArithmeticClaim]:
         """Attach scene meaning to exact child arithmetic evidence.
 
-        Haiku understands the child's language.  This method does not parse
+        The primary understanding model interprets the child's language. This method does not parse
         Korean; it verifies provenance, computes truth, and supplies reviewed
         labels such as ``낸 돈`` and ``거스름돈`` so Sonnet never has to infer
         what anonymous ``left`` and ``result`` fields mean.
         """
 
-        if (
-            analysis.safety_category is not SafetyCategory.NORMAL
-            or not child_text
-        ):
+        if analysis.safety_category is not SafetyCategory.NORMAL or not child_text:
             return []
         contract = task.arithmetic_contract
         output: list[SpeakerArithmeticClaim] = []
@@ -1609,9 +1763,7 @@ class ConversationEngine:
                         else "false"
                     ),
                     related_slot_ids=[
-                        slot_id
-                        for slot_id in claim.related_slot_ids
-                        if slot_id in task.slots
+                        slot_id for slot_id in claim.related_slot_ids if slot_id in task.slots
                     ],
                 )
             )
@@ -1655,36 +1807,17 @@ class ConversationEngine:
             return "relation"
         return "answer"
 
-    def _speaker_verification_policy(
-        self,
-        task: TaskDefinition,
-        dialogue_act: str,
-        required_slot_ids: list[str],
-        *,
-        has_child_grounding: bool,
-    ) -> SpeakerVerificationPolicy:
-        if not self.semantic_verifier_enabled:
-            return SpeakerVerificationPolicy.DETERMINISTIC
-        explanation_slots = set(task.text_explanation_slots)
-        semantic_dialogue_acts = {
-            "acknowledge_meta_and_reask",
-            "acknowledge_partial",
-            "acknowledge_unstructured_partial",
-            "accept_help_request",
-            "brief_ack_and_redirect",
-            "clarify_vague_response",
-            "entry_rejection_followup",
-            "reduce_expression_load",
-            "show_help_card",
-            "support_vague_response",
-        }
-        if (
-            has_child_grounding
-            or bool(explanation_slots.intersection(required_slot_ids))
-            or dialogue_act in semantic_dialogue_acts
-        ):
-            return SpeakerVerificationPolicy.SEMANTIC
-        return SpeakerVerificationPolicy.DETERMINISTIC
+    @staticmethod
+    def _elapsed_ms(started_at: float) -> int:
+        return max(0, round((time.perf_counter() - started_at) * 1000))
+
+    @staticmethod
+    def _open_conversation_fallback(repeat_count: int) -> str:
+        """Reviewed no-learning fallback independent of any intent enum."""
+
+        if repeat_count >= 2:
+            return "응, 들었어. 나는 아직 이게 궁금해... 이것만 알려주면 안 돼?"
+        return "그렇구나. 나는 아직 이게 궁금해... 이것만 알려주면 안 돼?"
 
     @staticmethod
     def _safe_grounding_span(
@@ -1790,23 +1923,8 @@ class ConversationEngine:
         state: SessionState,
         context: SpeakerContext,
     ) -> SpeakerGuardContract:
-        del state  # The explicit parameter documents that the guard is task-state scoped.
-        question_compact = re.sub(r"[\s\W_]", "", context.required_question or "").lower()
-        forbidden: list[str] = []
-        for slot_id in context.required_slot_ids:
-            slot = task.slots[slot_id]
-            forms = [
-                str(slot.expected),
-                *slot.aliases,
-                *(str(value) for value in slot.accepted_values),
-            ]
-            for form in forms:
-                compact = re.sub(r"[\s\W_]", "", form).lower()
-                if len(compact) < 2 or compact in question_compact:
-                    continue
-                forbidden.append(form)
+        del task, state
         return SpeakerGuardContract(
-            forbidden_answer_forms=list(dict.fromkeys(forbidden)),
             child_expression_source=(
                 context.child_expression if context.child_expression_mode == "quote_safe" else None
             ),
@@ -1912,9 +2030,7 @@ class ConversationEngine:
                 state.expression_level,
                 state.verified_slots,
                 entry_active=(state.entry_phase is EntryPhase.AWAITING_ENTRY_RESPONSE),
-                targeted_followup=(
-                    state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP
-                ),
+                targeted_followup=(state.entry_phase is EntryPhase.AWAITING_TARGETED_FOLLOWUP),
             )
         target_slots = [
             slot_id
@@ -2121,11 +2237,7 @@ class ConversationEngine:
             SupportTrigger.REPEATED_CONCEPTUAL_CONFLICT,
         }:
             false_claim = next(
-                (
-                    claim
-                    for claim in (arithmetic_claims or [])
-                    if claim.truth_status == "false"
-                ),
+                (claim for claim in (arithmetic_claims or []) if claim.truth_status == "false"),
                 None,
             )
             if false_claim is not None:
@@ -2249,30 +2361,54 @@ class ConversationEngine:
             task,
             newly_verified,
         )
-        if (
-            task.skill_id == "number-count"
-            and "answer" in newly_verified
-            and "tracking" not in state.verified_slots
-        ):
-            if "answer" in newly_verified:
-                acknowledgement = "아, 세 개구나!"
+        if acknowledgement:
             return ConversationEngine._preface_question(acknowledgement, step.prompt)
-        return ConversationEngine._preface_question(acknowledgement, step.prompt)
+        return ConversationEngine._complete_mormi_text(step.prompt)
 
     @staticmethod
     def _younger_sibling_acknowledgement(
         task: TaskDefinition,
         newly_verified: Mapping[str, object],
-    ) -> str:
-        """Acknowledge only reviewed facts in a warm younger-sibling voice."""
+    ) -> str | None:
+        """Acknowledge a verified fact without hard-coded example values.
+
+        This is a last-resort deterministic line used only when speaker
+        generation fails.  If code cannot express the verified fact safely,
+        it returns ``None`` and lets the reviewed next question stand alone
+        instead of attaching a generic ``아, 그렇구나!``.
+        """
 
         if task.skill_id == "number-count" and "answer" in newly_verified:
-            return "아, 세 개구나!"
+            match = re.fullmatch(
+                r"\s*(\d[\d,]*)\s*(?:개)?\s*",
+                str(newly_verified["answer"]),
+            )
+            if match:
+                count = int(match.group(1).replace(",", ""))
+                native_count = {
+                    1: "한 개",
+                    2: "두 개",
+                    3: "세 개",
+                    4: "네 개",
+                    5: "다섯 개",
+                    6: "여섯 개",
+                    7: "일곱 개",
+                    8: "여덟 개",
+                    9: "아홉 개",
+                    10: "열 개",
+                }.get(count, f"{count:,}개")
+                return f"아, {native_count}구나!"
         if task.skill_id == "number-compare" and "answer" in newly_verified:
-            return "아, 오른쪽이 더 많구나!"
-        if "result" in newly_verified and isinstance(newly_verified["result"], int):
+            side = str(newly_verified["answer"]).strip()
+            if side in {"왼쪽", "오른쪽"}:
+                return f"아, {side}이 더 많구나!"
+        if (
+            "result" in newly_verified
+            and isinstance(newly_verified["result"], int)
+            and not isinstance(newly_verified["result"], bool)
+        ):
             return f"아, {newly_verified['result']:,}원이구나!"
-        return "아, 그렇구나!"
+        return None
 
     @staticmethod
     def _ensure_required_question(fallback: str, question: str) -> str:
@@ -2285,15 +2421,38 @@ class ConversationEngine:
     @staticmethod
     def _smooth_ladder_fallback(state: SessionState, task: TaskDefinition) -> str:
         step = task.step_for(state.expression_level, state.verified_slots)
-        if state.expression_level is ExpressionLevel.L3:
-            return ConversationEngine._preface_question("내가 한꺼번에 많이 물어봤네.", step.prompt)
         if state.expression_level is ExpressionLevel.L2:
-            return ConversationEngine._preface_question("말로만 들으려니 헷갈려.", step.prompt)
+            # At L2 the UI itself has changed to reviewed choices.  Repeating
+            # an L4/L3 prompt here made the screen look stuck even though the
+            # input contract had changed.  This is one complete emergency
+            # fallback, not a generic prefix attached to arbitrary questions.
+            return "그럼 혹시 여기서 골라서 알려줄 수 있어?"
+        if state.expression_level is ExpressionLevel.L3:
+            # Do not bolt a generic excuse onto every ladder transition.  It
+            # was shown even when the child had answered part of the question
+            # and made unrelated sessions sound identical.  The authored
+            # prompt already carries the exact remaining focus.
+            return ConversationEngine._complete_mormi_text(step.prompt)
         return ConversationEngine._complete_mormi_text("도움 카드 순서대로 나와 같이 해볼까?")
 
     @staticmethod
-    def _success_then_question(fact: str, question: str) -> str:
-        return ConversationEngine._preface_question("네가 알려줘서 알겠어.", question)
+    def _task_transition_then_question(
+        task: TaskDefinition,
+        _contribution: str,
+        question: str,
+    ) -> str:
+        """Return a reviewed task transition without generic praise glue.
+
+        ``transition_text`` is authored for a concrete state change such as a
+        menu being selected.  If a task has no such transition, the next
+        reviewed question stands on its own.  A generic acknowledgement must
+        not imply that a tap, selection, or incomplete utterance taught Mormi
+        something.
+        """
+
+        if task.transition_text:
+            return ConversationEngine._preface_question(task.transition_text, question)
+        return ConversationEngine._complete_mormi_text(question)
 
     @staticmethod
     def _response_as_text(response: ChildResponse) -> str:
@@ -2400,6 +2559,232 @@ class ConversationEngine:
         return span
 
     @staticmethod
+    def _operation_claim_is_grounded(evidence: str, value: object) -> bool:
+        """Require an operation claim to be visible in the child's own words.
+
+        The reviewed task contract may tell the understanding model which
+        operation is mathematically expected, but that contract is never
+        evidence that the child said it.  This small lexical boundary does not
+        decide whether a method is pedagogically good; it only prevents a
+        model-authored ``addition``/``subtraction`` claim from being promoted
+        when the utterance contains no matching operation at all.
+        """
+
+        normalized = re.sub(r"\s+", "", str(value)).lower()
+        if normalized in {"addition", "add", "+"} or re.search(
+            r"(덧셈|더하기|더하|더해|더했|더하면|합치|합쳐|합하면|모으)",
+            normalized,
+        ):
+            return bool(
+                re.search(r"(덧셈|더하기|더하|더해|더했|더하면|합치|합쳐|합하면|모으)", evidence)
+            )
+        if normalized in {"subtraction", "subtract", "-"} or re.search(
+            r"(뺄셈|빼기|빼|뺀|남|거스름|차이)", normalized
+        ):
+            return bool(re.search(r"(뺄셈|빼기|빼|뺀|남|거스름|차이)", evidence))
+        return False
+
+    @staticmethod
+    def _canonical_claim_is_lexically_grounded(
+        slot: SlotDefinition,
+        evidence: str,
+    ) -> bool:
+        """Check provenance for a closed claim on a conversational turn.
+
+        This is deliberately *not* a general answer parser.  Sonnet remains
+        responsible for understanding creative child language.  The check is
+        used only when the same model says the turn is meta/off-topic (or
+        conversation-only), where a closed task claim is contradictory and
+        therefore needs direct lexical evidence before it may cross the trust
+        boundary.  It blocks outputs such as ``answer=right`` for "오늘 급식
+        뭐야" without restricting ordinary current-task explanations.
+        """
+
+        normalized_evidence = re.sub(r"[\s,.'\"?!…]", "", evidence).lower()
+        if not normalized_evidence:
+            return False
+
+        candidates = [
+            slot.expected,
+            *slot.aliases,
+            *slot.accepted_values,
+        ]
+        lexical_aliases = {
+            "left": ("왼쪽", "좌측"),
+            "right": ("오른쪽", "우측"),
+            "same": ("같아", "같다", "똑같"),
+            "equal": ("같아", "같다", "똑같"),
+        }
+        for candidate in candidates:
+            normalized_candidate = re.sub(
+                r"[\s,.'\"?!…]", "", str(candidate)
+            ).lower()
+            if normalized_candidate and normalized_candidate in normalized_evidence:
+                return True
+            for alias in lexical_aliases.get(normalized_candidate, ()):
+                if alias in normalized_evidence:
+                    return True
+        return False
+
+    @classmethod
+    def _enforce_claim_provenance(
+        cls,
+        task: TaskDefinition,
+        child_text: str,
+        analysis: UtteranceAnalysis,
+    ) -> UtteranceAnalysis:
+        """Freeze the trust boundary between model interpretation and state.
+
+        The model may interpret spelling, ellipsis and creative explanations,
+        but only an exact span from the *current* child utterance may become a
+        learning claim.  Task answers, prior dialogue and reviewed arithmetic
+        are context for interpretation, never provenance.  This makes an
+        incorrect classifier output harmless before it reaches verified slots
+        or the speaker.
+        """
+
+        sanitized = analysis.model_copy(deep=True)
+        # These fields remain in the wire schema for compatibility, but this
+        # architecture has neither a second adjudicator nor classifier-authored
+        # child-facing bridge copy.
+        sanitized.bridge_reply = ""
+        sanitized.needs_adjudication = False
+        sanitized.adjudication_reason = ""
+        model_marked_conversation_only = sanitized.conversation_only
+
+        def exact(span: str) -> str | None:
+            return cls._exact_child_evidence_text(child_text, span)
+
+        # Unsafe turns can never mutate pedagogy.  A model-authored
+        # ``conversation_only`` flag is not itself a trust boundary: mixed
+        # turns such as "왜 알려줘야 돼? 그래도 둘을 더하면 돼" may contain a
+        # real learning fragment.  Ground every normal-turn claim first, then
+        # decide whether the turn is conversation-only from what survived.
+        if sanitized.safety_category is not SafetyCategory.NORMAL:
+            sanitized.claims = []
+            sanitized.arithmetic_claims = []
+        else:
+            grounded_claims: list[SlotClaim] = []
+            contradictory_numeric_claim = False
+            conversational_turn = model_marked_conversation_only or (
+                sanitized.task_relation
+                in {
+                    TaskRelation.META_ABOUT_TASK,
+                    TaskRelation.META_ABOUT_MORMI,
+                    TaskRelation.OFF_TOPIC,
+                    TaskRelation.UNKNOWN,
+                }
+            )
+            for claim in sanitized.claims:
+                slot = task.slots.get(claim.slot_id)
+                evidence = exact(claim.evidence_span)
+                if slot is None or evidence is None:
+                    continue
+                if slot.semantic_role == "operation" and not cls._operation_claim_is_grounded(
+                    evidence, claim.value
+                ):
+                    continue
+
+                # On a turn classified as conversational, a model-produced
+                # closed task value is internally contradictory.  Preserve it
+                # only when the child's exact evidence also names that value.
+                # Selection controls are handled deterministically elsewhere,
+                # and open method/reason slots remain Sonnet's semantic job.
+                if (
+                    conversational_turn
+                    and not slot.is_semantic_support
+                    and slot.semantic_role not in {"operation", "selection"}
+                    and cls._claim_numeric_value(claim) is None
+                    and not cls._canonical_claim_is_lexically_grounded(slot, evidence)
+                ):
+                    continue
+
+                # For explicit numeric claims, the normalized value must be a
+                # number the child actually uttered.  Unparseable Korean words
+                # and typos remain available to the semantic classifier and
+                # later confidence checks instead of being rejected by regex.
+                if not slot.is_semantic_support:
+                    numeric_value = cls._claim_numeric_value(claim)
+                    evidence_values = {
+                        int(value) for value in extract_numeric_values(evidence)
+                    }
+                    if (
+                        numeric_value is not None
+                        and evidence_values
+                        and numeric_value not in evidence_values
+                    ):
+                        # The classifier copied a reviewed number that the
+                        # child did not say (for example expected=1700 with
+                        # exact evidence "1800원이야").  Drop the fabricated
+                        # claim, but retain the observation that the child's
+                        # explicit task answer was mathematically different.
+                        contradictory_numeric_claim = True
+                        continue
+                    if (
+                        conversational_turn
+                        and numeric_value is not None
+                        and not evidence_values
+                    ):
+                        continue
+                claim.evidence_span = evidence
+                grounded_claims.append(claim)
+            sanitized.claims = grounded_claims
+
+            if contradictory_numeric_claim:
+                sanitized.response_category = ResponseCategory.CONCEPTUAL_ERROR
+                sanitized.difficulty_class = DifficultyClass.CONCEPT
+                sanitized.bottleneck = "concept"
+                if sanitized.misconception_tag is None and task.misconception_tags:
+                    sanitized.misconception_tag = task.misconception_tags[0]
+
+            grounded_arithmetic = []
+            for relation in sanitized.arithmetic_claims:
+                evidence = exact(relation.evidence_span)
+                if evidence is None:
+                    continue
+                evidence_values = {
+                    int(value) for value in extract_numeric_values(evidence)
+                }
+                if not {relation.left, relation.right, relation.result}.issubset(
+                    evidence_values
+                ):
+                    continue
+                if not cls._operation_claim_is_grounded(evidence, relation.operation):
+                    continue
+                relation.evidence_span = evidence
+                relation.related_slot_ids = [
+                    slot_id for slot_id in relation.related_slot_ids if slot_id in task.slots
+                ]
+                grounded_arithmetic.append(relation)
+            sanitized.arithmetic_claims = grounded_arithmetic
+
+        sanitized.reference_resolutions = [
+            resolution
+            for resolution in sanitized.reference_resolutions
+            if exact(resolution.source_span) is not None
+        ]
+        sanitized.grounding_span = exact(sanitized.grounding_span) or ""
+        sanitized.social_grounding_span = exact(sanitized.social_grounding_span) or ""
+
+        # A safe meta/off-topic utterance with no child-grounded learning
+        # evidence belongs to the cheap conversational bridge.  Mixed turns
+        # stay on the pedagogical path because their real learning fragment is
+        # preserved above.
+        if not sanitized.claims and not sanitized.arithmetic_claims and (
+            model_marked_conversation_only
+            or sanitized.task_relation
+            in {
+                TaskRelation.META_ABOUT_TASK,
+                TaskRelation.META_ABOUT_MORMI,
+                TaskRelation.OFF_TOPIC,
+            }
+        ):
+            sanitized.conversation_only = True
+        elif sanitized.claims or sanitized.arithmetic_claims:
+            sanitized.conversation_only = False
+        return sanitized
+
+    @staticmethod
     def _claim_numeric_value(claim: SlotClaim) -> int | None:
         """Return one normalized integer that the classifier says the child claimed."""
 
@@ -2433,11 +2818,7 @@ class ConversationEngine:
 
         for claim in analysis.claims:
             slot = task.slots.get(claim.slot_id)
-            if (
-                slot is None
-                or slot.is_semantic_support
-                or isinstance(slot.expected, bool)
-            ):
+            if slot is None or slot.is_semantic_support or isinstance(slot.expected, bool):
                 continue
 
             reviewed_numbers = extract_numeric_values(str(slot.expected))
@@ -2521,6 +2902,17 @@ class ConversationEngine:
         if not found_false_relation:
             return
 
+        # The classifier's prose-level label is only a proposal.  Once the
+        # deterministic arithmetic check proves that the child's stated
+        # relation is false, the effective observation must say so as well.
+        # Leaving ``correct_full`` here used to keep state mutation safe while
+        # corrupting analytics and selecting success-shaped dialogue acts.
+        analysis.response_category = ResponseCategory.CONCEPTUAL_ERROR
+        analysis.difficulty_class = DifficultyClass.CONCEPT
+        analysis.bottleneck = "concept"
+        if analysis.misconception_tag is None and task.misconception_tags:
+            analysis.misconception_tag = task.misconception_tags[0]
+
         # If the classifier omitted related_slot_ids, fail closed only for
         # semantic claims from this response. Closed answers are still checked
         # independently against their reviewed values.
@@ -2544,10 +2936,11 @@ class ConversationEngine:
     ) -> None:
         """Do not trust a number-rich explanation without a checkable relation.
 
-        Haiku remains responsible for understanding the child's language.  The
-        engine only requires that a supported arithmetic explanation carry the
-        structured relation promised by the classifier contract.  Counting
-        numeric evidence is a provenance guard, not a Korean phrase parser.
+        The primary understanding model remains responsible for understanding
+        the child's language.  The engine only requires that a supported
+        arithmetic explanation carry the structured relation promised by the
+        classifier contract.  Counting numeric evidence is a provenance guard,
+        not a Korean phrase parser.
         A separately correct closed answer remains available as partial
         progress even when the explanation must be re-elicited.
         """
@@ -2779,9 +3172,7 @@ def update_skill_profile(
     task: TaskDefinition,
 ) -> LearnerProfile:
     current = profile.skills.get(task.skill_id) or SkillProfile(skill_id=task.skill_id)
-    current.highest_stable_expression_level = (
-        current.highest_stable_expression_level.canonical()
-    )
+    current.highest_stable_expression_level = current.highest_stable_expression_level.canonical()
     independent = state.task_max_hint is HintLevel.H0
     if independent:
         current.h0_success_streak += 1
