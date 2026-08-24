@@ -35,4 +35,3 @@
 - 실패 작업 재처리 범위를 테스트한다.
 - 배포 워크플로의 API/Worker 분리, 모델 마운트, 사전검증 순서를 테스트한다.
 - 전체 pytest, Ruff, mypy와 Docker build를 통과한다.
-

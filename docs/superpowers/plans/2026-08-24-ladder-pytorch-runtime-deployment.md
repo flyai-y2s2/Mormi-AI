@@ -83,4 +83,3 @@
 - [ ] Run a local Docker smoke with the real ignored `run-v2` model mounted read-only.
 - [ ] Verify no model artifact is tracked and commit documentation.
 - [ ] Review the branch and create a PR; do not merge until the user approves.
-
