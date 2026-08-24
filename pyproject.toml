@@ -43,6 +43,12 @@ analysis = [
   "torch>=2.7,<3",
   "transformers>=4.55,<5",
 ]
+inference = [
+  "numpy>=2.2,<3",
+  "safetensors>=0.6,<1",
+  "torch>=2.7,<3",
+  "transformers>=4.55,<5",
+]
 
 [project.scripts]
 mormi-api = "mormi_api.main:run"

@@ -23,7 +23,7 @@ jobs:
   test:
     name: Lint & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -49,6 +49,10 @@ jobs:
 
       - name: Pytest
         run: pytest -q
+
+      - name: Docker production image
+        if: github.event_name == 'pull_request'
+        run: docker build -t mormi-ai:pr-check .
 
   build-and-push:
     name: Build image, push to ECR
@@ -143,52 +147,137 @@ jobs:
           # 새 이미지 다운로드
           docker pull "${IMAGE_URI}"
 
-          # 기존 컨테이너 제거
-          docker rm -f mormi-ai 2>/dev/null || true
+          # 운영 모델을 새 이미지에서 먼저 검증합니다. 실패하면 기존 서비스는 유지됩니다.
+          docker run --rm \
+            -v /opt/mormi/models:/opt/mormi/models:ro \
+            "${IMAGE_URI}" \
+            python scripts/check_ladder_runtime.py \
+              --model-dir /opt/mormi/models/ladder-v2/model
 
           # 서비스용 Docker network 생성
           docker network create mormi-services 2>/dev/null || true
 
-          # 새 컨테이너 실행
+          # 실제 API를 내리기 전에 동일한 환경의 후보 컨테이너를 먼저 확인합니다.
+          PREVIOUS_IMAGE="$(docker inspect --format '{{.Config.Image}}' mormi-ai 2>/dev/null || true)"
+          docker rm -f mormi-ai-candidate 2>/dev/null || true
+          docker run -d \
+            --name mormi-ai-candidate \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+            -e MORMI_OBSERVATION_INGEST_URL= \
+            -e MORMI_OBSERVATION_INGEST_KEY= \
+            -p 127.0.0.1:18000:8000 \
+            --log-opt max-size=10m \
+            --log-opt max-file=5 \
+            "${IMAGE_URI}"
+
+          candidate_ready=""
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:18000/health 2>/dev/null; then
+              candidate_ready="yes"
+              break
+            fi
+            if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ai-candidate$'; then
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "${candidate_ready}" ]; then
+            echo "candidate API health check failed; live API was not replaced"
+            docker logs --tail=200 mormi-ai-candidate || true
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          docker rm -f mormi-ai-candidate
+
+          # 검증된 후보로 API를 교체합니다.
+          docker rm -f mormi-ai 2>/dev/null || true
           docker run -d \
             --name mormi-ai \
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
             -p 8000:8000 \
             --log-opt max-size=10m \
             --log-opt max-file=5 \
             "${IMAGE_URI}"
 
-          # 컨테이너 health check
-          ready=""
-
+          api_ready=""
           for i in $(seq 1 30); do
             if curl -fsS -o /dev/null http://localhost:8000/health 2>/dev/null; then
-              ready="yes"
+              api_ready="yes"
               break
             fi
-
             if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ai$'; then
-              echo "container exited during startup"
-              docker logs --tail=200 mormi-ai || true
-              exit 1
+              break
             fi
-
             sleep 2
           done
-
-          if [ -z "${ready}" ]; then
-            echo "health check never passed within 60s"
+          if [ -z "${api_ready}" ]; then
+            echo "new API failed after switch; restoring previous image"
             docker logs --tail=200 mormi-ai || true
+            docker rm -f mormi-ai 2>/dev/null || true
+            if [ -n "${PREVIOUS_IMAGE}" ]; then
+              docker run -d \
+                --name mormi-ai \
+                --restart unless-stopped \
+                --network mormi-services \
+                --env-file /etc/mormi-ai/mormi.env \
+                -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+                -p 8000:8000 \
+                --log-opt max-size=10m \
+                --log-opt max-file=5 \
+                "${PREVIOUS_IMAGE}"
+              rollback_ready=""
+              for i in $(seq 1 30); do
+                if curl -fsS -o /dev/null http://localhost:8000/health 2>/dev/null; then
+                  rollback_ready="yes"
+                  break
+                fi
+                sleep 2
+              done
+              if [ -z "${rollback_ready}" ]; then
+                echo "previous API image also failed health check"
+                docker logs --tail=200 mormi-ai || true
+              fi
+            fi
             exit 1
           fi
 
           echo "health:"
           curl -fsS http://localhost:8000/health
 
+          # 새 API가 정상인 경우에만 분석 워커를 교체합니다.
+          docker rm -f mormi-ladder-worker 2>/dev/null || true
+
+          docker run -d \
+            --name mormi-ladder-worker \
+            --restart unless-stopped \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_LADDER_MODEL_DIR=/opt/mormi/models/ladder-v2/model \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=true \
+            -e MORMI_LADDER_ANALYSIS_POLL_INTERVAL_SECONDS=2 \
+            -e MORMI_LADDER_ANALYSIS_BATCH_SIZE=1 \
+            -e MORMI_LADDER_ANALYSIS_LEASE_SECONDS=180 \
+            -v /opt/mormi/models:/opt/mormi/models:ro \
+            --log-opt max-size=10m \
+            --log-opt max-file=5 \
+            "${IMAGE_URI}" \
+            python scripts/run_ladder_worker.py
+
+          sleep 5
+
+          if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ladder-worker$'; then
+            echo "ladder worker exited during startup"
+            docker logs --tail=200 mormi-ladder-worker || true
+            exit 1
+          fi
+
           docker image prune -f >/dev/null
 
-          docker ps --filter name=mormi-ai
+          docker ps --filter name=mormi-ai --filter name=mormi-ladder-worker
 
           REMOTE

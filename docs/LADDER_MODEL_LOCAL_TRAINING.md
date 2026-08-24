@@ -68,8 +68,8 @@ validation macro F1이 2 epoch 동안 개선되지 않으면 8 epoch 전에 자�
 $env:MORMI_LADDER_MODEL_DIR = "D:\mormi-models\ladder-v2\model"
 $env:MORMI_LADDER_ANALYSIS_WORKER_ENABLED = "true"
 $env:MORMI_LADDER_ANALYSIS_POLL_INTERVAL_SECONDS = "2"
-$env:MORMI_LADDER_ANALYSIS_BATCH_SIZE = "10"
-$env:MORMI_LADDER_ANALYSIS_LEASE_SECONDS = "60"
+$env:MORMI_LADDER_ANALYSIS_BATCH_SIZE = "1"
+$env:MORMI_LADDER_ANALYSIS_LEASE_SECONDS = "180"
 ```
 
 작업자는 모델을 첫 분석 때 지연 로드합니다. `MORMI_LADDER_MODEL_DIR`이 없거나 모델을

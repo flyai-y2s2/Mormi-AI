@@ -8,7 +8,10 @@ WORKDIR /app
 
 COPY pyproject.toml README.md alembic.ini ./
 COPY src ./src
-RUN pip install '.[postgres]'
+RUN pip install \
+      --index-url https://download.pytorch.org/whl/cpu \
+      'torch>=2.7,<3' \
+    && pip install '.[postgres,inference]'
 
 COPY alembic ./alembic
 COPY docs ./docs
