@@ -162,3 +162,41 @@ async def test_worker_stores_bounded_error_code_and_continues(tmp_path: Path) ->
         "MODEL_NOT_FOUND"
     }
     await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_requeue_model_failures_preserves_ids_and_excludes_other_failures(
+    tmp_path: Path,
+) -> None:
+    database, store = await repository(tmp_path)
+    error_by_key = {
+        "missing": "MODEL_NOT_FOUND",
+        "dependency": "MODEL_DEPENDENCY_MISSING",
+        "load": "MODEL_LOAD_FAILED",
+        "speech": "SPEECH_LOAD_FAILED",
+    }
+    created_by_key = {
+        key: await store.enqueue(request(key)) for key in error_by_key
+    }
+    claimed_by_id = {
+        job.analysis_id: job for job in await store.claim_pending(len(error_by_key))
+    }
+    for key, error_code in error_by_key.items():
+        await store.fail(
+            claimed_by_id[created_by_key[key].analysis_id],
+            error_code=error_code,
+        )
+
+    requeued = await store.requeue_model_failures()
+    latest = {job.analysis_id: job for job in await store.latest_for_learner(7)}
+
+    assert requeued == 3
+    for key in ("missing", "dependency", "load"):
+        original = created_by_key[key]
+        assert latest[original.analysis_id].analysis_id == original.analysis_id
+        assert latest[original.analysis_id].status == "pending"
+        assert latest[original.analysis_id].error_code is None
+    speech = latest[created_by_key["speech"].analysis_id]
+    assert speech.status == "failed"
+    assert speech.error_code == "SPEECH_LOAD_FAILED"
+    await database.dispose()

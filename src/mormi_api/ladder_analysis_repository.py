@@ -59,6 +59,10 @@ class LadderAnalysisJob:
 
 
 class LadderAnalysisRepository:
+    REQUEUEABLE_MODEL_ERRORS = frozenset(
+        {"MODEL_NOT_FOUND", "MODEL_DEPENDENCY_MISSING", "MODEL_LOAD_FAILED"}
+    )
+
     def __init__(self, database: Database, *, lease_seconds: float) -> None:
         self.database = database
         self.lease_seconds = lease_seconds
@@ -241,6 +245,31 @@ class LadderAnalysisRepository:
                 ).scalars()
             )
             return [self._job(record) for record in records]
+
+    async def requeue_model_failures(self) -> int:
+        requeued_at = utc_now()
+        async with self.database.sessions() as db:
+            records = list(
+                (
+                    await db.execute(
+                        select(LadderAnalysisRecord)
+                        .where(
+                            LadderAnalysisRecord.status == "failed",
+                            LadderAnalysisRecord.error_code.in_(
+                                self.REQUEUEABLE_MODEL_ERRORS
+                            ),
+                        )
+                        .with_for_update(skip_locked=True)
+                    )
+                ).scalars()
+            )
+            for record in records:
+                record.status = "pending"
+                record.error_code = None
+                record.available_at = requeued_at
+                record.updated_at = requeued_at
+            await db.commit()
+            return len(records)
 
     async def approve(
         self,
