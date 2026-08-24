@@ -523,8 +523,9 @@ async def test_bare_comparison_conclusion_is_kept_but_does_not_create_a_note() -
         ],
         confidence=1,
     )
+    gateway = FakeGateway([analysis])
     engine = ConversationEngine(  # type: ignore[arg-type]
-        FakeGateway([analysis]),
+        gateway,
         show_internal_pedagogy=True,
     )
     state = home_state(
@@ -552,8 +553,17 @@ async def test_bare_comparison_conclusion_is_kept_but_does_not_create_a_note() -
     assert turn.note_update is None
     assert turn.input.target_slots == ["reason"]
     assert turn.mormi.text == (
-        "아, 오른쪽이 더 많구나! 나 3이랑 5를 어떻게 비교할지 헷갈려... 알려줄 수 있어?"
+        "아, 오른쪽이 더 많구나! 왜 오른쪽에 점이 더 많은지 알려줄 수 있어?"
     )
+    speaker_context = gateway.speaker_contexts[-1]
+    assert speaker_context.required_question == (
+        "왜 오른쪽에 점이 더 많은지 알려줄 수 있어?"
+    )
+    assert speaker_context.unresolved_focus == {
+        "reason": "오른쪽에 점이 더 많은 이유 또는 왼쪽과 오른쪽을 비교한 방법"
+    }
+    assert speaker_context.allowed_numbers == []
+    assert speaker_context.verified_facts == {"answer": "오른쪽에 점이 더 많아."}
 
 
 @pytest.mark.asyncio

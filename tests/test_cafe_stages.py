@@ -492,5 +492,5 @@ def test_calculation_guidance_uses_natural_korean_without_menu_name_particles() 
     task = get_task(task_id, data)
     prompt = task.steps[ExpressionLevel.L2][0].prompt
 
-    assert prompt == "어떤 계산을 해야 할까?"
+    assert prompt == "어떤 계산을 해야 하는지 골라서 알려줄 수 있어?"
     assert "우유을" not in prompt

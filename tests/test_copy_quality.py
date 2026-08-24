@@ -11,12 +11,20 @@ from pydantic import ValidationError
 from mormi_api.content import (
     HOME_TEACHING_CATALOG,
     HintDefinition,
+    calculation_task,
     home_teaching_task,
     queue_task,
     reviewed_help_card,
+    simple_calculation_task,
 )
 from mormi_api.copy_quality import validate_child_facing_math_copy
-from mormi_api.schemas import ExpressionLevel, HintLevel, InputKind, SafetyCategory
+from mormi_api.schemas import (
+    ExpressionLevel,
+    HintLevel,
+    InputKind,
+    SafetyCategory,
+    SceneType,
+)
 from mormi_api.security import deterministic_safety, safety_redirect
 
 VAGUE_COPY = (
@@ -41,6 +49,12 @@ TEACHER_EVALUATION_COPY = re.compile(
     r"왜\s+.+(?:라고\s+)?생각했어|왜\s+그렇게\s+생각|어떻게\s+알았어|"
     r"어떻게\s+[^?]*(?:했어|셌어|찾았어|읽었어|비교했어)|까닭은\s+무엇|"
     r"이유를\s*(?:말|설명)|설명해\s*봐|말해\s*봐"
+)
+
+# L2는 아이가 선택해서 모르미에게 알려주는 단계다. 다만 수학 문장 속
+# ``똑같이``까지 공동 수행으로 오인하지 않도록 실제 공동 행동 표현만 잡는다.
+JOINT_L2_COPY = re.compile(
+    r"(?:같이|함께)\s*(?:골라|찾아|선택|해\s*보|풀어|계산|채워|읽어)"
 )
 
 
@@ -183,16 +197,238 @@ def test_queue_reason_choices_explain_the_wait_instead_of_repeating_the_question
     for left, right in permutations(range(1, 6), 2):
         task = queue_task(task_id="copy-test", stage_id="queue", left=left, right=right)
         smaller, larger = sorted((left, right))
-        side = "왼쪽" if left < right else "오른쪽"
         expected_labels = [
             f"내 앞에 {smaller}명이 기다려서",
             f"내 앞에 {larger}명이 기다려서",
         ]
 
         step = task.steps[ExpressionLevel.L2][3]
-        assert step.prompt == f"나는 왜 {side} 줄이 더 빠른지 헷갈려... 같이 골라 볼까?"
+        assert step.prompt == "왜 그 줄에서 내 차례가 더 빨리 오는지 골라서 알려줄 수 있어?"
+        assert "같이" not in step.prompt
+        assert str(left) not in step.prompt
+        assert str(right) not in step.prompt
         assert [choice.label for choice in step.input.choices] == expected_labels
         assert all("사람이 적어서" not in choice.label for choice in step.input.choices)
+
+
+def test_queue_followups_do_not_reveal_unverified_side_or_counts() -> None:
+    for left, right in permutations(range(1, 6), 2):
+        task = queue_task(task_id="trust-test", stage_id="queue", left=left, right=right)
+        correct_side = "왼쪽" if left < right else "오른쪽"
+
+        l3_reason = task.steps[ExpressionLevel.L3][2]
+        l2_reason = task.steps[ExpressionLevel.L2][3]
+        for copy in (
+            l3_reason.prompt,
+            l3_reason.fallback_text,
+            l2_reason.prompt,
+            l2_reason.fallback_text,
+        ):
+            assert correct_side not in copy
+            assert str(left) not in copy
+            assert str(right) not in copy
+        assert "같이" not in l2_reason.prompt
+        assert "같이" not in l2_reason.fallback_text
+
+
+def test_every_l2_prompt_keeps_the_child_as_the_teaching_subject() -> None:
+    tasks = [
+        *(home_teaching_task(spec, skill_id=spec.id) for spec in HOME_TEACHING_CATALOG.values()),
+        calculation_task(
+            task_id="legacy-addition-copy-test",
+            title="덧셈",
+            skill_id="addition",
+            left=1200,
+            right=500,
+            operation="addition",
+            result=1700,
+        ),
+        calculation_task(
+            task_id="legacy-subtraction-copy-test",
+            title="뺄셈",
+            skill_id="subtraction",
+            left=2000,
+            right=1800,
+            operation="subtraction",
+            result=200,
+        ),
+        simple_calculation_task(
+            task_id="cafe-addition-copy-test",
+            stage_id="menu_total",
+            title="메뉴 값 계산",
+            left=700,
+            right=500,
+            operation="addition",
+            left_label="주스",
+            right_label="빵",
+            behavior="menu_total",
+            note_policy="stage",
+            coauthored_note="두 메뉴의 값을 더하면 모두 1,200원이야.",
+            context={},
+        ),
+        simple_calculation_task(
+            task_id="cafe-subtraction-copy-test",
+            stage_id="change",
+            title="거스름돈 계산",
+            left=2000,
+            right=1800,
+            operation="subtraction",
+            left_label="낸 돈",
+            right_label="메뉴 값",
+            behavior="change",
+            note_policy="stage",
+            coauthored_note="낸 돈에서 메뉴 값을 빼면 거스름돈을 알 수 있어.",
+            context={},
+        ),
+    ]
+
+    for task in tasks:
+        for step in task.steps[ExpressionLevel.L2]:
+            assert step.input.kind is InputKind.CHOICES, (task.id, step.id)
+            assert not JOINT_L2_COPY.search(step.prompt), (task.id, step.id, step.prompt)
+            assert not JOINT_L2_COPY.search(step.fallback_text), (
+                task.id,
+                step.id,
+                step.fallback_text,
+            )
+
+
+def test_calculation_followups_do_not_preteach_operation_or_column_method() -> None:
+    for operation, left, right, result, hidden_terms in (
+        ("addition", 1200, 500, 1700, ("더해야", "올림")),
+        ("subtraction", 2000, 1800, 200, ("빼야", "받아내림")),
+    ):
+        task = calculation_task(
+            task_id=f"calculation-trust-{operation}",
+            title="계산",
+            skill_id=operation,
+            left=left,
+            right=right,
+            operation=operation,
+            result=result,
+            scene=SceneType.HOME_TEACH,
+        )
+        l3_operation = task.steps[ExpressionLevel.L3][1]
+        l3_method = task.steps[ExpressionLevel.L3][2]
+        child_copy = (
+            l3_operation.prompt,
+            l3_operation.fallback_text,
+            l3_method.prompt,
+            l3_method.fallback_text,
+        )
+        for hidden in hidden_terms:
+            assert all(hidden not in copy for copy in child_copy), (operation, hidden, child_copy)
+
+
+def _targeted_followup(task, verified_slots: dict[str, object]):
+    return task.active_step(
+        ExpressionLevel.L4,
+        verified_slots,
+        entry_active=False,
+        targeted_followup=True,
+    )
+
+
+def test_home_count_and_compare_followups_use_only_child_verified_facts() -> None:
+    count_task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-count"],
+        skill_id="number-count",
+    )
+    count_method = _targeted_followup(count_task, {"answer": "3"})
+    assert count_method.target_slots == ["tracking"]
+    assert "3" not in count_method.prompt
+
+    compare_task = home_teaching_task(
+        HOME_TEACHING_CATALOG["number-compare"],
+        skill_id="number-compare",
+    )
+    compare_reason = _targeted_followup(compare_task, {"answer": "right"})
+    assert compare_reason.target_slots == ["reason"]
+    assert "오른쪽" in compare_reason.prompt
+    assert "3" not in compare_reason.prompt
+    assert "5" not in compare_reason.prompt
+
+    compare_answer = _targeted_followup(
+        compare_task,
+        {"reason": "count_comparison"},
+    )
+    assert compare_answer.target_slots == ["answer"]
+    assert "오른쪽이 더 많" not in compare_answer.prompt
+
+
+def test_queue_followups_do_not_reveal_the_next_count_or_correct_side() -> None:
+    task = queue_task(task_id="queue-state-trust", stage_id="queue", left=3, right=5)
+
+    right_count = _targeted_followup(task, {"left_count": 3})
+    assert "right_count" in right_count.target_slots
+    assert "5" not in right_count.prompt
+
+    reason = _targeted_followup(
+        task,
+        {"left_count": 3, "right_count": 5, "final_choice": "left"},
+    )
+    assert reason.target_slots == ["reason"]
+    assert "왼쪽" not in reason.prompt
+    assert "3" not in reason.prompt
+    assert "5" not in reason.prompt
+
+    choice = _targeted_followup(
+        task,
+        {"left_count": 3, "right_count": 5, "reason": "fewer_people"},
+    )
+    assert choice.target_slots == ["final_choice"]
+    assert "왼쪽" not in choice.prompt
+
+
+@pytest.mark.parametrize("operation,left,right,result", [
+    ("addition", 700, 500, 1200),
+    ("subtraction", 2000, 1800, 200),
+])
+def test_cafe_calculation_followups_do_not_reveal_missing_math_slots(
+    operation: str,
+    left: int,
+    right: int,
+    result: int,
+) -> None:
+    task = simple_calculation_task(
+        task_id=f"cafe-state-trust-{operation}",
+        stage_id="menu_total" if operation == "addition" else "change",
+        title="금액 계산",
+        left=left,
+        right=right,
+        operation=operation,
+        left_label="첫 금액",
+        right_label="둘째 금액",
+        behavior="menu_total" if operation == "addition" else "change",
+        note_policy="stage",
+        coauthored_note="검사용 문장",
+        context={},
+    )
+
+    operation_step = _targeted_followup(task, {"result": result})
+    assert operation_step.target_slots == ["operation"]
+    assert "더하" not in operation_step.prompt
+    assert "빼" not in operation_step.prompt
+
+    result_step = _targeted_followup(task, {"operation": operation})
+    assert result_step.target_slots == ["result"]
+    assert str(result) not in result_step.prompt
+
+
+def test_all_home_catalog_followups_ask_only_for_the_missing_slot() -> None:
+    for spec in HOME_TEACHING_CATALOG.values():
+        task = home_teaching_task(spec, skill_id=spec.id)
+        if len(task.required_slots) != 2:
+            continue
+        first, second = task.required_slots
+
+        after_first = _targeted_followup(task, {first: "verified"})
+        after_second = _targeted_followup(task, {second: "verified"})
+
+        assert second in after_first.target_slots, (spec.id, after_first.id)
+        assert first not in after_first.target_slots, (spec.id, after_first.id)
+        assert first in after_second.target_slots, (spec.id, after_second.id)
+        assert second not in after_second.target_slots, (spec.id, after_second.id)
 
 
 def test_every_dynamic_queue_choice_stays_inside_the_shared_count_contract() -> None:

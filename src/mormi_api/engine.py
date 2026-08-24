@@ -1519,8 +1519,13 @@ class ConversationEngine:
         required_slot_descriptions = {
             slot: task.slots[slot].description for slot in required_slot_ids
         }
+        # A reviewed follow-up question describes what the child should teach
+        # next; it is not evidence that the child has already taught every
+        # number appearing in that question.  Only child-confirmed facts and
+        # grounded child arithmetic claims may enter the speaker's numerical
+        # knowledge boundary.
         reviewed_numbers = sorted(
-            extract_numeric_values(" ".join([*verified_facts.values(), required_question or ""]))
+            extract_numeric_values(" ".join(verified_facts.values()))
         )
         arithmetic_claims = self._speaker_arithmetic_claims(
             task,
