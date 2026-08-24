@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,11 @@ class Settings(BaseSettings):
     idempotency_retention_days: int = Field(default=30, ge=1, le=90)
     cors_origins: list[str] = ["http://localhost:3000"]
     show_internal_pedagogy: bool = False
+    ladder_model_dir: Path | None = None
+    ladder_analysis_worker_enabled: bool = False
+    ladder_analysis_poll_interval_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    ladder_analysis_batch_size: int = Field(default=10, ge=1, le=100)
+    ladder_analysis_lease_seconds: float = Field(default=60.0, ge=5, le=600)
 
     @field_validator(
         "anthropic_api_key",
@@ -41,6 +47,7 @@ class Settings(BaseSettings):
         "service_api_key",
         "observation_ingest_url",
         "observation_ingest_key",
+        "ladder_model_dir",
         mode="before",
     )
     @classmethod
@@ -54,6 +61,10 @@ class Settings(BaseSettings):
     @property
     def observation_ingest_enabled(self) -> bool:
         return bool(self.observation_ingest_url and self.observation_ingest_key)
+
+    @property
+    def ladder_analysis_enabled(self) -> bool:
+        return self.ladder_analysis_worker_enabled and self.ladder_model_dir is not None
 
     def validate_runtime_safety(self) -> None:
         if self.skip_startup_maintenance and self.environment.lower() not in {
@@ -81,6 +92,10 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "MORMI_OUTBOX_LEASE_SECONDS must be greater than "
                 "MORMI_OUTBOX_REQUEST_TIMEOUT_SECONDS"
+            )
+        if self.ladder_analysis_worker_enabled and self.ladder_model_dir is None:
+            raise RuntimeError(
+                "MORMI_LADDER_MODEL_DIR is required when the ladder analysis worker is enabled"
             )
 
 

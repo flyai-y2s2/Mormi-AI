@@ -15,6 +15,7 @@ from .db import (
     DialogueClaimRecord,
     DialogueTaskOutcomeRecord,
     DialogueTurnObservationRecord,
+    LadderAnalysisRecord,
     LearnerProfileRecord,
     NoteEvidenceLinkRecord,
     NoteRecord,
@@ -26,6 +27,8 @@ from .outbox import DIALOGUE_OBSERVATION_EVENT_TYPE, STAR_NOTE_CREATED_EVENT_TYP
 from .reporting import build_report_evidence
 from .schemas import (
     ChildResponse,
+    ExpressionLevel,
+    LadderRecommendationEvidence,
     LearnerProfile,
     NoteAttribution,
     NoteEvidence,
@@ -871,13 +874,60 @@ class Repository:
                     ).scalars()
                 )
             )
-        return await build_report_evidence(
+        evidence = await build_report_evidence(
             self,
             learner_id,
             conversations,
             turns,
             include_raw=include_raw,
         )
+        evidence.ladder_recommendations = await self.latest_ladder_recommendations(learner_id)
+        return evidence
+
+    async def latest_ladder_recommendations(
+        self, learner_id: int
+    ) -> list[LadderRecommendationEvidence]:
+        async with self.database.sessions() as db:
+            records = list(
+                (
+                    await db.execute(
+                        select(LadderAnalysisRecord)
+                        .where(
+                            LadderAnalysisRecord.learner_id == learner_id,
+                            LadderAnalysisRecord.status == "completed",
+                        )
+                        .order_by(LadderAnalysisRecord.created_at.desc())
+                    )
+                ).scalars()
+            )
+        latest_by_skill: dict[str, LadderAnalysisRecord] = {}
+        for record in records:
+            latest_by_skill.setdefault(record.skill_id, record)
+        recommendations: list[LadderRecommendationEvidence] = []
+        for record in latest_by_skill.values():
+            decision = dict(record.decision_json or {})
+            recommendations.append(
+                LadderRecommendationEvidence(
+                    analysis_id=record.analysis_id,
+                    learner_id=record.learner_id,
+                    skill_id=record.skill_id,
+                    trigger_session_id=record.trigger_session_id,
+                    session_ids=list(record.session_ids_json),
+                    current_level=ExpressionLevel(str(decision["current_level"])),
+                    recommended_level=ExpressionLevel(str(decision["recommended_level"])),
+                    action=str(decision["action"]),
+                    current_accuracy=decision.get("current_accuracy"),
+                    evidence_count=int(decision.get("evidence_count", 0)),
+                    reason_code=str(decision.get("reason_code", "")),
+                    recent_predictions=list(decision.get("recent_predictions", [])),
+                    model_version=record.model_version or "unknown",
+                    recommendation_version=record.recommendation_version,
+                    status=record.status,
+                    approved=record.approved_at is not None,
+                    analyzed_at=record.completed_at or record.updated_at,
+                )
+            )
+        return recommendations
 
     async def backfill_historical_observations(self) -> int:
         """Preserve legacy turns as explicitly incomplete observations.

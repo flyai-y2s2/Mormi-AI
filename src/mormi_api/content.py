@@ -931,7 +931,10 @@ class HomeTeachingSpec(BaseModel):
 
 def _load_home_teaching_catalog() -> dict[str, HomeTeachingSpec]:
     path = Path(__file__).with_name("home_teaching_catalog.json")
-    entries = [HomeTeachingSpec.model_validate(item) for item in json.loads(path.read_text())]
+    entries = [
+        HomeTeachingSpec.model_validate(item)
+        for item in json.loads(path.read_text(encoding="utf-8"))
+    ]
     if any(entry.entry_mode == "wrong_guess" for entry in entries):
         raise ValueError(
             "current home teaching catalog must start with genuine help requests; "

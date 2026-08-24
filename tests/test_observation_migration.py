@@ -154,7 +154,7 @@ def test_migration_stamps_complete_schema_created_by_app_startup(
         version = connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar_one()
-        assert version == "20260817_01"
+        assert version == "20260823_02"
     engine.dispose()
 
 

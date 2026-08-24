@@ -46,7 +46,7 @@ TEACHER_EVALUATION_COPY = re.compile(
 
 def test_home_catalog_has_one_live_explicit_help_plan_per_item() -> None:
     catalog_path = Path(__file__).parents[1] / "src/mormi_api/home_teaching_catalog.json"
-    raw_catalog = json.loads(catalog_path.read_text())
+    raw_catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
 
     assert len(raw_catalog) == len(HOME_TEACHING_CATALOG)
     for raw in raw_catalog:
