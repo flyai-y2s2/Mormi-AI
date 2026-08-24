@@ -492,6 +492,7 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         )
         payload = json.loads(prompt)
 
+        assert payload["unresolved_required_slots"] == list(task.required_slots)
         assert set(payload["semantic_role_policy"]) == {
             "observation",
             "conclusion",
@@ -531,6 +532,11 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
         assert any(
             "아이가 실제로 주장한 값" in instruction for instruction in payload["instructions"]
         )
+        assert any(
+            "서로 배타적인 분류가 아니다" in instruction
+            for instruction in payload["instructions"]
+        )
+        assert any("2개씩 4묶음" in instruction for instruction in payload["instructions"])
 
 
 def test_classifier_prompt_carries_only_the_latest_six_dialogue_turns() -> None:

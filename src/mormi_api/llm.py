@@ -363,6 +363,11 @@ class ClaudeGateway:
             "all_task_slot_contracts": all_task_slots,
             "required_slots_for_this_question": step.target_slots,
             "optional_partial_slots_for_this_question": step.optional_slots,
+            "unresolved_required_slots": [
+                slot_id
+                for slot_id in task.required_slots
+                if slot_id not in state.verified_slots
+            ],
             "already_verified_slots": state.verified_slots,
             "known_misconceptions": task.misconception_tags,
             "reviewed_arithmetic_truth": (
@@ -540,6 +545,21 @@ class ClaudeGateway:
                     "현재의 좁은 후속 질문 밖에 있는 내용이라도 all_task_slot_contracts의 "
                     "사실을 아이가 직접 말했다면 claim으로 보존한다. 현재 질문을 완성했는지는 "
                     "required_slots_for_this_question과 별도로 판단한다."
+                ),
+                (
+                    "claims는 서로 배타적인 분류가 아니다. 한 발화가 여러 슬롯을 직접 "
+                    "충족하면 슬롯마다 claim을 모두 만든다. unresolved_required_slots를 "
+                    "각각 독립적으로 확인하되, 아이 원문 근거가 있는 슬롯만 추출한다."
+                ),
+                (
+                    "같은 evidence_span이 여러 슬롯의 의미를 실제로 모두 담을 때만 여러 claim의 "
+                    "근거로 재사용한다. 한 슬롯의 충족을 이유로 다른 슬롯을 추론하거나 "
+                    "보충하지 않는다."
+                ),
+                (
+                    "예: '오른쪽이 더 많고 3보다 5가 크니까'는 answer와 reason을 모두, "
+                    "'2개씩 4묶음이라 2+2+2+2'는 answer와 rule을 모두 추출한다. "
+                    "반면 '오른쪽'은 answer만 추출하고 reason을 만들지 않는다."
                 ),
                 "아이 원문에 직접 근거가 없는 사실은 claim으로 만들지 않는다.",
                 (
