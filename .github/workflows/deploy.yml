@@ -164,6 +164,10 @@ jobs:
             --name mormi-ai-candidate \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=medium \
+            -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_SPEAKER_EFFORT=low \
             -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
             -e MORMI_OBSERVATION_INGEST_URL= \
             -e MORMI_OBSERVATION_INGEST_KEY= \
@@ -198,6 +202,10 @@ jobs:
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=medium \
+            -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_SPEAKER_EFFORT=low \
             -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
             -p 8000:8000 \
             --log-opt max-size=10m \
@@ -225,6 +233,10 @@ jobs:
                 --restart unless-stopped \
                 --network mormi-services \
                 --env-file /etc/mormi-ai/mormi.env \
+                -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+                -e MORMI_CLASSIFIER_EFFORT=medium \
+                -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+                -e MORMI_SPEAKER_EFFORT=low \
                 -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
                 -p 8000:8000 \
                 --log-opt max-size=10m \
@@ -257,6 +269,10 @@ jobs:
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=medium \
+            -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_SPEAKER_EFFORT=low \
             -e MORMI_LADDER_MODEL_DIR=/opt/mormi/models/ladder-v2/model \
             -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=true \
             -e MORMI_LADDER_ANALYSIS_POLL_INTERVAL_SECONDS=2 \

@@ -298,6 +298,10 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_CORS_ORIGINS` | 아니요 | 브라우저 직접 호출을 허용할 오리진 JSON 배열. Spring 경유만 하면 `[]` |
 | `MORMI_SHOW_INTERNAL_PEDAGOGY=false` | 아니요 | 운영 응답에서 내부 L/H·판정 근거를 숨김 |
 
+`develop` 배포 워크플로는 후보·운영·롤백 API 컨테이너에 분류기/화자 모델과 effort를
+`docker run -e`로 명시한다. 따라서 EC2의 기존 `/etc/mormi-ai/mormi.env`에 남아 있는
+이전 모델 설정보다 `claude-sonnet-4-6 / medium` 및 `claude-sonnet-4-6 / low`가 우선한다.
+
 대화 프록시 호출을 위해 Spring 서버와 맞출 값은 다음 두 가지입니다.
 
 - `MORMI_DIALOGUE_BASE_URL`: AI 서버의 내부 주소

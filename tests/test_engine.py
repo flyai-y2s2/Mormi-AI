@@ -73,8 +73,10 @@ def test_natural_speaker_timeouts_are_bounded_but_not_overly_aggressive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("MORMI_CLASSIFIER_MODEL", raising=False)
+    monkeypatch.delenv("MORMI_CLASSIFIER_EFFORT", raising=False)
     monkeypatch.delenv("MORMI_BRIDGE_MODEL", raising=False)
     monkeypatch.delenv("MORMI_SPEAKER_MODEL", raising=False)
+    monkeypatch.delenv("MORMI_SPEAKER_EFFORT", raising=False)
     monkeypatch.delenv("MORMI_SPEAKER_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MORMI_BRIDGE_TIMEOUT_SECONDS", raising=False)
 

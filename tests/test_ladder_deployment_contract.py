@@ -32,6 +32,15 @@ def test_deployment_separates_api_and_ladder_worker() -> None:
     assert "python scripts/run_ladder_worker.py" in workflow
 
 
+def test_deployment_overrides_stale_ec2_dialogue_model_settings() -> None:
+    workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
+
+    assert workflow.count("MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6") >= 3
+    assert workflow.count("MORMI_CLASSIFIER_EFFORT=medium") >= 3
+    assert workflow.count("MORMI_SPEAKER_MODEL=claude-sonnet-4-6") >= 3
+    assert workflow.count("MORMI_SPEAKER_EFFORT=low") >= 3
+
+
 def test_deployment_health_checks_candidate_before_removing_live_api() -> None:
     workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
 
