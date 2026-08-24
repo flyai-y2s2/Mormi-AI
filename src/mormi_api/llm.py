@@ -173,6 +173,7 @@ class ClaudeGateway:
                 system=CLASSIFIER_SYSTEM,
                 messages=[{"role": "user", "content": prompt}],
                 output_config={
+                    "effort": self.settings.classifier_effort,
                     "format": {
                         "type": "json_schema",
                         "schema": schema,
@@ -206,6 +207,7 @@ class ClaudeGateway:
                     }
                 ],
                 output_config={
+                    "effort": self.settings.speaker_effort,
                     "format": {
                         "type": "json_schema",
                         "schema": schema,

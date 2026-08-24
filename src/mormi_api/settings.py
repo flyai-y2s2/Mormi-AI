@@ -1,8 +1,11 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+EffortLevel = Literal["low", "medium", "high", "max"]
 
 
 class Settings(BaseSettings):
@@ -16,8 +19,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/mormi.db"
     anthropic_api_key: str | None = None
     classifier_model: str = "claude-sonnet-4-6"
+    classifier_effort: EffortLevel = "medium"
     bridge_model: str = "claude-haiku-4-5-20251001"
     speaker_model: str = "claude-sonnet-4-6"
+    speaker_effort: EffortLevel = "low"
     speaker_timeout_seconds: float = Field(default=10.0, ge=0.5, le=30)
     bridge_timeout_seconds: float = Field(default=4.0, ge=0.5, le=10)
     raw_data_encryption_key: str | None = None

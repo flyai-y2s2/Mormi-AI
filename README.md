@@ -288,8 +288,10 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_OUTBOX_RETRY_MAX_SECONDS` | 아니요 | 재시도 백오프 상한, 기본 300초 |
 | `MORMI_OUTBOX_LEASE_SECONDS` | 아니요 | 전송 중 worker 장애를 감지하는 처리 임대 시간, 기본 30초 |
 | `MORMI_CLASSIFIER_MODEL` | 아니요 | 기본값 `claude-sonnet-4-6` |
+| `MORMI_CLASSIFIER_EFFORT` | 아니요 | 자유 발화 분류 추론 강도, 기본값 `medium` |
 | `MORMI_BRIDGE_MODEL` | 아니요 | 안전한 사회적 발화 브리지 모델, 기본값 `claude-haiku-4-5-20251001` |
 | `MORMI_SPEAKER_MODEL` | 아니요 | 기본값 `claude-sonnet-4-6` |
+| `MORMI_SPEAKER_EFFORT` | 아니요 | 주요 모르미 화자 추론 강도, 기본값 `low` |
 | `MORMI_SPEAKER_TIMEOUT_SECONDS` | 아니요 | 화자 생성 제한 시간, 기본 10초 |
 | `MORMI_BRIDGE_TIMEOUT_SECONDS` | 아니요 | 사회적 발화 브리지 생성 제한 시간, 기본 4초 |
 | `MORMI_IDEMPOTENCY_RETENTION_DAYS` | 아니요 | 멱등 응답 보존 기간, 기본 30일 |

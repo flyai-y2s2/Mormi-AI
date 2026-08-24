@@ -156,6 +156,62 @@ def test_speaker_schema_is_strict() -> None:
     assert all(item.get("additionalProperties") is False for item in objects)
     assert all(item.get("required") == list(item.get("properties", {})) for item in objects)
 
+
+@pytest.mark.asyncio
+async def test_classifier_uses_configured_medium_effort() -> None:
+    expected = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.NO_RESPONSE,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        confidence=0.9,
+    )
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=expected.model_dump_json())],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None, classifier_effort="medium"))
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+
+    result = await gateway._request_classification("분류해 줘")
+
+    assert result == expected
+    assert messages.requests[0]["output_config"]["effort"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_main_speaker_uses_configured_low_effort() -> None:
+    context = speaker_context()
+    expected = speaker_output(context.fallback_text, context)
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=expected.model_dump_json())],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None, speaker_effort="low"))
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+
+    result = await gateway.speak(context)
+
+    assert result == expected
+    assert messages.requests[0]["output_config"]["effort"] == "low"
+
 def speaker_context() -> SpeakerContext:
     return SpeakerContext(
         dialogue_act="acknowledge_partial",
