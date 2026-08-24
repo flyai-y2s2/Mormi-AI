@@ -381,7 +381,7 @@ class QueueSessionContext(BaseModel):
 
 
 class ParkFact(BaseModel):
-    """One backend-owned fact shown in an amusement-park stage."""
+    """One AI-catalog fact frozen in an amusement-park conversation."""
 
     key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=1, max_length=50)
@@ -414,12 +414,10 @@ PARK_REQUIRED_FACT_KEYS: dict[str, set[str]] = {
 
 
 class ParkSessionContext(BaseModel):
-    """Backend-reviewed amusement content frozen for one conversation.
-
-    AI consumes these exact facts and copy; it never invents stage numbers.
-    """
+    """AI-owned, reviewed amusement content frozen for one conversation."""
 
     theme_id: Literal["amusement_park"]
+    variant_id: str = Field(default="legacy_external", min_length=1, max_length=120)
     stage_id: str = Field(min_length=1, max_length=80)
     title: str = Field(min_length=1, max_length=100)
     mission: str = Field(min_length=1, max_length=200)
@@ -454,7 +452,17 @@ class SessionCreate(BaseModel):
     practice_summary: PracticeSummary | None = None
     cafe_context: CafeSessionContext | None = None
     queue_context: QueueSessionContext | None = None
-    park_context: ParkSessionContext | None = None
+    # Rolling-deploy compatibility only. The AI catalog owns amusement-park
+    # copy, answers, hints and transfer problems. Only reviewed givens may be
+    # preserved temporarily so an older BE can complete an in-flight visit.
+    park_context: ParkSessionContext | None = Field(
+        default=None,
+        description=(
+            "Deprecated rolling-deploy input. Only reviewed numeric givens may be "
+            "preserved; all copy, answers and pedagogy are rebuilt by Mormi-AI."
+        ),
+        deprecated=True,
+    )
     # 파일럿 참여자는 사전에 원문 저장 동의를 완료한다. 별도 필드를 보내지
     # 않는 호출도 질문·아이 원문·선택 응답을 평문으로 영구 보존한다.
     conversation_storage_consent: bool = True
@@ -488,34 +496,7 @@ class SessionCreate(BaseModel):
         if self.scenario_id in PARK_SCENARIO_STAGE:
             if self.scene is not SceneType.AMUSEMENT_PARK:
                 raise ValueError("amusement scenarios require amusement_park scene")
-            if self.park_context is None:
-                raise ValueError("park_context is required for amusement scenarios")
-            if self.park_context.stage_id != PARK_SCENARIO_STAGE[self.scenario_id]:
-                raise ValueError("park_context.stage_id does not match scenario_id")
-            required = PARK_REQUIRED_FACT_KEYS[self.scenario_id]
-            if set(self.park_context.required_verified_fact_keys) != required:
-                raise ValueError("park_context required fact contract does not match scenario")
-            values = {fact.key: fact.value for fact in self.park_context.facts}
-            if self.scenario_id == "amusement_ticket_multiply" and (
-                values["ticket_price"] * values["party_count"] != values["total_price"]
-            ):
-                raise ValueError("ticket facts have an inconsistent total_price")
-            if self.scenario_id == "amusement_snack_divide" and (
-                values["payer_count"] == 0
-                or values["snack_total"] % values["payer_count"]
-                or values["snack_total"] // values["payer_count"]
-                != values["per_person"]
-            ):
-                raise ValueError("snack facts have an inconsistent per_person")
-            if self.scenario_id == "amusement_pass_compare" and (
-                values["single_ride_price"] == 0
-                or values["day_pass_price"] % values["single_ride_price"]
-                or values["day_pass_price"] // values["single_ride_price"]
-                != values["break_even_rides"]
-                or values["benefit_from_rides"] != values["break_even_rides"] + 1
-            ):
-                raise ValueError("pass facts have an inconsistent break-even contract")
-        elif self.park_context is not None:
+        elif self.__dict__.get("park_context") is not None:
             raise ValueError("park_context is not used by this scenario")
         if self.scenario_id == "cafe_budget_menu" and (
             self.cafe_context is None or self.cafe_context.budget is None
@@ -738,6 +719,9 @@ class NoteUpdate(BaseModel):
 class CompletionContract(BaseModel):
     outcome: CompletionOutcome
     teach_reward_eligible: bool
+    # A jointly modelled L0/H3 ending still completes and unlocks the life
+    # stage, even though it does not qualify as a child-teaching reward.
+    stage_completion_eligible: bool = False
     # LLM 요약이 아니라 오케스트레이터가 슬롯 정의로 검증한 값만 담는다.
     # Spring BE가 카페 단계 완료를 안전하게 동기화할 때 사용한다.
     verified_facts: dict[str, str | int | float | bool] = Field(default_factory=dict)
@@ -824,6 +808,11 @@ class SessionState(BaseModel):
     dialogue_policy_version: int = Field(default=1, ge=1)
     entry_phase: EntryPhase = EntryPhase.RESOLVED
     verified_slots: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    # Evidence must survive task changes. In particular, an amusement-park
+    # transfer task must not erase the primary answer that BE later records.
+    completed_task_slots: dict[str, dict[str, str | int | float | bool]] = Field(
+        default_factory=dict
+    )
     status: SessionStatus = SessionStatus.ACTIVE
     current_turn_id: str | None = None
     state_version: int = 1
@@ -842,6 +831,7 @@ class SessionState(BaseModel):
     child_note_evidence: dict[str, str] = Field(default_factory=dict)
     supported_note_slots: list[str] = Field(default_factory=list)
     all_tasks_direct: bool = True
+    joint_performance_used: bool = False
     raw_storage_enabled: bool = True
     retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT
     raw_retention_until: datetime | None = None

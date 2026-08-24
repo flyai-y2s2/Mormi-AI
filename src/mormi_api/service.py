@@ -104,7 +104,6 @@ class ConversationService:
             request.scenario_id,
             request.cafe_context,
             queue_context=request.queue_context,
-            park_context=request.park_context,
             curriculum_session_id=curriculum_session_id,
             skill_id=practice_summary.skill_id if practice_summary else None,
             practice_result_id=request.practice_result_id,

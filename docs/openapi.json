@@ -724,6 +724,133 @@
         }
       }
     },
+    "/v1/internal/ladder-analyses": {
+      "post": {
+        "tags": [
+          "internal reporting"
+        ],
+        "summary": "Create Ladder Analysis",
+        "operationId": "create_ladder_analysis_v1_internal_ladder_analyses_post",
+        "parameters": [
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LadderAnalysisCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LadderAnalysisCreateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/internal/ladder-analyses/{analysis_id}/approve": {
+      "post": {
+        "tags": [
+          "internal reporting"
+        ],
+        "summary": "Approve Ladder Analysis",
+        "operationId": "approve_ladder_analysis_v1_internal_ladder_analyses__analysis_id__approve_post",
+        "parameters": [
+          {
+            "name": "analysis_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Analysis Id"
+            }
+          },
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LadderAnalysisApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LadderAnalysisCreateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/internal/report-summaries": {
       "post": {
         "tags": [
@@ -1076,6 +1203,11 @@
           "teach_reward_eligible": {
             "type": "boolean",
             "title": "Teach Reward Eligible"
+          },
+          "stage_completion_eligible": {
+            "type": "boolean",
+            "title": "Stage Completion Eligible",
+            "default": false
           },
           "verified_facts": {
             "additionalProperties": {
@@ -1702,6 +1834,252 @@
         ],
         "title": "InputKind"
       },
+      "LadderAnalysisApprovalRequest": {
+        "properties": {
+          "learner_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Learner Id"
+          },
+          "recommendation_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Recommendation Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "learner_id",
+          "recommendation_version"
+        ],
+        "title": "LadderAnalysisApprovalRequest"
+      },
+      "LadderAnalysisCreateRequest": {
+        "properties": {
+          "idempotency_key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key"
+          },
+          "learner_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Learner Id"
+          },
+          "skill_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Skill Id"
+          },
+          "trigger_session_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Trigger Session Id"
+          },
+          "session_ids": {
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Session Ids"
+          },
+          "current_level": {
+            "$ref": "#/components/schemas/ExpressionLevel"
+          },
+          "performance_by_level": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LadderLevelPerformance"
+            },
+            "propertyNames": {
+              "$ref": "#/components/schemas/ExpressionLevel"
+            },
+            "type": "object",
+            "title": "Performance By Level"
+          },
+          "lower_rule_evidence_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Lower Rule Evidence Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "learner_id",
+          "skill_id",
+          "trigger_session_id",
+          "session_ids",
+          "current_level",
+          "performance_by_level"
+        ],
+        "title": "LadderAnalysisCreateRequest"
+      },
+      "LadderAnalysisCreateResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "status"
+        ],
+        "title": "LadderAnalysisCreateResponse"
+      },
+      "LadderLevelPerformance": {
+        "properties": {
+          "correct": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Correct"
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Attempts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "correct",
+          "attempts"
+        ],
+        "title": "LadderLevelPerformance"
+      },
+      "LadderRecommendationEvidence": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "learner_id": {
+            "type": "integer",
+            "title": "Learner Id"
+          },
+          "skill_id": {
+            "type": "string",
+            "title": "Skill Id"
+          },
+          "trigger_session_id": {
+            "type": "string",
+            "title": "Trigger Session Id"
+          },
+          "session_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Session Ids"
+          },
+          "current_level": {
+            "$ref": "#/components/schemas/ExpressionLevel"
+          },
+          "recommended_level": {
+            "$ref": "#/components/schemas/ExpressionLevel"
+          },
+          "action": {
+            "type": "string",
+            "pattern": "^(UPGRADE|MAINTAIN|ADJUST_DOWN|INSUFFICIENT_EVIDENCE)$",
+            "title": "Action"
+          },
+          "current_accuracy": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Accuracy"
+          },
+          "evidence_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Evidence Count"
+          },
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          },
+          "recent_predictions": {
+            "items": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Recent Predictions"
+          },
+          "model_version": {
+            "type": "string",
+            "title": "Model Version"
+          },
+          "recommendation_version": {
+            "type": "integer",
+            "title": "Recommendation Version"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "approved": {
+            "type": "boolean",
+            "title": "Approved"
+          },
+          "analyzed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Analyzed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "learner_id",
+          "skill_id",
+          "trigger_session_id",
+          "session_ids",
+          "current_level",
+          "recommended_level",
+          "action",
+          "evidence_count",
+          "reason_code",
+          "model_version",
+          "recommendation_version",
+          "status",
+          "approved",
+          "analyzed_at"
+        ],
+        "title": "LadderRecommendationEvidence"
+      },
       "MormiContract": {
         "properties": {
           "text": {
@@ -1823,7 +2201,7 @@
           "value"
         ],
         "title": "ParkFact",
-        "description": "One backend-owned fact shown in an amusement-park stage."
+        "description": "One AI-catalog fact frozen in an amusement-park conversation."
       },
       "ParkSessionContext": {
         "properties": {
@@ -1831,6 +2209,13 @@
             "type": "string",
             "const": "amusement_park",
             "title": "Theme Id"
+          },
+          "variant_id": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Variant Id",
+            "default": "legacy_external"
           },
           "stage_id": {
             "type": "string",
@@ -1910,7 +2295,7 @@
           "transfer"
         ],
         "title": "ParkSessionContext",
-        "description": "Backend-reviewed amusement content frozen for one conversation.\n\nAI consumes these exact facts and copy; it never invents stage numbers."
+        "description": "AI-owned, reviewed amusement content frozen for one conversation."
       },
       "ParkTransfer": {
         "properties": {
@@ -2370,6 +2755,13 @@
             },
             "type": "array",
             "title": "Notes"
+          },
+          "ladder_recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/LadderRecommendationEvidence"
+            },
+            "type": "array",
+            "title": "Ladder Recommendations"
           }
         },
         "type": "object",
@@ -2679,7 +3071,9 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Deprecated rolling-deploy input. Only reviewed numeric givens may be preserved; all copy, answers and pedagogy are rebuilt by Mormi-AI.",
+            "deprecated": true
           },
           "conversation_storage_consent": {
             "type": "boolean",

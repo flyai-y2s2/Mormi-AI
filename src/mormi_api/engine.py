@@ -10,7 +10,14 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .content import PARK_SCENARIO_IDS, SlotDefinition, StepDefinition, TaskDefinition, get_task
+from .content import (
+    PARK_PRIMARY_TASK_IDS,
+    PARK_SCENARIO_IDS,
+    SlotDefinition,
+    StepDefinition,
+    TaskDefinition,
+    get_task,
+)
 from .dictionary_models import dictionary_reference
 from .llm import (
     ClaudeGateway,
@@ -1292,6 +1299,14 @@ class ConversationEngine:
         *,
         accepted_claims: Mapping[str, str | int | float | bool],
     ) -> PedagogicalDecision:
+        # Keep deterministic task evidence before the next task resets the
+        # active slot map. Park completion later reports the child's verified
+        # primary answer, never a preloaded answer from scenario content.
+        state.completed_task_slots[task.id] = dict(state.verified_slots)
+        state.joint_performance_used = state.joint_performance_used or (
+            state.expression_level is ExpressionLevel.L0
+            or state.task_max_hint is HintLevel.H3
+        )
         note, direct = self._note_from_provenance(state, task)
         note_contextualization = self._note_contextualization_context(state, task, note)
         if task.note_policy != "none":
@@ -1367,7 +1382,10 @@ class ConversationEngine:
         state.completion_outcome = (
             CompletionOutcome.TAUGHT if state.all_tasks_direct else CompletionOutcome.SUPPORTED
         )
-        state.teach_reward_eligible = True
+        # A choice or short answer is still a real contribution and may earn
+        # the teaching reward. H3/L0 is different: the stage succeeds through
+        # joint modelling, but it is not recorded as child-led teaching.
+        state.teach_reward_eligible = not state.joint_performance_used
         fallback = self._complete_mormi_text("네가 알려준 방법으로 내가 끝까지 해냈어!")
         return PedagogicalDecision(
             state=state,
@@ -1972,7 +1990,14 @@ class ConversationEngine:
                 CompletionContract(
                     outcome=state.completion_outcome,
                     teach_reward_eligible=state.teach_reward_eligible,
-                    verified_facts=self._completion_facts(state),
+                    stage_completion_eligible=(
+                        state.completion_outcome is not CompletionOutcome.BRIGHT_EXIT
+                    ),
+                    verified_facts=(
+                        self._completion_facts(state)
+                        if state.completion_outcome is not CompletionOutcome.BRIGHT_EXIT
+                        else {}
+                    ),
                 )
                 if state.status is SessionStatus.COMPLETED and state.completion_outcome is not None
                 else None
@@ -2074,12 +2099,32 @@ class ConversationEngine:
             raw_context = state.scenario_data.get("park_context")
             context = ParkSessionContext.model_validate(raw_context)
             values = {fact.key: fact.value for fact in context.facts}
-            # This is the BE-authored and SessionCreate-validated contract.
-            # Do not derive completion facts from LLM prose or child text.
-            return {
+            primary_task_id = PARK_PRIMARY_TASK_IDS[state.scenario_id]
+            primary_evidence = state.completed_task_slots.get(primary_task_id, {})
+            # Given values come from the immutable AI problem snapshot. Every
+            # derived value must come from a slot the deterministic engine
+            # actually verified during the primary task.
+            derived_slot_keys: dict[str, str] = {
+                "amusement_ticket_multiply": "total_price",
+                "amusement_snack_divide": "per_person",
+                "amusement_pass_compare": "break_even_rides",
+            }
+            derived_key = derived_slot_keys[state.scenario_id]
+            answer = primary_evidence.get("answer")
+            if not isinstance(answer, (int, float)) or isinstance(answer, bool):
+                raise ValueError("park primary answer evidence is missing at completion")
+            facts: dict[str, str | int | float | bool] = {
                 key: values[key]
                 for key in context.required_verified_fact_keys
+                if key not in {derived_key, "benefit_from_rides"}
             }
+            facts[derived_key] = answer
+            if state.scenario_id == "amusement_pass_compare":
+                benefit = primary_evidence.get("benefit_from_rides")
+                if not isinstance(benefit, (int, float)) or isinstance(benefit, bool):
+                    raise ValueError("park benefit evidence is missing at completion")
+                facts["benefit_from_rides"] = benefit
+            return facts
 
         facts = dict(state.verified_slots)
         child_menu = facts.get("child_menu") or state.scenario_data.get("child_menu_id")
