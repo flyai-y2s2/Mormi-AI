@@ -292,6 +292,11 @@ jobs:
             exit 1
           fi
 
+          # 모델이 없던 이전 배포에서 실패한 작업만 한 번 되살립니다.
+          # idempotency key는 유지되므로 같은 학습을 새 작업으로 중복 생성하지 않습니다.
+          docker exec mormi-ladder-worker \
+            python scripts/requeue_ladder_analyses.py --confirm
+
           docker image prune -f >/dev/null
 
           docker ps --filter name=mormi-ai --filter name=mormi-ladder-worker
