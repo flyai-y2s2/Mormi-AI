@@ -143,18 +143,25 @@ jobs:
           # 새 이미지 다운로드
           docker pull "${IMAGE_URI}"
 
-          # 기존 컨테이너 제거
-          docker rm -f mormi-ai 2>/dev/null || true
+          # 운영 모델을 새 이미지에서 먼저 검증합니다. 실패하면 기존 서비스는 유지됩니다.
+          docker run --rm \
+            -v /opt/mormi/models:/opt/mormi/models:ro \
+            "${IMAGE_URI}" \
+            python scripts/check_ladder_runtime.py \
+              --model-dir /opt/mormi/models/ladder-v2/model
 
           # 서비스용 Docker network 생성
           docker network create mormi-services 2>/dev/null || true
 
-          # 새 컨테이너 실행
+          # API는 요청 처리만 담당하고 분석 워커는 별도 컨테이너로 실행합니다.
+          docker rm -f mormi-ai 2>/dev/null || true
+
           docker run -d \
             --name mormi-ai \
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
             -p 8000:8000 \
             --log-opt max-size=10m \
             --log-opt max-file=5 \
@@ -187,8 +194,34 @@ jobs:
           echo "health:"
           curl -fsS http://localhost:8000/health
 
+          # 새 API가 정상인 경우에만 분석 워커를 교체합니다.
+          docker rm -f mormi-ladder-worker 2>/dev/null || true
+
+          docker run -d \
+            --name mormi-ladder-worker \
+            --restart unless-stopped \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_LADDER_MODEL_DIR=/opt/mormi/models/ladder-v2/model \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=true \
+            -e MORMI_LADDER_ANALYSIS_BATCH_SIZE=1 \
+            -e MORMI_LADDER_ANALYSIS_LEASE_SECONDS=180 \
+            -v /opt/mormi/models:/opt/mormi/models:ro \
+            --log-opt max-size=10m \
+            --log-opt max-file=5 \
+            "${IMAGE_URI}" \
+            uvicorn mormi_api.main:app --host 127.0.0.1 --port 8001
+
+          sleep 5
+
+          if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ladder-worker$'; then
+            echo "ladder worker exited during startup"
+            docker logs --tail=200 mormi-ladder-worker || true
+            exit 1
+          fi
+
           docker image prune -f >/dev/null
 
-          docker ps --filter name=mormi-ai
+          docker ps --filter name=mormi-ai --filter name=mormi-ladder-worker
 
           REMOTE

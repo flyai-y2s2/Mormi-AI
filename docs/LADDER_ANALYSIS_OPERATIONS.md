@@ -24,13 +24,26 @@ MORMI_SERVICE_API_KEY=<BE와 공유하는 긴 임의 문자열>
 MORMI_LADDER_MODEL_DIR=/opt/mormi/models/ladder-v2/model
 MORMI_LADDER_ANALYSIS_WORKER_ENABLED=true
 MORMI_LADDER_ANALYSIS_POLL_INTERVAL_SECONDS=2
-MORMI_LADDER_ANALYSIS_BATCH_SIZE=10
-MORMI_LADDER_ANALYSIS_LEASE_SECONDS=60
+MORMI_LADDER_ANALYSIS_BATCH_SIZE=1
+MORMI_LADDER_ANALYSIS_LEASE_SECONDS=180
 ```
 
 `MORMI_LADDER_MODEL_DIR`에는 tokenizer와 분류 모델 파일이 있어야 하며, 바로 위 폴더에
 `model-manifest.json`을 함께 둡니다. 모델 파일은 이미지나 Git 저장소에 포함하지 않고
 배포 단계에서 영구 디스크로 주입합니다.
+
+운영 배포는 같은 이미지로 두 컨테이너를 실행합니다. `mormi-ai`는 HTTP 요청만 처리하고
+작업자를 끄며, `mormi-ladder-worker`만 위 모델 폴더를 읽기 전용으로 연결해 분석을
+수행합니다. 새 이미지는 기존 컨테이너를 교체하기 전에 다음 검사로 실제 모델의 해시와
+1회 추론을 확인합니다.
+
+```bash
+python scripts/check_ladder_runtime.py \
+  --model-dir /opt/mormi/models/ladder-v2/model
+```
+
+`MODEL_OK`가 출력되지 않으면 배포를 중단하고 기존 컨테이너를 유지합니다. 이미지에는
+CPU 전용 PyTorch를 사용하므로 GPU·CUDA 패키지는 필요하지 않습니다.
 
 ### Spring BE 서버
 
@@ -67,7 +80,7 @@ MORMI_DIALOGUE_SERVICE_KEY=<AI의 MORMI_SERVICE_API_KEY와 같은 값>
 ## 장애 대응
 
 - `MODEL_NOT_FOUND`: 모델 경로와 볼륨 마운트를 확인합니다.
-- `MODEL_DEPENDENCY_MISSING`: AI 배포에 `analysis` 의존성이 포함됐는지 확인합니다.
+- `MODEL_DEPENDENCY_MISSING`: AI 배포에 `inference` 의존성이 포함됐는지 확인합니다.
 - `MODEL_LOAD_FAILED`: tokenizer·가중치·manifest가 같은 학습 결과인지 확인합니다.
 - `MODEL_INFERENCE_FAILED`: 모델 파일 무결성과 실행 메모리를 확인한 뒤 새 분석 작업을
   등록합니다. 원문을 로그에 붙여 넣지 않습니다.
@@ -77,3 +90,10 @@ MORMI_DIALOGUE_SERVICE_KEY=<AI의 MORMI_SERVICE_API_KEY와 같은 값>
 
 실행 중 종료된 `running` 작업은 lease 만료 뒤 다시 선점됩니다. 같은 두 세션의 완료
 요청을 재전송해도 멱등 키로 한 작업만 유지됩니다.
+
+모델 미설치 시기에 실패한 작업은 모델 배포 후 아래 명령으로 원래 분석 ID를 유지한 채
+`pending`으로 되돌립니다. 발화 로드 실패 등 다른 오류는 자동 재처리하지 않습니다.
+
+```bash
+python scripts/requeue_ladder_analyses.py --confirm
+```
