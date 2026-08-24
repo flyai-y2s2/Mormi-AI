@@ -35,7 +35,12 @@ class AvailableRuntime:
         )
 
 
-def write_model_fixture(root: Path, *, expected_hash: str | None = None) -> Path:
+def write_model_fixture(
+    root: Path,
+    *,
+    expected_hash: str | None = None,
+    model_version: str = "ladder-speech-klue-v2",
+) -> Path:
     model_dir = root / "model"
     model_dir.mkdir()
     weight = model_dir / "model.safetensors"
@@ -44,7 +49,7 @@ def write_model_fixture(root: Path, *, expected_hash: str | None = None) -> Path
     (root / "model-manifest.json").write_text(
         json.dumps(
             {
-                "model_version": "ladder-speech-klue-v2",
+                "model_version": model_version,
                 "label_order": ["L2", "L3", "L4"],
                 "weight_file": "model.safetensors",
                 "weight_sha256": expected_hash or actual_hash,
@@ -69,6 +74,14 @@ def test_check_model_rejects_weight_checksum_mismatch(tmp_path: Path) -> None:
     model_dir = write_model_fixture(tmp_path, expected_hash="0" * 64)
 
     with pytest.raises(RuntimeError, match="MODEL_CHECKSUM_MISMATCH"):
+        smoke.check_model(model_dir, runtime_factory=AvailableRuntime)
+
+
+def test_check_model_rejects_unexpected_model_version(tmp_path: Path) -> None:
+    smoke = smoke_module()
+    model_dir = write_model_fixture(tmp_path, model_version="ladder-speech-v1")
+
+    with pytest.raises(RuntimeError, match="MODEL_VERSION_INVALID"):
         smoke.check_model(model_dir, runtime_factory=AvailableRuntime)
 
 

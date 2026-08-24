@@ -38,8 +38,11 @@ MORMI_LADDER_ANALYSIS_LEASE_SECONDS=180
 1회 추론을 확인합니다.
 
 ```bash
-python scripts/check_ladder_runtime.py \
-  --model-dir /opt/mormi/models/ladder-v2/model
+docker run --rm \
+  -v /opt/mormi/models:/opt/mormi/models:ro \
+  <ECR_IMAGE_URI> \
+  python scripts/check_ladder_runtime.py \
+    --model-dir /opt/mormi/models/ladder-v2/model
 ```
 
 `MODEL_OK`가 출력되지 않으면 배포를 중단하고 기존 컨테이너를 유지합니다. 이미지에는
@@ -127,10 +130,28 @@ docker logs --tail=100 mormi-ladder-worker
 `pending`으로 되돌립니다. 발화 로드 실패 등 다른 오류는 자동 재처리하지 않습니다.
 
 ```bash
-python scripts/requeue_ladder_analyses.py --confirm
+docker exec mormi-ladder-worker \
+  python scripts/requeue_ladder_analyses.py --confirm
 ```
 
 새 Worker가 반복 종료되면 API는 유지한 채 Worker만 중지하고 직전 정상 이미지로 다시
 실행합니다. 모델 smoke가 실패한 이미지는 API까지 교체하지 않습니다. GitHub Actions의
 직전 성공 배포에 기록된 ECR 이미지 URI를 사용해 재배포한 뒤 `/health`와 Worker 상태를
 다시 확인합니다. 롤백 중에도 모델 폴더를 수정하거나 쓰기 가능으로 연결하지 않습니다.
+
+```bash
+PREVIOUS_IMAGE=<직전-정상-ECR-이미지-URI>
+docker rm -f mormi-ladder-worker
+docker run -d \
+  --name mormi-ladder-worker \
+  --restart unless-stopped \
+  --network mormi-services \
+  --env-file /etc/mormi-ai/mormi.env \
+  -e MORMI_LADDER_MODEL_DIR=/opt/mormi/models/ladder-v2/model \
+  -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=true \
+  -e MORMI_LADDER_ANALYSIS_POLL_INTERVAL_SECONDS=2 \
+  -e MORMI_LADDER_ANALYSIS_BATCH_SIZE=1 \
+  -e MORMI_LADDER_ANALYSIS_LEASE_SECONDS=180 \
+  -v /opt/mormi/models:/opt/mormi/models:ro \
+  "${PREVIOUS_IMAGE}" python scripts/run_ladder_worker.py
+```

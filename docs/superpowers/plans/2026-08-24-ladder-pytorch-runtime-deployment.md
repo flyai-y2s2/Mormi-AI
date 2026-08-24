@@ -25,7 +25,6 @@
 
 **Files:**
 - Modify: `pyproject.toml`
-- Modify: `uv.lock`
 - Create: `scripts/check_ladder_runtime.py`
 - Create: `tests/test_ladder_runtime_smoke.py`
 

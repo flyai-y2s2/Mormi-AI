@@ -11,6 +11,7 @@ from .dataset import LadderLevel
 from .runtime import LadderModelRuntime, RuntimeBatchResult
 
 SMOKE_TEXT = "나는 수를 세어서 답을 찾았어."
+EXPECTED_MODEL_VERSION = "ladder-speech-klue-v2"
 
 
 class RuntimeLike(Protocol):
@@ -48,6 +49,8 @@ def check_model(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise RuntimeError("MODEL_MANIFEST_INVALID") from error
+    if manifest.get("model_version") != EXPECTED_MODEL_VERSION:
+        raise RuntimeError("MODEL_VERSION_INVALID")
     if manifest.get("label_order") != ["L2", "L3", "L4"]:
         raise RuntimeError("MODEL_LABEL_ORDER_INVALID")
     weight_name = manifest.get("weight_file")
