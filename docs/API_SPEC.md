@@ -211,6 +211,9 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 | `cafe` | `cafe_budget_menu` | 2단계: 자동 합계를 보며 예산 안에서 메뉴 선택 |
 | `cafe` | `cafe_menu_total` | 3단계: 두 메뉴를 고르고 전체 가격 계산 |
 | `cafe` | `cafe_change` | 4단계: 10,000원에서 모르미 메뉴 하나의 가격 빼기 |
+| `amusement_park` | `amusement_ticket_multiply` | 표 한 장 값과 사람 수를 곱해 전체 표 값 구하기 |
+| `amusement_park` | `amusement_snack_divide` | 간식 전체 값을 사람 수로 똑같이 나누기 |
+| `amusement_park` | `amusement_pass_compare` | 1회권과 자유이용권의 손익분기 횟수 비교하기 |
 
 호환을 위해 `cafe_queue_demo`는 `cafe_queue`와 같은 흐름으로 유지합니다.
 5단계 통합 시나리오는 현재 프로토타입 API에 노출하지 않습니다.
@@ -278,6 +281,62 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 - `cafe_budget_menu`에서는 `budget`도 필수이며, 아이가 고를 수 있는 메뉴가 최소
   하나는 있어야 합니다.
 - 화면에 표시한 메뉴와 API에 보낸 스냅샷은 동일해야 합니다.
+
+### 놀이동산 단계별 입력
+
+놀이동산의 숫자와 문구는 인증된 Spring BE가 소유합니다. FE는 `park_context`를 직접
+조합하지 않습니다. Spring은 화면에 표시할 값과 동일한 스냅샷을 대화 시작 요청에
+포함하고, AI는 그 값의 산술 정합성과 시나리오별 필수 사실 키를 검증합니다.
+
+```json
+{
+  "learner_id": 1,
+  "scene": "amusement_park",
+  "scenario_id": "amusement_ticket_multiply",
+  "park_context": {
+    "theme_id": "amusement_park",
+    "stage_id": "ticket",
+    "title": "놀이동산 표 사기",
+    "mission": "함께 갈 사람들의 표 값을 구한다.",
+    "skill": "같은 값의 묶음을 곱셈으로 계산하기",
+    "strategy": "표 한 장 값에 사람 수를 곱하면 전체 표 값을 구할 수 있어.",
+    "mormi_misconception": "",
+    "prompt": "표가 여러 장 필요해... 모두 얼마인지 알려줄 수 있어?",
+    "facts": [
+      {"key": "ticket_price", "label": "표 한 장 값", "value": 3000, "unit": "원"},
+      {"key": "party_count", "label": "함께 갈 사람 수", "value": 2, "unit": "명"},
+      {"key": "total_price", "label": "전체 표 값", "value": 6000, "unit": "원"}
+    ],
+    "required_verified_fact_keys": ["ticket_price", "party_count", "total_price"],
+    "transfer": {
+      "prompt": "표 한 장이 3,500원이고 네 명이면 모두 얼마야?",
+      "equation": "3500×4=14000",
+      "conclusion": "표 네 장은 모두 14,000원이야."
+    }
+  },
+  "conversation_storage_consent": true,
+  "retention_policy": "permanent"
+}
+```
+
+시나리오별 `stage_id`와 `required_verified_fact_keys`는 고정 계약입니다.
+
+| `scenario_id` | `stage_id` | 완료 시 검증해야 하는 사실 키 |
+|---|---|---|
+| `amusement_ticket_multiply` | `ticket` | `ticket_price`, `party_count`, `total_price` |
+| `amusement_snack_divide` | `snack_split` | `snack_total`, `payer_count`, `per_person` |
+| `amusement_pass_compare` | `pass_break_even` | `single_ride_price`, `day_pass_price`, `break_even_rides`, `benefit_from_rides` |
+
+- AI는 `facts`, `prompt`, `transfer`의 숫자와 문구를 즉흥 생성하거나 다른 값으로
+  바꾸지 않습니다.
+- 기본 문제 뒤에는 반드시 같은 기능을 새로운 수에 적용하는 `transfer` 턴이 이어집니다.
+- 곱셈·나눗셈·손익분기 관계가 맞지 않거나 필수 키가 빠지면 시작 요청을 `422`로
+  거부합니다.
+- 완료 응답의 `completion.verified_facts`는 위 필수 키와 정확히 일치해야 합니다.
+  Spring이 예상한 사실과 다르면 Spring은 `503 dialogue_completion_fact_mismatch`로
+  완료 반영을 중단합니다.
+- 별노트는 기본 문제에서 아이가 실제로 알려 준 근거 또는 L0 공동 수행 결과로 한 번만
+  생성합니다. 전이 문제는 별도의 별노트를 만들지 않습니다.
 
 ### 반복 결과가 이미 저장된 경우
 
@@ -470,8 +529,9 @@ turn.completed     최종 { conversation_id, turn }
 done
 ```
 
-`mormi.delta`는 모델이 생성 중인 원시 토큰이 아닙니다. 전체 후보가 결정형 검증과
-필요한 경우 의미 검증까지 통과하고 DB에 원자적으로 저장된 뒤에만 나누어 전송합니다.
+`mormi.delta`는 모델이 생성 중인 원시 토큰이 아닙니다. 전체 후보가 코드 신뢰 경계와
+구조·근거 출력 계약을 통과하고 DB에 원자적으로 저장된 뒤에만
+나누어 전송합니다.
 따라서 프론트는 진행 단계를 먼저 보여 줄 수 있으면서도, 검증되지 않은 오개념이나
 부적절한 문구를 잠깐이라도 화면에 노출하지 않습니다. 화면과 상태의 최종 단일 출처는
 항상 `turn.completed`의 전체 `TurnContract`입니다.
@@ -511,7 +571,7 @@ type TurnContract = {
     stage_id: string;
     task_index: number;
     mormi: {
-      text: string; // 최대 50자, 최대 두 줄
+      text: string; // 50자 이내 작성 목표, 문장 완결 우선, 최대 두 줄
       mood: "curious" | "listening" | "thinking" | "relieved" | "celebrating";
       max_lines: 1 | 2;
     };
@@ -544,7 +604,7 @@ type TurnContract = {
     task_anchor: null | {
       anchor_id: string; // task + 현재 subgoal의 안정적인 식별자
       title: "지금 모르미에게 알려줄 것";
-      prompt: string; // 검수된 StepDefinition.prompt, 최대 50자
+      prompt: string; // 검수된 StepDefinition.prompt, 50자 이내 작성 목표
       completed_items: Array<{
         slot_id: string;
         label: string;

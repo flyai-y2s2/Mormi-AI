@@ -191,7 +191,7 @@ async def test_error_analysis_cannot_complete_even_with_a_factual_claim() -> Non
 
 @pytest.mark.asyncio
 async def test_false_arithmetic_relation_cannot_verify_or_enter_the_star_note() -> None:
-    """Haiku interprets wording; code rejects only the structured false equation."""
+    """The understanding model interprets wording; code rejects the false equation."""
 
     child_text = "2000원에서 1800원 내면 300원 남아"
     analysis = UtteranceAnalysis(

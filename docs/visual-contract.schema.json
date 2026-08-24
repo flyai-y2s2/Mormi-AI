@@ -7,6 +7,100 @@
       "type": "object",
       "required": ["type", "data"],
       "properties": {
+        "type": { "enum": ["amusement_park", "amusement_joint_solution"] },
+        "data": {
+          "type": "object",
+          "required": ["theme_id", "stage_id", "title", "mission", "facts"],
+          "properties": {
+            "theme_id": { "const": "amusement_park" },
+            "stage_id": { "type": "string", "minLength": 1 },
+            "title": { "type": "string", "minLength": 1 },
+            "mission": { "type": "string", "minLength": 1 },
+            "facts": {
+              "type": "array",
+              "minItems": 3,
+              "items": {
+                "type": "object",
+                "required": ["key", "label", "value", "unit"],
+                "properties": {
+                  "key": { "type": "string", "minLength": 1 },
+                  "label": { "type": "string", "minLength": 1 },
+                  "value": { "type": "integer", "minimum": 0 },
+                  "unit": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "hide_required_results": { "type": "boolean" },
+            "result_hidden": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "enum": ["amusement_equation", "amusement_transfer_equation"] },
+        "data": {
+          "type": "object",
+          "required": ["left", "right", "symbol", "result_hidden"],
+          "properties": {
+            "left": { "type": "integer", "minimum": 0 },
+            "right": { "type": "integer", "minimum": 0 },
+            "symbol": { "enum": ["×", "÷"] },
+            "result_hidden": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "amusement_park_transfer" },
+        "data": {
+          "type": "object",
+          "required": ["theme_id", "stage_id", "prompt", "left", "right", "operation", "result_hidden"],
+          "properties": {
+            "theme_id": { "const": "amusement_park" },
+            "stage_id": { "type": "string", "minLength": 1 },
+            "prompt": { "type": "string", "minLength": 1 },
+            "left": { "type": "integer", "minimum": 0 },
+            "right": { "type": "integer", "minimum": 0 },
+            "operation": { "enum": ["multiplication", "division"] },
+            "result_hidden": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
+        "type": { "const": "amusement_transfer_solution" },
+        "data": {
+          "type": "object",
+          "required": ["equation", "conclusion"],
+          "properties": {
+            "equation": { "type": "string", "minLength": 1 },
+            "conclusion": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["type", "data"],
+      "properties": {
         "type": { "const": "cafe_menu" },
         "data": {
           "type": "object",

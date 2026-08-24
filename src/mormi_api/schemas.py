@@ -21,6 +21,7 @@ def new_id(prefix: str) -> str:
 class SceneType(StrEnum):
     HOME_TEACH = "home_teach"
     CAFE = "cafe"
+    AMUSEMENT_PARK = "amusement_park"
 
 
 class RetentionPolicy(StrEnum):
@@ -379,6 +380,71 @@ class QueueSessionContext(BaseModel):
         return self
 
 
+class ParkFact(BaseModel):
+    """One backend-owned fact shown in an amusement-park stage."""
+
+    key: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(min_length=1, max_length=50)
+    value: int = Field(ge=0, le=1_000_000)
+    unit: str = Field(default="", max_length=20)
+
+
+class ParkTransfer(BaseModel):
+    prompt: str = Field(min_length=1, max_length=160)
+    equation: str = Field(min_length=1, max_length=100)
+    conclusion: str = Field(min_length=1, max_length=160)
+
+
+PARK_SCENARIO_STAGE: dict[str, str] = {
+    "amusement_ticket_multiply": "ticket",
+    "amusement_snack_divide": "snack_split",
+    "amusement_pass_compare": "pass_break_even",
+}
+
+PARK_REQUIRED_FACT_KEYS: dict[str, set[str]] = {
+    "amusement_ticket_multiply": {"ticket_price", "party_count", "total_price"},
+    "amusement_snack_divide": {"snack_total", "payer_count", "per_person"},
+    "amusement_pass_compare": {
+        "single_ride_price",
+        "day_pass_price",
+        "break_even_rides",
+        "benefit_from_rides",
+    },
+}
+
+
+class ParkSessionContext(BaseModel):
+    """Backend-reviewed amusement content frozen for one conversation.
+
+    AI consumes these exact facts and copy; it never invents stage numbers.
+    """
+
+    theme_id: Literal["amusement_park"]
+    stage_id: str = Field(min_length=1, max_length=80)
+    title: str = Field(min_length=1, max_length=100)
+    mission: str = Field(min_length=1, max_length=200)
+    skill: str = Field(min_length=1, max_length=100)
+    strategy: str = Field(min_length=1, max_length=200)
+    mormi_misconception: str = Field(default="", max_length=200)
+    prompt: str = Field(min_length=1, max_length=200)
+    facts: list[ParkFact] = Field(min_length=3, max_length=12)
+    required_verified_fact_keys: list[str] = Field(min_length=3, max_length=12)
+    transfer: ParkTransfer
+
+    @model_validator(mode="after")
+    def validate_unique_contract(self) -> ParkSessionContext:
+        keys = [fact.key for fact in self.facts]
+        if len(keys) != len(set(keys)):
+            raise ValueError("park fact keys must be unique")
+        if len(self.required_verified_fact_keys) != len(
+            set(self.required_verified_fact_keys)
+        ):
+            raise ValueError("required park fact keys must be unique")
+        if not set(self.required_verified_fact_keys).issubset(keys):
+            raise ValueError("required park fact keys must reference facts")
+        return self
+
+
 class SessionCreate(BaseModel):
     learner_id: int = Field(ge=1)
     scene: SceneType
@@ -388,6 +454,7 @@ class SessionCreate(BaseModel):
     practice_summary: PracticeSummary | None = None
     cafe_context: CafeSessionContext | None = None
     queue_context: QueueSessionContext | None = None
+    park_context: ParkSessionContext | None = None
     # 파일럿 참여자는 사전에 원문 저장 동의를 완료한다. 별도 필드를 보내지
     # 않는 호출도 질문·아이 원문·선택 응답을 평문으로 영구 보존한다.
     conversation_storage_consent: bool = True
@@ -418,6 +485,38 @@ class SessionCreate(BaseModel):
             raise ValueError("queue_context is required for cafe_queue")
         if self.queue_context is not None and self.scenario_id != "cafe_queue":
             raise ValueError("queue_context is not used by this scenario")
+        if self.scenario_id in PARK_SCENARIO_STAGE:
+            if self.scene is not SceneType.AMUSEMENT_PARK:
+                raise ValueError("amusement scenarios require amusement_park scene")
+            if self.park_context is None:
+                raise ValueError("park_context is required for amusement scenarios")
+            if self.park_context.stage_id != PARK_SCENARIO_STAGE[self.scenario_id]:
+                raise ValueError("park_context.stage_id does not match scenario_id")
+            required = PARK_REQUIRED_FACT_KEYS[self.scenario_id]
+            if set(self.park_context.required_verified_fact_keys) != required:
+                raise ValueError("park_context required fact contract does not match scenario")
+            values = {fact.key: fact.value for fact in self.park_context.facts}
+            if self.scenario_id == "amusement_ticket_multiply" and (
+                values["ticket_price"] * values["party_count"] != values["total_price"]
+            ):
+                raise ValueError("ticket facts have an inconsistent total_price")
+            if self.scenario_id == "amusement_snack_divide" and (
+                values["payer_count"] == 0
+                or values["snack_total"] % values["payer_count"]
+                or values["snack_total"] // values["payer_count"]
+                != values["per_person"]
+            ):
+                raise ValueError("snack facts have an inconsistent per_person")
+            if self.scenario_id == "amusement_pass_compare" and (
+                values["single_ride_price"] == 0
+                or values["day_pass_price"] % values["single_ride_price"]
+                or values["day_pass_price"] // values["single_ride_price"]
+                != values["break_even_rides"]
+                or values["benefit_from_rides"] != values["break_even_rides"] + 1
+            ):
+                raise ValueError("pass facts have an inconsistent break-even contract")
+        elif self.park_context is not None:
+            raise ValueError("park_context is not used by this scenario")
         if self.scenario_id == "cafe_budget_menu" and (
             self.cafe_context is None or self.cafe_context.budget is None
         ):
@@ -488,7 +587,7 @@ class ArithmeticClaim(BaseModel):
 
     left: int
     right: int
-    operation: Literal["addition", "subtraction"]
+    operation: Literal["addition", "subtraction", "multiplication", "division"]
     result: int
     evidence_span: str = ""
     related_slot_ids: list[str] = Field(default_factory=list)
@@ -512,7 +611,7 @@ class SpeakerQuantity(BaseModel):
 class SpeakerArithmeticClaim(BaseModel):
     """A provenance-preserving arithmetic claim for natural reflection."""
 
-    operation: Literal["addition", "subtraction"]
+    operation: Literal["addition", "subtraction", "multiplication", "division"]
     source_text: str
     left: SpeakerQuantity
     right: SpeakerQuantity
@@ -1031,11 +1130,66 @@ class ReportConversationEvidence(BaseModel):
     updated_at: datetime
 
 
+class LadderLevelPerformance(BaseModel):
+    correct: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def correct_must_not_exceed_attempts(self) -> LadderLevelPerformance:
+        if self.correct > self.attempts:
+            raise ValueError("correct must not exceed attempts")
+        return self
+
+
+class LadderAnalysisCreateRequest(BaseModel):
+    idempotency_key: str = Field(min_length=1, max_length=200)
+    learner_id: int = Field(ge=1)
+    skill_id: str = Field(min_length=1, max_length=100)
+    trigger_session_id: str = Field(min_length=1, max_length=100)
+    session_ids: tuple[str, str]
+    current_level: ExpressionLevel
+    performance_by_level: dict[ExpressionLevel, LadderLevelPerformance]
+    lower_rule_evidence_count: int = Field(default=0, ge=0)
+
+
+class LadderAnalysisCreateResponse(BaseModel):
+    analysis_id: str
+    status: str
+
+
+class LadderAnalysisApprovalRequest(BaseModel):
+    learner_id: int = Field(ge=1)
+    recommendation_version: int = Field(ge=1)
+
+
+class LadderRecommendationEvidence(BaseModel):
+    analysis_id: str
+    learner_id: int
+    skill_id: str
+    trigger_session_id: str
+    session_ids: list[str]
+    current_level: ExpressionLevel
+    recommended_level: ExpressionLevel
+    action: str = Field(
+        pattern=r"^(UPGRADE|MAINTAIN|ADJUST_DOWN|INSUFFICIENT_EVIDENCE)$"
+    )
+    current_accuracy: float | None = Field(default=None, ge=0, le=1)
+    evidence_count: int = Field(ge=0)
+    reason_code: str
+    recent_predictions: list[dict[str, str | float]] = Field(default_factory=list)
+    model_version: str
+    recommendation_version: int
+    status: str
+    approved: bool
+    analyzed_at: datetime
+
+
 class ReportEvidenceResponse(BaseModel):
     learner_id: int
     conversations: list[ReportConversationEvidence]
     skills: list[SkillProfile]
     notes: list[NoteUpdate]
+    ladder_recommendations: list[LadderRecommendationEvidence] = Field(default_factory=list)
 
 
 class ReportFact(BaseModel):

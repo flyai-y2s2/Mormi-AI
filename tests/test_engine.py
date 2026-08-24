@@ -1368,7 +1368,7 @@ async def test_cafe_operation_only_is_remembered_and_only_amount_is_asked_next()
     assert next_state.verified_slots == {"operation": "addition"}
     assert next_state.expression_level is ExpressionLevel.L4
     assert turn.input.target_slots == ["result"]
-    assert "두 메뉴는 모두 얼마야" in turn.mormi.text
+    assert turn.mormi.text == "그럼 두 메뉴가 모두 얼마인지 알려줄 수 있어?"
 
 
 @pytest.mark.asyncio

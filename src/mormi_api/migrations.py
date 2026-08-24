@@ -20,6 +20,8 @@ OBSERVATION_TABLES = {
     "ai_outbox_events",
 }
 
+APPLICATION_TABLES = OBSERVATION_TABLES | {"ladder_analysis_jobs"}
+
 
 def _observation_schema_issues(bind: Connection | Engine) -> list[str]:
     """Return structural differences that make the observation schema unsafe.
@@ -33,7 +35,7 @@ def _observation_schema_issues(bind: Connection | Engine) -> list[str]:
     inspector = inspect(bind)
     existing = set(inspector.get_table_names())
     issues: list[str] = []
-    for table_name in sorted(OBSERVATION_TABLES):
+    for table_name in sorted(APPLICATION_TABLES):
         if table_name not in existing:
             issues.append(f"{table_name}:missing_table")
             continue

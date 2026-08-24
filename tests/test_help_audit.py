@@ -8,17 +8,25 @@ from mormi_api.help_audit import build_help_review_items, render_human_review
 from mormi_api.schemas import ExpressionLevel, HintLevel
 
 
-def test_review_pipeline_discovers_every_current_home_and_cafe_task() -> None:
+def test_review_pipeline_discovers_every_current_home_cafe_and_park_task() -> None:
     items = build_help_review_items()
     review_ids = [item.review_id for item in items]
 
-    assert len(items) == 41
+    assert len(items) == 47
     assert len(review_ids) == len(set(review_ids))
     assert sum(review_id.startswith("home:") for review_id in review_ids) == 36
     assert any(review_id.startswith("cafe_queue:") for review_id in review_ids)
     assert any(review_id.startswith("cafe_budget_menu:") for review_id in review_ids)
     assert any(review_id.startswith("cafe_menu_total:") for review_id in review_ids)
     assert any(review_id.startswith("cafe_change:") for review_id in review_ids)
+    for scenario_id in (
+        "amusement_ticket_multiply",
+        "amusement_snack_divide",
+        "amusement_pass_compare",
+    ):
+        assert sum(
+            review_id.startswith(f"{scenario_id}:") for review_id in review_ids
+        ) == 2
 
 
 def test_review_items_expose_full_contract_for_offline_ai_and_humans() -> None:

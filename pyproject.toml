@@ -35,6 +35,14 @@ dev = [
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
 ]
+analysis = [
+  "accelerate>=1.10,<2",
+  "datasets>=4,<5",
+  "numpy>=2.2,<3",
+  "safetensors>=0.6,<1",
+  "torch>=2.7,<3",
+  "transformers>=4.55,<5",
+]
 
 [project.scripts]
 mormi-api = "mormi_api.main:run"
@@ -57,3 +65,14 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 packages = ["mormi_api"]
+
+[[tool.mypy.overrides]]
+module = [
+  "mormi_api.ladder_model.runtime",
+  "mormi_api.ladder_model.trainer",
+  "mormi_api.ladder_model.speech_trainer",
+]
+# These modules intentionally lazy-load the optional ML stack.  The comments
+# remain useful in the lightweight CI environment but can become unnecessary
+# when the analysis extra (and its type information) is installed.
+warn_unused_ignores = false

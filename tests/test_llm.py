@@ -515,15 +515,9 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
                 assert slots[slot_id]["claim_contract"]["supported"] is True
                 assert slots[slot_id]["claim_contract"]["value"] is None
             else:
-                assert (
-                    slots[slot_id]["claim_contract"]["value"]
-                    == "actual_child_claim_normalized"
-                )
+                assert slots[slot_id]["claim_contract"]["value"] == "actual_child_claim_normalized"
                 assert slots[slot_id]["claim_contract"]["supported"] is None
-                assert (
-                    slots[slot_id]["claim_contract"]["evidence_span"]
-                    == "exact_child_substring"
-                )
+                assert slots[slot_id]["claim_contract"]["evidence_span"] == "exact_child_substring"
         method_contract = payload["method_acceptance_contract"]
         assert method_contract["policy"] == task.help_method_policy
         assert method_contract["reviewed_examples"] == task.accepted_methods
@@ -535,8 +529,7 @@ def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() 
             for instruction in payload["instructions"]
         )
         assert any(
-            "아이가 실제로 주장한 값" in instruction
-            for instruction in payload["instructions"]
+            "아이가 실제로 주장한 값" in instruction for instruction in payload["instructions"]
         )
 
 
@@ -745,7 +738,7 @@ async def test_positive_classification_without_current_claim_is_left_for_graph_r
 
 @pytest.mark.asyncio
 async def test_number_rich_explanation_without_relation_is_left_for_graph_routing() -> None:
-    """The primary pass exposes ambiguity without paying for a second Haiku call."""
+    """The primary pass exposes ambiguity without paying for a second model call."""
 
     child_text = "2000원에서 1800원 내면 300원 남아"
     first = UtteranceAnalysis(

@@ -393,7 +393,7 @@ async def test_home_structured_numeric_answer_advances_without_repeating(
     expected_answer: str,
     tmp_path: object,
 ) -> None:
-    """A Haiku-interpreted amount is compared as a value, not Korean copy."""
+    """A model-interpreted amount is compared as a value, not Korean copy."""
 
     analysis = UtteranceAnalysis(
         safety_category=SafetyCategory.NORMAL,

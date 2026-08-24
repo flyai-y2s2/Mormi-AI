@@ -380,7 +380,7 @@ class ClaudeGateway:
             "semantic_role_policy": {
                 "observation": "화면이나 생활 장면에서 직접 확인한 수량·값·속성",
                 "conclusion": "질문이 요구한 답이나 비교 결과",
-                "operation": "상황에 필요한 덧셈·뺄셈 등 계산 종류",
+                "operation": "상황에 필요한 덧셈·뺄셈·곱셈·나눗셈 등 계산 종류",
                 "method": "답을 얻기 위해 실제로 한 행동이나 절차; 결과만으로 채우지 않음",
                 "reason": "결론을 뒷받침하는 사실 사이의 관계; 결론만으로 채우지 않음",
                 "explanation": "검수된 수학 관계 또는 해결 절차; 답만으로 채우지 않음",
@@ -491,7 +491,8 @@ class ClaudeGateway:
                     "예: 아이가 6,000원이라고 말하면 value=6000이다."
                 ),
                 (
-                    "아이가 덧셈·뺄셈 관계를 말하면 표현 방식과 상관없이 arithmetic_claims에 "
+                    "아이가 덧셈·뺄셈·곱셈·나눗셈 관계를 말하면 표현 방식과 "
+                    "상관없이 arithmetic_claims에 "
                     "아이가 실제로 말한 left, right, operation, result를 구조화한다. 예: "
                     "'2,000원에서 1,800원 내면 300원 남아'는 subtraction(2000,1800,300)이다."
                 ),
