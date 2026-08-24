@@ -623,6 +623,30 @@ class ConversationEngine:
             "runtime": runtime.model_dump(mode="json"),
         }
 
+    @staticmethod
+    def _progress_eligible_slots(
+        task: TaskDefinition,
+        verified_slots: Mapping[str, object],
+        step: StepDefinition,
+        response_type: ResponseType,
+    ) -> set[str]:
+        """Return claims that may advance this turn's learning state.
+
+        A free-text explanation is not constrained by the UI's latest narrow
+        follow-up: one child sentence may genuinely supply answer and reason
+        together.  Taps and other structured responses are intentionally
+        limited to their displayed step, otherwise one choice could satisfy a
+        later slot that the child never saw or expressed.
+        """
+
+        current_step_slots = {*step.target_slots, *step.optional_slots}
+        if response_type is not ResponseType.TEXT:
+            return current_step_slots
+        unresolved_required_slots = {
+            slot_id for slot_id in task.required_slots if slot_id not in verified_slots
+        }
+        return current_step_slots | unresolved_required_slots
+
     def _decide(
         self,
         state: SessionState,
@@ -651,10 +675,12 @@ class ConversationEngine:
             entry_active=entry_active,
             targeted_followup=targeted_followup_active,
         )
-        interpreted_slots = {
-            *interpreted_step.target_slots,
-            *interpreted_step.optional_slots,
-        }
+        progress_eligible_slots = self._progress_eligible_slots(
+            task,
+            state.verified_slots,
+            interpreted_step,
+            response.type,
+        )
 
         if analysis.safety_category is not SafetyCategory.NORMAL:
             if analysis.safety_category is SafetyCategory.PLAYFUL_OFFTOPIC:
@@ -772,14 +798,14 @@ class ConversationEngine:
                 analysis,
                 grounded_claims,
             )
-        # Only claims requested by the current turn may advance the state.
-        # A child can still repeat a previously verified observation or result
-        # naturally. Keep that grounded fact available to the speaker for
-        # acknowledgement without counting it as progress.
+        # Free speech can naturally answer more than the latest narrow
+        # follow-up. Preserve every directly grounded unresolved requirement
+        # from that utterance. Structured UI responses remain scoped to the
+        # current step so one tap cannot silently skip later teaching stages.
         accepted_claims = {
             slot_id: value
             for slot_id, value in grounded_claims.items()
-            if slot_id in interpreted_slots
+            if slot_id in progress_eligible_slots
         }
         if not accepted_wrong_entry_guess:
             self._reconcile_response_category(
