@@ -13,7 +13,6 @@ from .schemas import (
     ChildResponse,
     DialogueHistoryTurn,
     EntryPhase,
-    ExpressionLevel,
     NoteContextualizationContext,
     NoteContextualizationOutput,
     ReportSummaryRequest,
@@ -22,7 +21,6 @@ from .schemas import (
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
-    SpeakerVerificationPolicy,
     UtteranceAnalysis,
 )
 from .settings import Settings
@@ -767,9 +765,10 @@ SPEAKER_SYSTEM = """
   이어지는 하나의 새로운 문장으로 바꾼다.
 - required_slot_ids에 해당하는 한 가지 초점만 묻고 asked_slot_ids에도 같은 값을 넣는다.
 - required_slot_descriptions와 question_intent의 의미를 바꾸거나 다른 질문을 추가하지 않는다.
-- verification_policy가 deterministic이면 required_question을 문구 그대로 포함한다.
-- verification_policy가 semantic이면 required_question을 동생다운 말로 바꿀 수 있지만
-  같은 required_slot_ids만 물어야 한다.
+- required_question은 그대로 복사할 문구가 아니라, 코드가 검수한 질문 의미의 기준이다.
+  verification_policy는 이 표현 방식을 선택한 이유를 기록할 뿐 문구 복사를 강제하지 않는다.
+- required_question의 뜻을 동생다운 말로 자연스럽게 바꿀 수 있지만, 같은
+  required_slot_ids만 물어야 한다.
 - verified_facts를 사용했다면 사용한 키만 used_verified_slots에 넣는다.
 - child_expression은 quote_safe일 때만 글자 그대로 인용한다. 인용한 정확한 구절을
   used_child_expression_spans에 넣고 used_child_expression=true로 둔다.
@@ -779,8 +778,9 @@ SPEAKER_SYSTEM = """
 
 말투 규칙:
 - 50자 이내를 목표로 간결하게 쓴다. 자연스러운 문장 완결을 위해 조금 넘는 것은
-  허용하며, 글자 수 때문에 문장을 줄이거나 중간에서 끊지 않는다. 최대 두 줄이며,
-  물음표와 질문·행동 요청은 하나만 둔다.
+  허용하며, 글자 수 때문에 문장을 줄이거나 중간에서 끊지 않는다.
+- 한 턴에는 required_slot_ids가 가리키는 하나의 미해결 초점만 다룬다. 같은 초점을
+  자연스럽게 이어 묻는 문장이라면 물음표가 두 개여도 된다. 두 번째 주제를 추가하지 않는다.
 - 착하고 순한 초등 저학년 동생처럼 쉽고 따뜻한 반말을 쓴다. 맞춤법은 지킨다.
 - '기억했어', '확인했어', '그 부분', '네가 말한 데까지' 같은 시스템 말투를 쓰지 않는다.
 - '왜 그렇게 생각했어?', '어떻게 알았어?', '근거가 뭐야?', '설명해 봐',
@@ -789,6 +789,10 @@ SPEAKER_SYSTEM = """
 - 머뭇거리는 도움 요청에는 '...'을 최대 한 번만 쓴다. 과한 자기비하·떼쓰기는 하지 않는다.
 - 아이를 맞다/틀리다 평가하거나 가르치지 않는다.
 - '다시 생각해', '잘 생각해', '정답', '오답', '쉬운 문제', '힌트'를 말하지 않는다.
+- 특정 단어가 들어갔다는 이유만으로 문장의 뜻을 단정하지 않는다. '같이', '함께',
+  '정답', '틀렸어'는 문맥의 의미로 판단한다. L0가 아닌데 공동 수행을 제안하거나 아이를
+  채점하는 말은 하지 않지만, 문제 장면의 '친구와 같이 나누기'나 진짜 몰라서 묻는
+  '이건 왜 정답이라고 하는 거야?' 같은 표현은 금지하지 않는다.
 - '지금 상황', '지금 장면', '그다음은 어떻게 돼?'처럼 대상을 알 수 없는 말을 쓰지 않는다.
 - 도움 카드 내용은 모르미 지식처럼 설명하지 않는다. 입력에 없는 숫자·정답·규칙·이름,
   내부 단계명 L/H, 미션, 분류, 슬롯을 만들거나 말하지 않는다.
@@ -830,36 +834,6 @@ source_slots_used에는 사용한 모든 source_fragments 키를, source_spans_u
 글자 그대로 넣는다. fact_refs_used에는 실제로 문맥 보완에 쓴 reviewed_facts 키만 넣는다.
 새 수학 내용을 넣지 않았을 때만 introduced_math_content=false로 둔다.
 """.strip()
-
-
-_FORBIDDEN_SPEAKER = re.compile(
-    r"(틀렸|맞았|맞아|정확해|잘했|옳아|훌륭|정답|오답|다시\s*생각|"
-    r"잘\s*생각|쉬운\s*문제|힌트|미션|L[0-4]|H[0-3]|바보|멍청|"
-    r"지금\s*(상황|장면)|그\s*다음엔?\s*어떻게|아까\s*질문|"
-    r"그\s*부분은?\s*(기억|확인)|네가\s*말한\s*데까지|"
-    r"왜\s+.+(?:라고\s+)?생각했어|왜\s*그렇게\s*생각|어떻게\s*알았어|"
-    r"어떻게\s+[^?]*(했어|셌어|찾았어|읽었어|비교했어)|"
-    r"근거가\s*뭐야|까닭은\s*무엇|설명해\s*봐|이유를\s*(말|설명))",
-    re.IGNORECASE,
-)
-
-_REWARDING_BRIDGE_COPY = re.compile(
-    r"(ㅋㅋ|ㅎㅎ|재밌|웃기|같이\s*놀|장난\s*더|또\s*해\s*봐|이야기\s*더\s*해)",
-    re.IGNORECASE,
-)
-
-_JOINT_MODE_COPY = re.compile(
-    r"(?:(?:같이|함께)\s*(?:해\s*보자|해결|고르|골라|찾|읽|세|계산)|"
-    r"(?:해결|고르|골라|찾|읽|세|계산)[^?.!]{0,12}(?:같이|함께))",
-    re.IGNORECASE,
-)
-
-_SOCIAL_BRIDGE_ACTS = {
-    "acknowledge_meta_and_reask",
-    "acknowledge_non_learning_and_reask",
-    "acknowledge_task_comment_and_reask",
-    "brief_ack_and_redirect",
-}
 
 
 _SINO_DIGITS = {
@@ -947,25 +921,22 @@ def extract_numeric_values(text: str) -> set[str]:
     return values
 
 
-def _compact_copy(text: str) -> str:
-    return re.sub(r"[\s\W_]", "", text).lower()
-
-
-def _contains_forbidden_answer(text: str, forms: list[str]) -> bool:
-    compact_text = _compact_copy(text)
-    return any(
-        len(compact_form := _compact_copy(form)) >= 2 and compact_form in compact_text
-        for form in forms
-    )
-
-
 def validate_speaker_output(
     output: SpeakerOutput,
     context: SpeakerContext,
     guard: SpeakerGuardContract,
 ) -> str | None:
+    """Validate machine-readable contracts and exact child-quote provenance.
+
+    Korean wording is deliberately not classified here with words, punctuation
+    or regular expressions.  Those surface checks produced false positives for
+    legitimate problem statements and help-seeking questions, replacing useful
+    model output with generic fallback copy.  Persona and child-facing language
+    policy live in the speaker prompt and offline regression evaluations.
+    """
+
     text = output.text.strip()
-    if not text or len(text.splitlines()) > 2:
+    if not text:
         return None
     if output.dialogue_act != context.dialogue_act:
         return None
@@ -974,27 +945,6 @@ def validate_speaker_output(
     if set(output.asked_slot_ids) != set(context.required_slot_ids):
         return None
     if any(slot_id not in context.verified_facts for slot_id in output.used_verified_slots):
-        return None
-    if _FORBIDDEN_SPEAKER.search(text):
-        return None
-    if context.dialogue_act in _SOCIAL_BRIDGE_ACTS and _REWARDING_BRIDGE_COPY.search(text):
-        return None
-    if not context.help_card_visible and re.search(r"(?:도움\s*)?카드", text):
-        return None
-    if context.expression_level is not ExpressionLevel.L0 and _JOINT_MODE_COPY.search(text):
-        return None
-    if context.previous_question:
-        normalized_text = re.sub(r"\s+", "", text)
-        normalized_previous = re.sub(r"\s+", "", context.previous_question)
-        if normalized_text == normalized_previous:
-            return None
-        if context.must_reframe and normalized_previous in normalized_text:
-            return None
-    numbers = extract_numeric_values(text)
-    allowed = {number.replace(",", "") for number in context.allowed_numbers}
-    if any(number not in allowed for number in numbers):
-        return None
-    if _contains_forbidden_answer(text, guard.forbidden_answer_forms):
         return None
     spans = output.used_child_expression_spans
     if output.used_child_expression != bool(spans):
@@ -1007,22 +957,7 @@ def validate_speaker_output(
             return None
         if any(not span or span not in source or span not in text for span in spans):
             return None
-    if context.required_question:
-        if text.count("?") != 1:
-            return None
-        # Open-set conversation-only turns are allowed to acknowledge the
-        # child's actual remark before returning to the unresolved focus.  The
-        # reply is still constrained by asked slots, number allow-list, answer
-        # leakage, safety, card visibility and joint-mode checks above; it does
-        # not have to copy the reviewed fallback question word for word.
-        open_conversation_bridge = context.dialogue_act in _SOCIAL_BRIDGE_ACTS
-        if (
-            context.verification_policy is SpeakerVerificationPolicy.DETERMINISTIC
-            and not open_conversation_bridge
-            and (_compact_copy(context.required_question) not in _compact_copy(text))
-        ):
-            return None
-    elif output.asked_slot_ids or "?" in text:
+    if not context.required_question and output.asked_slot_ids:
         return None
     return text
 

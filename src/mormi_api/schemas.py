@@ -776,9 +776,8 @@ class SpeakerQuestionIntent(BaseModel):
 
 
 class SpeakerGuardContract(BaseModel):
-    """Validation-only facts that are never sent to the Sonnet speaker."""
+    """Closed-world provenance kept outside the speaker prompt."""
 
-    forbidden_answer_forms: list[str] = Field(default_factory=list)
     child_expression_source: str | None = None
 
 

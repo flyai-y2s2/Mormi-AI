@@ -435,7 +435,7 @@ class ConversationEngine:
 
         The primary understanding model never writes child-facing copy.  The
         bridge receives only the already reviewed speaker contract, and the
-        same deterministic guard used for the main speaker is applied before
+        same structural/provenance guard used for the main speaker is applied before
         its sentence can reach a child.
         """
 
@@ -1570,10 +1570,10 @@ class ConversationEngine:
         # redundant verifier model is gone, but a semantic *wording policy* is
         # still useful when the speaker needs to refer to the child's own
         # expression or ask for an open explanation.  In that case the main
-        # speaker may paraphrase the reviewed question naturally; the same
-        # deterministic guard still enforces slot ids, provenance, number
-        # allow-lists, answer leakage, card visibility and joint-mode rules.
-        # Closed answer turns keep the stricter reviewed-question policy.
+        # speaker may paraphrase the reviewed question naturally.  Child-facing
+        # wording policy is enforced by the prompt and offline regressions; the
+        # runtime boundary only enforces dialogue act, slot ids, declared
+        # verified-fact ids and exact child-quote provenance.
         verification_policy = self._speaker_verification_policy(
             task,
             required_slot_ids,
@@ -1888,23 +1888,8 @@ class ConversationEngine:
         state: SessionState,
         context: SpeakerContext,
     ) -> SpeakerGuardContract:
-        del state  # The explicit parameter documents that the guard is task-state scoped.
-        question_compact = re.sub(r"[\s\W_]", "", context.required_question or "").lower()
-        forbidden: list[str] = []
-        for slot_id in context.required_slot_ids:
-            slot = task.slots[slot_id]
-            forms = [
-                str(slot.expected),
-                *slot.aliases,
-                *(str(value) for value in slot.accepted_values),
-            ]
-            for form in forms:
-                compact = re.sub(r"[\s\W_]", "", form).lower()
-                if len(compact) < 2 or compact in question_compact:
-                    continue
-                forbidden.append(form)
+        del task, state
         return SpeakerGuardContract(
-            forbidden_answer_forms=list(dict.fromkeys(forbidden)),
             child_expression_source=(
                 context.child_expression if context.child_expression_mode == "quote_safe" else None
             ),

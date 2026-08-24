@@ -207,52 +207,29 @@ def speaker_guard() -> SpeakerGuardContract:
     return SpeakerGuardContract()
 
 
-def test_speaker_rejects_grading_synonyms() -> None:
+def test_surface_wording_is_not_used_as_runtime_safety_classifier() -> None:
     context = speaker_context()
     for text in (
         "맞아! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
-        "정확해! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
-        "잘했어! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
-        "옳아! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
-    ):
-        assert (
-            validate_speaker_output(speaker_output(text, context), context, speaker_guard()) is None
-        )
-
-
-def test_speaker_rejects_system_status_voice() -> None:
-    context = speaker_context()
-    for text in (
         "그 부분은 기억했어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
-        "네가 말한 데까지는 들었어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
-        "그 부분은 확인했어. 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
+        "나는 아직 헷갈려... 도움 카드를 보고 다시 알려줄 수 있어?",
+        "왜 오른쪽에 더 많다고 생각했어?",
     ):
         assert (
-            validate_speaker_output(speaker_output(text, context), context, speaker_guard()) is None
+            validate_speaker_output(speaker_output(text, context), context, speaker_guard()) == text
         )
 
 
-def test_speaker_must_keep_the_orchestrator_question() -> None:
+def test_speaker_runtime_tracks_focus_by_slot_ids_not_korean_copy() -> None:
     context = speaker_context()
-    assert (
-        validate_speaker_output(
-            speaker_output(
-                "아, 왼쪽이구나! 나는 왜 왼쪽 줄이 더 빠른지 헷갈려... 알려줄 수 있어?",
-                context,
-            ),
-            context,
-            speaker_guard(),
-        )
-        is not None
+    paraphrase = speaker_output(
+        "아, 왼쪽이구나! 나는 이 줄이 왜 빠른지 아직 잘 모르겠어... 알려줄 수 있어?",
+        context,
     )
-    assert (
-        validate_speaker_output(
-            speaker_output("왼쪽이구나. 무슨 색을 좋아해?", context),
-            context,
-            speaker_guard(),
-        )
-        is None
-    )
+    assert validate_speaker_output(paraphrase, context, speaker_guard()) == paraphrase.text
+
+    wrong_focus = paraphrase.model_copy(update={"asked_slot_ids": ["answer"]})
+    assert validate_speaker_output(wrong_focus, context, speaker_guard()) is None
 
 
 def test_semantic_speaker_may_paraphrase_only_with_matching_contract() -> None:
@@ -266,7 +243,7 @@ def test_semantic_speaker_may_paraphrase_only_with_matching_contract() -> None:
     assert validate_speaker_output(wrong_focus, context, speaker_guard()) is None
 
 
-def test_speaker_cannot_mention_an_invisible_help_card() -> None:
+def test_help_card_visibility_is_a_prompt_policy_not_a_word_filter() -> None:
     context = speaker_context().model_copy(
         update={
             "verification_policy": SpeakerVerificationPolicy.SEMANTIC,
@@ -278,41 +255,53 @@ def test_speaker_cannot_mention_an_invisible_help_card() -> None:
         context,
     )
 
-    assert validate_speaker_output(output, context, speaker_guard()) is None
+    assert validate_speaker_output(output, context, speaker_guard()) == output.text
+    assert "help_card_visible=false이면 '카드', '도움 카드'" in SPEAKER_SYSTEM
 
 
-def test_l2_rejects_joint_performance_language_but_l0_allows_it() -> None:
-    text = "그럼 나랑 같이 골라볼까?"
+def test_surface_words_are_not_semantic_contracts() -> None:
     l2_context = SpeakerContext(
         dialogue_act="reduce_expression_load",
         expression_level=ExpressionLevel.L2,
-        required_question=text,
+        required_question="어느 쪽인지 골라서 알려줄 수 있어?",
         required_slot_ids=["answer"],
         required_slot_descriptions={"answer": "선택할 답"},
         fallback_text="그럼 혹시 여기서 골라서 알려줄 수 있어?",
     )
+    legitimate_scenario = "사탕 6개를 친구랑 같이 나눠 먹으려면 한 명이 몇 개씩 먹으면 돼?"
+    assert validate_speaker_output(
+        speaker_output(legitimate_scenario, l2_context),
+        l2_context,
+        speaker_guard(),
+    ) == legitimate_scenario
+
+    help_seeking_question = "이거는 왜 정답이라고 하는 거야? 나는 아직 잘 모르겠어."
+    assert validate_speaker_output(
+        speaker_output(help_seeking_question, l2_context),
+        l2_context,
+        speaker_guard(),
+    ) == help_seeking_question
+
     assert (
-        validate_speaker_output(
-            speaker_output(text, l2_context),
-            l2_context,
-            speaker_guard(),
-        )
-        is None
+        '공동 수행을 뜻하는 "같이 해보자"는 L0에서만 사용한다.' in SPEAKER_SYSTEM
     )
 
-    l0_context = l2_context.model_copy(
-        update={
-            "dialogue_act": "joint_mode",
-            "expression_level": ExpressionLevel.L0,
-            "required_question": text,
-        }
+
+def test_multiple_question_marks_are_allowed_for_one_semantic_focus() -> None:
+    text = "그런데 ‘차근차근’은 어떻게 세는 거야? 조금 더 알려줄 수 있어?"
+    context = SpeakerContext(
+        dialogue_act="clarify_child_expression",
+        required_question="차근차근 세는 방법을 조금 더 알려줄 수 있어?",
+        required_slot_ids=["method"],
+        required_slot_descriptions={"method": "차근차근 세는 방법"},
+        fallback_text="차근차근 세는 방법을 조금 더 알려줄 수 있어?",
     )
-    l0_output = SpeakerOutput(
-        text=text,
-        dialogue_act="joint_mode",
-        asked_slot_ids=["answer"],
-    )
-    assert validate_speaker_output(l0_output, l0_context, speaker_guard()) == text
+
+    assert validate_speaker_output(
+        speaker_output(text, context),
+        context,
+        speaker_guard(),
+    ) == text
 
 
 def test_speaker_can_ground_a_clarification_in_an_exact_child_phrase() -> None:
@@ -343,25 +332,17 @@ def test_speaker_can_ground_a_clarification_in_an_exact_child_phrase() -> None:
     assert validate_speaker_output(invented_quote, context, guard) is None
 
 
-def test_speaker_cannot_repeat_the_previous_line_verbatim() -> None:
+def test_repetition_and_reframing_are_prompt_policies_not_copy_filters() -> None:
     context = SpeakerContext(
         dialogue_act="acknowledge_unstructured_partial",
         previous_question="어떻게 세는지 알려주면 안 될까?",
         required_question="어떻게 세는지 알려주면 안 될까?",
         fallback_text="내가 또 똑같이 물었네... 같이 골라 볼까?",
     )
-    assert (
-        validate_speaker_output(
-            speaker_output("어떻게 세는지 알려주면 안 될까?", context),
-            context,
-            speaker_guard(),
-        )
-        is None
-    )
+    repeated = speaker_output("어떻게 세는지 알려주면 안 될까?", context)
+    assert validate_speaker_output(repeated, context, speaker_guard()) == repeated.text
 
-
-def test_support_turn_cannot_prepend_copy_to_the_same_previous_question() -> None:
-    context = SpeakerContext(
+    support_context = SpeakerContext(
         dialogue_act="accept_help_request",
         must_reframe=True,
         previous_question="어떻게 세는지 알려주면 안 될까?",
@@ -371,13 +352,54 @@ def test_support_turn_cannot_prepend_copy_to_the_same_previous_question() -> Non
         verification_policy=SpeakerVerificationPolicy.SEMANTIC,
         fallback_text="오, 도움 카드가 나왔어! 이걸 보고 다시 알려줄래?",
     )
-    output = SpeakerOutput(
+    support_output = SpeakerOutput(
         text="도움 카드가 나왔네. 어떻게 세는지 알려주면 안 될까?",
-        dialogue_act=context.dialogue_act,
+        dialogue_act=support_context.dialogue_act,
         asked_slot_ids=["tracking"],
     )
+    assert (
+        validate_speaker_output(support_output, support_context, speaker_guard())
+        == support_output.text
+    )
+    assert "must_reframe=true이면" in SPEAKER_SYSTEM
 
-    assert validate_speaker_output(output, context, speaker_guard()) is None
+
+def test_speaker_rejects_empty_or_structurally_inconsistent_output() -> None:
+    context = speaker_context()
+    valid = speaker_output(
+        "아, 왼쪽이구나! 나는 왜 이 줄이 더 빠른지 아직 모르겠어... 알려줄 수 있어?",
+        context,
+    )
+
+    assert validate_speaker_output(valid, context, speaker_guard()) == valid.text
+    assert (
+        validate_speaker_output(valid.model_copy(update={"text": "  "}), context, speaker_guard())
+        is None
+    )
+    assert (
+        validate_speaker_output(
+            valid.model_copy(update={"dialogue_act": "complete"}),
+            context,
+            speaker_guard(),
+        )
+        is None
+    )
+    assert (
+        validate_speaker_output(
+            valid.model_copy(update={"asked_slot_ids": ["reason", "reason"]}),
+            context,
+            speaker_guard(),
+        )
+        is None
+    )
+    assert (
+        validate_speaker_output(
+            valid.model_copy(update={"used_verified_slots": ["answer"]}),
+            context,
+            speaker_guard(),
+        )
+        is None
+    )
 
 
 def test_classifier_receives_shared_semantic_roles_across_home_and_cafe_tasks() -> None:
@@ -575,6 +597,10 @@ def test_reviewed_speaker_and_note_prompt_contracts_are_pinned() -> None:
         'L2에서 "같이 고르자", "같이 찾아보자"라고 말하지 않는다.',
         '공동 수행을 뜻하는 "같이 해보자"는 L0에서만 사용한다.',
         "도움 카드가 실제로 화면에 표시된 경우에만 도움 카드를 언급한다.",
+        "required_question은 그대로 복사할 문구가 아니라",
+        "같은 초점을\n  자연스럽게 이어 묻는 문장이라면 물음표가 두 개여도 된다.",
+        "특정 단어가 들어갔다는 이유만으로 문장의 뜻을 단정하지 않는다.",
+        "must_reframe=true이면 직전 질문 앞에 말만 덧붙이지 말고",
     ):
         assert rule in SPEAKER_SYSTEM
 
@@ -587,7 +613,7 @@ def test_reviewed_speaker_and_note_prompt_contracts_are_pinned() -> None:
     )
 
 
-def test_speaker_rejects_teacher_style_probe() -> None:
+def test_teacher_style_is_forbidden_by_prompt_not_surface_regex() -> None:
     context = SpeakerContext(
         dialogue_act="acknowledge_partial",
         required_question="나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?",
@@ -603,20 +629,12 @@ def test_speaker_rejects_teacher_style_probe() -> None:
         "이유를 설명해 봐.",
     ):
         assert (
-            validate_speaker_output(speaker_output(text, context), context, speaker_guard()) is None
+            validate_speaker_output(speaker_output(text, context), context, speaker_guard()) == text
         )
 
-    assert (
-        validate_speaker_output(
-            speaker_output(
-                "나 3이랑 5를 어떻게 비교해야 할지 헷갈려... 알려줄 수 있어?",
-                context,
-            ),
-            context,
-            speaker_guard(),
-        )
-        is not None
-    )
+    assert "아이에게 명령하거나 퀴즈를 내지 않는다." in SPEAKER_SYSTEM
+    assert "'왜 그렇게 생각했어?'" in SPEAKER_SYSTEM
+    assert "처럼 도움을 청한다." in SPEAKER_SYSTEM
 
 
 @pytest.mark.asyncio
@@ -839,7 +857,7 @@ async def test_confident_safe_meta_turn_skips_redundant_learning_reaudit() -> No
     assert len(messages.prompts) == 1
 
 
-def test_social_bridge_requires_acknowledgement_and_rejects_rewarding_copy() -> None:
+def test_social_bridge_style_is_prompt_policy_while_contract_stays_structural() -> None:
     context = SpeakerContext(
         dialogue_act="acknowledge_meta_and_reask",
         task_relation=TaskRelation.META_ABOUT_MORMI,
@@ -861,4 +879,5 @@ def test_social_bridge_requires_acknowledgement_and_rejects_rewarding_copy() -> 
     assert validate_speaker_output(output, context, guard) is not None
 
     rewarding = output.model_copy(update={"text": "ㅋㅋ 재밌다! 점이 몇 개인지 알려줄래?"})
-    assert validate_speaker_output(rewarding, context, guard) is None
+    assert validate_speaker_output(rewarding, context, guard) == rewarding.text
+    assert "새 농담·놀이·화제를 만들지 않고" in SPEAKER_SYSTEM
