@@ -50,6 +50,18 @@ def test_deployment_health_checks_candidate_before_removing_live_api() -> None:
     assert "PREVIOUS_IMAGE" in workflow
 
 
+def test_deployment_migrates_database_before_candidate_and_live_replacement() -> None:
+    workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
+
+    network = workflow.index("docker network create mormi-services")
+    migration = workflow.index("python scripts/migrate_database.py")
+    candidate = workflow.index("--name mormi-ai-candidate")
+    replace_api = workflow.index("docker rm -f mormi-ai ")
+
+    assert network < migration < candidate < replace_api
+    assert "--env-file /etc/mormi-ai/mormi.env" in workflow[network:candidate]
+
+
 def test_pull_requests_build_the_production_image() -> None:
     workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
 

@@ -157,6 +157,14 @@ jobs:
           # 서비스용 Docker network 생성
           docker network create mormi-services 2>/dev/null || true
 
+          # 새 애플리케이션이 요구하는 additive DB 스키마를 먼저 적용합니다.
+          # 기존 API를 내리기 전에 실행하므로 실패하면 현재 서비스는 그대로 유지됩니다.
+          docker run --rm \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            "${IMAGE_URI}" \
+            python scripts/migrate_database.py
+
           # 실제 API를 내리기 전에 동일한 환경의 후보 컨테이너를 먼저 확인합니다.
           PREVIOUS_IMAGE="$(docker inspect --format '{{.Config.Image}}' mormi-ai 2>/dev/null || true)"
           docker rm -f mormi-ai-candidate 2>/dev/null || true
