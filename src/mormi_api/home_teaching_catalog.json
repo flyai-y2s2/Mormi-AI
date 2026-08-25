@@ -1414,8 +1414,8 @@
       "가장 비싼 것만 보고",
       "물건 개수만 더한 뒤"
     ],
-    "short_prompt": "표·주스·스티커를 살 때 모자란 돈을 어떻게 확인할까?",
-    "answer_followup_prompt": "예산에서 얼마가 모자라?",
+    "short_prompt": "표랑 간식이랑 스티커 값을 구한 뒤, 내가 가진 10,000원과 어떻게 비교하면 되는지 알려줄 수 있어?",
+    "answer_followup_prompt": "나 10,000원이 있는데, 얼마가 모자란지만 먼저 알려줄 수 있어?",
     "short_correct": "각 값을 계산해 더한 뒤 10,000원과 비교하기",
     "short_options": [
       "각 값을 계산해 더한 뒤 10,000원과 비교하기",
@@ -1424,7 +1424,7 @@
     ],
     "help_plan": {
       "H1": {
-        "body": "표 두 장, 주스 두 잔, 스티커 한 장의 값을 각각 확인해 보자.",
+        "body": "표·주스·스티커 값과 내가 가진 10,000원을 같이 봐줄래?",
         "support_type": "attention",
         "answer_policy": "hidden",
         "support_mode": "attention",
@@ -1433,7 +1433,7 @@
         ]
       },
       "H2": {
-        "body": "표값 5,000원, 주스값 3,000원, 스티커값 3,000원을 더해 보자.",
+        "body": "5,000원+3,000원+3,000원을 10,000원과 비교하도록 도와줄래?",
         "support_type": "guided_action",
         "answer_policy": "partial",
         "support_mode": "guided_sequence",
@@ -1519,9 +1519,9 @@
         ]
       }
     },
-    "content_version": 8,
+    "content_version": 9,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 표랑 간식이랑 스티커를 사려는데 돈이 모자랄까 봐 걱정돼. 얼마가 모자라고 어떻게 구하는지 알려줄래?",
+    "l4_prompt": "나 표랑 간식이랑 스티커를 사려는데 돈이 모자랄까봐 걱정돼... 10000원이 있는데 얼마가 모자라고 어떻게 구하는지 알려줄 수 있어?",
     "help_method_policy": "target_method",
     "accepted_methods": [
       "각 값을 계산해 더한 뒤 10,000원과 비교하기",
@@ -1749,8 +1749,8 @@
       "14,000-2,000으로",
       "14,000+2,000으로"
     ],
-    "short_prompt": "14,000원으로 2,000원짜리 책을 몇 권 살 수 있는지 어떻게 구할까?",
-    "answer_followup_prompt": "책을 몇 권 살 수 있어?",
+    "short_prompt": "책을 사려는데 14,000원이 있고 한 권은 2,000원이야. 어떤 계산을 하면 되는지 알려줄 수 있어?",
+    "answer_followup_prompt": "나 14,000원이 있고 책 한 권은 2,000원이야. 몇 권 살 수 있는지만 먼저 알려줄 수 있어?",
     "short_correct": "14,000÷2,000으로 구하기",
     "short_options": [
       "14,000÷2,000으로 구하기",
@@ -1759,7 +1759,7 @@
     ],
     "help_plan": {
       "H1": {
-        "body": "쓸 수 있는 예산과 책 한 권 가격을 찾아보자.",
+        "body": "내 14,000원과 책 한 권 값 2,000원을 같이 봐줄래?",
         "support_type": "attention",
         "answer_policy": "hidden",
         "support_mode": "attention",
@@ -1768,7 +1768,7 @@
         ]
       },
       "H2": {
-        "body": "14,000원 안에 2,000원이 몇 번 들어가는지 14,000÷2,000=□로 찾아보자.",
+        "body": "14,000원÷2,000원=□에서 □에 들어갈 수를 찾아줄래?",
         "support_type": "guided_action",
         "answer_policy": "partial",
         "support_mode": "guided_equation",
@@ -1837,9 +1837,9 @@
         ]
       }
     },
-    "content_version": 8,
+    "content_version": 9,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 가진 돈으로 책을 몇 권 살 수 있는지 헷갈려. 몇 권이고 어떻게 구하는지도 알려줄래?",
+    "l4_prompt": "나 책을 사려는데 몇 권 살 수 있을지 헷갈려... 14,000원이 있고 한 권은 2,000원이야. 몇 권 살 수 있고 어떻게 구하는지 알려줄 수 있어?",
     "help_method_policy": "target_method",
     "accepted_methods": [
       "14,000÷2,000으로 구하기",

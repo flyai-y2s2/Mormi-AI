@@ -94,16 +94,19 @@ CONTENT_VERSION_8_HOME_SESSION_IDS = {
     "sub-borrow",
     "multiply-groups",
     "multiply-addition",
-    "multiply-easy-tables",
     "multiply-tables",
     "divide-share",
-    "divide-group",
     "clock-basic",
     "clock-quarter",
     "time-calendar",
     "measure-weight-capacity",
     "geometry-compose",
     "data-chance",
+}
+
+CONTENT_VERSION_9_HOME_SESSION_IDS = {
+    "multiply-easy-tables",
+    "divide-group",
 }
 
 
@@ -159,7 +162,10 @@ def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert {
         spec.id for spec in HOME_TEACHING_CATALOG.values() if spec.content_version == 8
     } == CONTENT_VERSION_8_HOME_SESSION_IDS
-    assert all(spec.content_version in {7, 8} for spec in HOME_TEACHING_CATALOG.values())
+    assert {
+        spec.id for spec in HOME_TEACHING_CATALOG.values() if spec.content_version == 9
+    } == CONTENT_VERSION_9_HOME_SESSION_IDS
+    assert all(spec.content_version in {7, 8, 9} for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.content_version >= 2 for spec in HOME_TEACHING_CATALOG.values())
     # Dialogue copy should aim for 50 characters, but a complete reviewed
     # sentence may exceed it. Runtime contracts must not reject or truncate it.
@@ -182,7 +188,9 @@ def test_park_preparation_home_content_matches_the_fifth_frontend_drill(
     task = home_teaching_task(spec, skill_id=spec.id)
     sample = spec.sample_problem
 
-    assert spec.content_version == 8
+    assert spec.content_version == (
+        9 if curriculum_session_id in CONTENT_VERSION_9_HOME_SESSION_IDS else 8
+    )
     assert sample["prompt"] == expected["prompt"]
     assert sample["correct"] == expected["correct"]
     assert sample["correct"] in sample["answers"]
@@ -197,6 +205,46 @@ def test_park_preparation_home_content_matches_the_fifth_frontend_drill(
     assert task.base_visual.type == "home_teaching"
     assert task.base_visual.data["problem"] == task.visible_facts["sample_problem"]
     assert task.base_visual.data["problem"]["visual"]["type"] == "money-practice"
+
+
+def _without_money_separators(value: str) -> str:
+    return value.replace(",", "").replace(" ", "")
+
+
+@pytest.mark.parametrize(
+    ("curriculum_session_id", "budget"),
+    [
+        ("multiply-easy-tables", "10000원"),
+        ("divide-group", "14000원"),
+    ],
+)
+def test_budget_hidden_by_multi_item_visual_is_repeated_in_dialogue_support(
+    curriculum_session_id: str,
+    budget: str,
+) -> None:
+    """상품 카드만으로 보이지 않는 예산은 모든 질문·힌트에서 다시 말한다."""
+
+    spec = HOME_TEACHING_CATALOG[curriculum_session_id]
+    dialogue_support = [
+        spec.effective_l4_prompt,
+        spec.answer_followup_prompt or "",
+        spec.short_prompt,
+        spec.help_plan.H1.body,
+        spec.help_plan.H2.body,
+    ]
+
+    assert all(
+        budget in _without_money_separators(copy) for copy in dialogue_support
+    )
+    assert spec.effective_l4_prompt.startswith("나 ")
+    assert spec.effective_l4_prompt.endswith("알려줄 수 있어?")
+
+
+def test_mixed_budget_l4_uses_reviewed_mormi_help_request() -> None:
+    assert HOME_TEACHING_CATALOG["multiply-easy-tables"].effective_l4_prompt == (
+        "나 표랑 간식이랑 스티커를 사려는데 돈이 모자랄까봐 걱정돼... "
+        "10000원이 있는데 얼마가 모자라고 어떻게 구하는지 알려줄 수 있어?"
+    )
 
 
 @pytest.mark.parametrize("curriculum_session_id", PARK_PREPARATION_HOME_CASES)
