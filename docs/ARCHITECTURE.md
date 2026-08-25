@@ -147,13 +147,18 @@ Spring은 별노트가 관찰보다 먼저 와도 저장 후 나중에 연결하
 ```text
 FE 반복 문제 5회
   → Spring이 시도별 결과 저장
-  → POST /v1/practice-results
-       curriculum_session_id + 집계 결과
   → POST /v1/conversations
-       scene=home_teach, scenario_id=home_teach, practice_result_id
+       scene=home_teach, scenario_id=home_teach
+       learning_session_id + conversation_round
+       practice_result_id + 인라인 practice_summary
   → AI가 검수 카탈로그에서 시나리오 생성·DB 고정
   → 이후 모든 질문/응답을 conversation_id 아래 저장
 ```
+
+현재 Spring 운영 경로는 별도의 `POST /v1/practice-results` 호출 없이 대화 생성 요청에
+구조화된 `practice_summary`를 인라인으로 보낸다. 독립 저장 API는 다른 서버 연동이나
+사전 적재가 필요한 경우에만 선택적으로 사용한다. 동일 학습 세션의 네트워크 재시도는
+같은 `conversation_round`를 사용하고, 명시적 재시작은 회차를 증가시켜 새 대화를 만든다.
 
 AI DB에는 생성된 시나리오 스냅샷, 턴 계약, 구조화 판정, 별노트가 항상 저장된다.
 현재 파일럿은 사전 동의를 전제로 하므로 아이의 원문 발화와 선택 응답을 평문으로

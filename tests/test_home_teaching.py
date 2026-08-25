@@ -1899,6 +1899,7 @@ async def test_inline_home_practice_starts_full_turn_and_retries_keep_first_snap
         scene="home_teach",
         scenario_id="home_teach",
         learning_session_id="session_inline_home_7",
+        conversation_round=1,
         practice_result_id="practice_inline_home_7",
         practice_summary={
             "curriculum_session_id": "number-count",
@@ -1917,6 +1918,30 @@ async def test_inline_home_practice_starts_full_turn_and_retries_keep_first_snap
     assert stored is not None
     assert stored.curriculum_session_id == "money-count"
     assert stored.skill_id == "money_count"
+
+    restarted = await service.create_conversation(
+        SessionCreate(
+            learner_id=7,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_inline_home_7",
+            conversation_round=2,
+            practice_result_id="practice_inline_home_7",
+            practice_summary={
+                "curriculum_session_id": "number-count",
+                "skill_id": "number_count",
+                "question_count": 5,
+                "first_try_correct_count": 5,
+            },
+        )
+    )
+    restarted_state = await repository.get_state(restarted.conversation_id)
+
+    assert restarted.conversation_id != started.conversation_id
+    assert restarted_state.conversation_round == 2
+    # A restart opens fresh dialogue state but keeps the first persisted drill
+    # snapshot canonical for the deterministic practice_result_id.
+    assert restarted_state.scenario_data["curriculum_session_id"] == "money-count"
     await database.dispose()
 
 

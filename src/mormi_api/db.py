@@ -48,10 +48,19 @@ class DataMigrationRecord(Base):
 
 class ConversationRecord(Base):
     __tablename__ = "conversations"
+    __table_args__ = (
+        UniqueConstraint(
+            "learner_id",
+            "learning_session_id",
+            "conversation_round",
+            name="uq_conversation_learning_session_round",
+        ),
+    )
 
     conversation_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     learner_id: Mapped[int] = mapped_column(Integer, index=True)
     learning_session_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    conversation_round: Mapped[int] = mapped_column(Integer, default=1)
     scene: Mapped[str] = mapped_column(String(40))
     scenario_id: Mapped[str] = mapped_column(String(100))
     state_json: Mapped[dict[str, Any]] = mapped_column(JSON)

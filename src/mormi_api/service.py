@@ -60,6 +60,7 @@ class ConversationService:
             existing_id = await self.repository.conversation_id_for_learning_session(
                 request.learner_id,
                 request.learning_session_id,
+                request.conversation_round,
             )
             if existing_id:
                 return await self.snapshot(existing_id)
@@ -131,6 +132,7 @@ class ConversationService:
         state = SessionState(
             learner_id=request.learner_id,
             learning_session_id=request.learning_session_id,
+            conversation_round=request.conversation_round,
             scene=request.scene,
             scenario_id=request.scenario_id,
             task_ids=scenario.task_ids,

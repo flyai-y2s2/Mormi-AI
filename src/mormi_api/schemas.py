@@ -448,6 +448,9 @@ class SessionCreate(BaseModel):
     scene: SceneType
     scenario_id: str = Field(min_length=1, max_length=100)
     learning_session_id: str | None = Field(default=None, max_length=100)
+    # A learning session may intentionally open more than one teaching dialogue.
+    # Retries reuse the same round; an explicit restart increments it.
+    conversation_round: int = Field(default=1, ge=1)
     practice_result_id: str | None = Field(default=None, max_length=100)
     practice_summary: PracticeSummary | None = None
     cafe_context: CafeSessionContext | None = None
@@ -789,6 +792,7 @@ class SessionState(BaseModel):
     conversation_id: str = Field(default_factory=lambda: new_id("conversation"))
     learner_id: int
     learning_session_id: str | None = None
+    conversation_round: int = Field(default=1, ge=1)
     scene: SceneType
     scenario_id: str
     task_ids: list[str]

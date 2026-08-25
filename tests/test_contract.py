@@ -110,6 +110,19 @@ def test_frontend_inline_practice_snapshot_does_not_repeat_ids() -> None:
     )
     assert stored.practice_result_id == "practice_123"
     assert stored.learner_id == 1
+    assert request.conversation_round == 1
+
+
+def test_conversation_round_must_be_positive() -> None:
+    with pytest.raises(ValidationError, match="greater than or equal to 1"):
+        SessionCreate(
+            learner_id=1,
+            scene="home_teach",
+            scenario_id="home_teach",
+            learning_session_id="session_123",
+            conversation_round=0,
+            practice_result_id="practice_123",
+        )
 
 
 @pytest.mark.parametrize(

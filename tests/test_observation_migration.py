@@ -70,24 +70,48 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
     database_path = tmp_path / "legacy.db"
     database_url = f"sqlite:///{database_path}"
     engine = create_engine(database_url)
-    ConversationRecord.__table__.create(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE conversations (
+                conversation_id VARCHAR(100) PRIMARY KEY,
+                learner_id INTEGER NOT NULL,
+                learning_session_id VARCHAR(100),
+                scene VARCHAR(40) NOT NULL,
+                scenario_id VARCHAR(100) NOT NULL,
+                state_json JSON NOT NULL,
+                state_version INTEGER NOT NULL,
+                status VARCHAR(40) NOT NULL,
+                raw_retention_until DATETIME,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
     TurnRecord.__table__.create(engine)
     now = utc_now()
     with engine.begin() as connection:
-        connection.execute(
-            ConversationRecord.__table__.insert().values(
-                conversation_id="conversation_legacy",
-                learner_id=7,
-                learning_session_id="lesson_legacy",
-                scene="home_teach",
-                scenario_id="home_teach",
-                state_json={},
-                state_version=1,
-                status="active",
-                raw_retention_until=None,
-                created_at=now,
-                updated_at=now,
-            )
+        connection.exec_driver_sql(
+            """
+            INSERT INTO conversations (
+                conversation_id, learner_id, learning_session_id, scene,
+                scenario_id, state_json, state_version, status,
+                raw_retention_until, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "conversation_legacy",
+                7,
+                "lesson_legacy",
+                "home_teach",
+                "home_teach",
+                "{}",
+                1,
+                "active",
+                None,
+                now,
+                now,
+            ),
         )
         connection.execute(
             TurnRecord.__table__.insert().values(
@@ -111,6 +135,9 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
             select(ConversationRecord.conversation_id)
         ).scalar_one() == "conversation_legacy"
         assert connection.execute(
+            select(ConversationRecord.conversation_round)
+        ).scalar_one() == 1
+        assert connection.execute(
             select(TurnRecord.turn_id)
         ).scalar_one() == "turn_legacy"
         tables = set(inspect(connection).get_table_names())
@@ -126,6 +153,11 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
             )
         }
         assert "adult_intervention_status" not in observation_columns
+        conversation_unique_constraints = {
+            constraint["name"]
+            for constraint in inspect(connection).get_unique_constraints("conversations")
+        }
+        assert "uq_conversation_learning_session_round" in conversation_unique_constraints
 
     command.downgrade(config, "base")
     with engine.connect() as connection:
@@ -154,7 +186,7 @@ def test_migration_stamps_complete_schema_created_by_app_startup(
         version = connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar_one()
-        assert version == "20260823_02"
+        assert version == "20260825_03"
     engine.dispose()
 
 

@@ -121,7 +121,7 @@ def synchronous_url(raw_url: str) -> str:
 
 
 def apply_database_migrations(raw_url: str, root: Path) -> None:
-    """Apply or safely reconcile the v1 additive observation schema."""
+    """Apply or safely reconcile additive application migrations."""
 
     config = Config(root / "alembic.ini")
     sync_url = synchronous_url(raw_url)
@@ -143,11 +143,12 @@ def apply_database_migrations(raw_url: str, root: Path) -> None:
         elif OBSERVATION_TABLES.issubset(existing):
             # Older deployments call Base.metadata.create_all() during app
             # startup. If that happened before this operational command, the
-            # complete v1 schema already exists but Alembic has no version
-            # row. Record the matching head instead of trying to recreate the
-            # same tables.
+            # complete observation schema already exists but Alembic has no
+            # version row. Record the last table-only revision, then run later
+            # additive revisions such as conversation_round normally.
             require_observation_schema(engine)
-            command.stamp(config, "head")
+            command.stamp(config, "20260823_02")
+            command.upgrade(config, "head")
         else:
             partial = sorted(existing & OBSERVATION_TABLES)
             missing = sorted(OBSERVATION_TABLES - existing)
