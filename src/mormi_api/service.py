@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Literal
@@ -18,6 +20,7 @@ from .engine import (
     select_start_level,
     update_skill_profile,
 )
+from .observability import TurnScope, turn_scope
 from .repository import DuplicateResponseError, PersistenceError, Repository
 from .schemas import (
     ChildResponse,
@@ -33,6 +36,8 @@ from .schemas import (
     SessionState,
     utc_now,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -182,6 +187,20 @@ class ConversationService:
     ) -> AsyncIterator[ConversationStreamEvent]:
         """Run one canonical response path while exposing non-sensitive progress."""
 
+        # Every llm_call logged below this point carries this turn's ids.
+        token = turn_scope.set(TurnScope(conversation_id, response.turn_id))
+        try:
+            async for event in self._respond_stream_scoped(conversation_id, response):
+                yield event
+        finally:
+            turn_scope.reset(token)
+
+    async def _respond_stream_scoped(
+        self,
+        conversation_id: str,
+        response: ChildResponse,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        started = time.perf_counter()
         response_id = str(response.response_id)
         prior = await self.repository.response_exists(conversation_id, response_id)
         if prior:
@@ -266,6 +285,17 @@ class ConversationService:
             profile = update_skill_profile(profile, evidence_state, previous_task)
             await self.repository.save_profile(profile)
 
+        turn_runtime = result.runtime
+        logger.info(
+            "turn conversation_id=%s turn_id=%s duration_ms=%d speaker_source=%s "
+            "verifier_status=%s fallback_reason=%s",
+            conversation_id,
+            response.turn_id,
+            int((time.perf_counter() - started) * 1000),
+            getattr(turn_runtime, "speaker_source", None),
+            getattr(turn_runtime, "verifier_status", None),
+            getattr(turn_runtime, "fallback_reason", None),
+        )
         yield ConversationStreamEvent(
             name="turn",
             envelope=SessionEnvelope(conversation_id=conversation_id, turn=next_turn),

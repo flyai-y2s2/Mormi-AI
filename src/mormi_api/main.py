@@ -69,6 +69,16 @@ from .settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
+# Timing logs (`llm_call`, `turn`) are emitted at INFO. Without a root handler
+# Python surfaces only WARNING and above, so configure one here. The root stays
+# at WARNING to keep third-party INFO (SQLAlchemy, httpx) out of the stream.
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+logging.getLogger("mormi_api").setLevel(logging.INFO)
+
 
 async def run_startup_maintenance(
     database: Database,
