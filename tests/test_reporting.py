@@ -461,7 +461,12 @@ def test_speech_change_route_returns_grounded_before_after_analysis(
     "unsafe_text",
     [
         "최근에는 5개를 셀 수 있게 되었습니다.",
+        "최근에는 다섯 개를 셀 수 있게 되었습니다.",
         "첫 문장입니다. 둘째 문장입니다. 셋째 문장입니다.",
+        "첫 문장입니다.둘째 문장입니다.셋째 문장입니다.",
+        "최근 발화는 “수 세기”입니다.",
+        "   ",
+        "The response became more specific.",
     ],
 )
 def test_speech_change_route_rejects_ungrounded_or_overlong_analysis(

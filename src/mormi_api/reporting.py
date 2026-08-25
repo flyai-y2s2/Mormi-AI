@@ -30,6 +30,29 @@ _REPORT_UNITS = r"%|퍼센트|원|개|명|회|점|분|시간|시|cm|mm|m|g|kg|�
 _REPORT_NUMBER_TOKEN = re.compile(
     rf"(?P<number>\d[\d,]*)(?P<magnitude>(?:\s*[십백천만억])*)\s*(?P<unit>{_REPORT_UNITS})?"
 )
+_REPORT_KOREAN_NUMBERS = {
+    "한": 1,
+    "하나": 1,
+    "두": 2,
+    "둘": 2,
+    "세": 3,
+    "셋": 3,
+    "네": 4,
+    "넷": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+    "열": 10,
+    "스무": 20,
+    "스물": 20,
+}
+_REPORT_KOREAN_COUNT_UNITS = r"원|개|명|회|점|분|시간|시|칸|묶음|장|단계|문장|문제|가지|번"
+_REPORT_KOREAN_NUMBER_TOKEN = re.compile(
+    rf"(?<![가-힣])(?P<number>{'|'.join(sorted(_REPORT_KOREAN_NUMBERS, key=len, reverse=True))})"
+    rf"\s*(?P<unit>{_REPORT_KOREAN_COUNT_UNITS})"
+)
 _REPORT_QUOTE_PAIRS = {
     "‘": "’",
     "“": "”",
@@ -109,6 +132,8 @@ def numeric_tokens(text: str) -> set[str]:
         if unit == "퍼센트":
             unit = "%"
         tokens.add(f"{number}{unit}")
+    for match in _REPORT_KOREAN_NUMBER_TOKEN.finditer(text):
+        tokens.add(f"{_REPORT_KOREAN_NUMBERS[match.group('number')]}{match.group('unit')}")
     return tokens
 
 
@@ -184,19 +209,7 @@ def validate_speech_change_summary(
     value = SpeechChangeSummaryResponse.model_validate(response)
     past = request.past.utterance.strip()
     recent = request.recent.utterance.strip()
-    grounded = " ".join(
-        item
-        for item in (
-            request.domain_label,
-            past,
-            recent,
-            request.past.expression_level,
-            request.past.hint_level,
-            request.recent.expression_level,
-            request.recent.hint_level,
-        )
-        if item
-    )
+    grounded = f"{past} {recent}"
     spans = [span.strip() for span in value.evidence_spans]
     if any(not span or (span not in past and span not in recent) for span in spans):
         raise ValueError("ungrounded speech evidence span")
@@ -209,11 +222,13 @@ def validate_speech_change_summary(
     reject_forbidden_report_language(value.text)
     sentences = [
         sentence.strip()
-        for sentence in re.split(r"(?<=[.!?。！？])\s+", value.text.strip())
+        for sentence in re.split(r"(?<!\d)[.!?。！？]+(?!\d)", value.text.strip())
         if sentence.strip()
     ]
-    if len(sentences) > 2:
-        raise ValueError("speech change must use at most two sentences")
+    if not 1 <= len(sentences) <= 2 or any(
+        re.search(r"[가-힣]", sentence) is None for sentence in sentences
+    ):
+        raise ValueError("speech change must use one or two Korean sentences")
     return value
 
 
