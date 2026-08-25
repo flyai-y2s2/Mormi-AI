@@ -284,42 +284,27 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 
 ### 놀이동산 단계별 입력
 
-놀이동산의 숫자와 문구는 인증된 Spring BE가 소유합니다. FE는 `park_context`를 직접
-조합하지 않습니다. Spring은 화면에 표시할 값과 동일한 스냅샷을 대화 시작 요청에
-포함하고, AI는 그 값의 산술 정합성과 시나리오별 필수 사실 키를 검증합니다.
+놀이동산의 교육 콘텐츠는 Mormi-AI가 소유합니다. Spring BE는 방문 권한과 현재
+스테이지를 확인한 뒤 `scenario_id`만 보냅니다. AI는 검수된 범위와 산술 제약으로
+문제·정답·오개념·발화/힌트 사다리·시각자료·전이 문제를 만들고, 생성된 전체 계약을
+`scenario_data`에 저장해 같은 대화 안에서 바뀌지 않게 합니다.
 
 ```json
 {
   "learner_id": 1,
   "scene": "amusement_park",
   "scenario_id": "amusement_ticket_multiply",
-  "park_context": {
-    "theme_id": "amusement_park",
-    "stage_id": "ticket",
-    "title": "놀이동산 표 사기",
-    "mission": "함께 갈 사람들의 표 값을 구한다.",
-    "skill": "같은 값의 묶음을 곱셈으로 계산하기",
-    "strategy": "표 한 장 값에 사람 수를 곱하면 전체 표 값을 구할 수 있어.",
-    "mormi_misconception": "",
-    "prompt": "표가 여러 장 필요해... 모두 얼마인지 알려줄 수 있어?",
-    "facts": [
-      {"key": "ticket_price", "label": "표 한 장 값", "value": 3000, "unit": "원"},
-      {"key": "party_count", "label": "함께 갈 사람 수", "value": 2, "unit": "명"},
-      {"key": "total_price", "label": "전체 표 값", "value": 6000, "unit": "원"}
-    ],
-    "required_verified_fact_keys": ["ticket_price", "party_count", "total_price"],
-    "transfer": {
-      "prompt": "표 한 장이 3,500원이고 네 명이면 모두 얼마야?",
-      "equation": "3500×4=14000",
-      "conclusion": "표 네 장은 모두 14,000원이야."
-    }
-  },
   "conversation_storage_consent": true,
   "retention_policy": "permanent"
 }
 ```
 
-시나리오별 `stage_id`와 `required_verified_fact_keys`는 고정 계약입니다.
+구버전 Spring과 순차 배포할 수 있도록 `park_context` 입력은 일시적으로 스키마에 남아
+있지만 **deprecated**입니다. 구 BE가 완료값을 자기 방문과 대조할 수 있도록 검수 범위
+안의 주어진 숫자만 보존하며, 호출자가 보낸 제목·문제 문장·정답·전략·오개념·힌트·전이
+문제는 사용하지 않고 AI 카탈로그가 다시 만듭니다. 새 BE는 `park_context`를 보내지 않습니다.
+
+시나리오별 `stage_id`와 완료 증거 키는 고정 계약입니다.
 
 | `scenario_id` | `stage_id` | 완료 시 검증해야 하는 사실 키 |
 |---|---|---|
@@ -327,14 +312,17 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 | `amusement_snack_divide` | `snack_split` | `snack_total`, `payer_count`, `per_person` |
 | `amusement_pass_compare` | `pass_break_even` | `single_ride_price`, `day_pass_price`, `break_even_rides`, `benefit_from_rides` |
 
-- AI는 `facts`, `prompt`, `transfer`의 숫자와 문구를 즉흥 생성하거나 다른 값으로
-  바꾸지 않습니다.
+- AI는 무제한 자유 생성 대신 검수된 수 범위와 제약을 사용합니다. 곱셈은 천 원 단가와
+  2~5명, 나눗셈은 항상 나누어떨어지는 전체값, 자유이용권은 정수 본전 횟수만 생성합니다.
+- 첫 질문은 항상 모르미의 도움 요청 말투이며, 교사식 `설명해 주세요` 문구를 외부에서
+  주입할 수 없습니다.
 - 기본 문제 뒤에는 반드시 같은 기능을 새로운 수에 적용하는 `transfer` 턴이 이어집니다.
-- 곱셈·나눗셈·손익분기 관계가 맞지 않거나 필수 키가 빠지면 시작 요청을 `422`로
-  거부합니다.
-- 완료 응답의 `completion.verified_facts`는 위 필수 키와 정확히 일치해야 합니다.
-  Spring이 예상한 사실과 다르면 Spring은 `503 dialogue_completion_fact_mismatch`로
-  완료 반영을 중단합니다.
+- 기본 화면의 `visual.data.facts`에는 주어진 값만 있고 정답·오개념·내부 전략은 없습니다.
+- 완료 응답의 주어진 값은 AI 문제 스냅샷에서, 구한 값은 아이 응답을 결정적으로 검증한
+  기본 과제 슬롯에서 만듭니다. 전이 과제로 넘어갈 때도 기본 과제 증거는 보존됩니다.
+- `completion.stage_completion_eligible=true`이면 Spring은 스테이지를 완료합니다.
+  L0/H3 공동 수행도 성공 경험과 다음 단계 해금은 보장하지만,
+  `teach_reward_eligible=false`라서 아이 주도 가르치기 보상과는 구분됩니다.
 - 별노트는 기본 문제에서 아이가 실제로 알려 준 근거 또는 L0 공동 수행 결과로 한 번만
   생성합니다. 전이 문제는 별도의 별노트를 만들지 않습니다.
 
@@ -633,6 +621,7 @@ type TurnContract = {
     completion: null | {
       outcome: "taught" | "supported" | "bright_exit";
       teach_reward_eligible: boolean;
+      stage_completion_eligible: boolean;
       verified_facts: Record<string, string | number | boolean>;
     };
     pedagogy?: unknown;
@@ -655,7 +644,8 @@ type TurnContract = {
 - `note_update`가 있을 때만 별노트를 추가합니다.
 - 정오, 오개념, L/H 전환, 별노트 귀속을 프론트가 다시 계산하지 않습니다.
 - `status=completed`이면 입력을 보내지 않고 완료 연출로 이동합니다.
-- 보상 여부는 `completion.teach_reward_eligible`만 사용합니다.
+- 가르치기 보상은 `completion.teach_reward_eligible`, 생활 스테이지 진행은
+  `completion.stage_completion_eligible`만 사용합니다.
 - `completion.verified_facts`에는 LLM 요약이 아니라 오케스트레이터가 정답
   슬롯으로 검증한 값만 들어갑니다. Spring BE는 이 값으로 카페 단계 완료를
   동기화할 수 있으며, 아이 원문은 포함되지 않습니다.
@@ -670,6 +660,7 @@ type TurnContract = {
   "completion": {
     "outcome": "supported",
     "teach_reward_eligible": true,
+    "stage_completion_eligible": true,
     "verified_facts": {
       "operation": "subtraction",
       "result": 5500
@@ -681,8 +672,12 @@ type TurnContract = {
 | `outcome` | 의미 | 가르치기 보상 |
 |---|---|---|
 | `taught` | 아이가 독립적인 문장 설명으로 완료 | 가능 |
-| `supported` | 선택·조작·도움 카드 지원을 받아 완료 | 가능 |
+| `supported` | 선택·조작·도움 카드 지원을 받아 완료 | H1/H2 기여는 가능, H3/L0 공동 수행은 불가 |
 | `bright_exit` | 안전하게 종료했지만 가르치기 완료는 아님 | 불가 |
+
+`stage_completion_eligible`은 `taught`와 `supported`에서 참입니다. 따라서 H3/L0 공동
+수행도 생활 스테이지는 성공으로 마치지만, `teach_reward_eligible=false`로 독립/지원
+기여와 구분합니다.
 
 실제 보상 지급과 중복 방지는 일반 학습 백엔드가 담당합니다. AI 대화 백엔드는
 지갑을 직접 변경하지 않습니다.

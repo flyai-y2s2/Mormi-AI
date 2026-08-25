@@ -20,7 +20,9 @@ from .schemas import (
     HintLevel,
     InputContract,
     InputKind,
+    ParkFact,
     ParkSessionContext,
+    ParkTransfer,
     QueueSessionContext,
     SceneType,
     SlotClaim,
@@ -2735,7 +2737,260 @@ def representative_park_context(scenario_id: str) -> ParkSessionContext:
         payload = payloads[scenario_id]
     except KeyError as error:
         raise ValueError(f"unsupported amusement scenario: {scenario_id}") from error
-    return ParkSessionContext(theme_id="amusement_park", **payload)
+    return ParkSessionContext(
+        theme_id="amusement_park",
+        variant_id=f"{PARK_SCENARIO_STAGE_LABELS[scenario_id]}_representative",
+        **payload,
+    )
+
+
+PARK_SCENARIO_STAGE_LABELS: dict[str, str] = {
+    "amusement_ticket_multiply": "ticket",
+    "amusement_snack_divide": "snack",
+    "amusement_pass_compare": "pass",
+}
+
+
+def _pick_different_pair(
+    chooser: Any,
+    first_values: Sequence[int],
+    second_values: Sequence[int],
+    primary: tuple[int, int],
+) -> tuple[int, int]:
+    """Pick a reviewed transfer pair that is visibly different from the primary pair."""
+
+    candidates = [
+        (first, second)
+        for first in first_values
+        for second in second_values
+        if (first, second) != primary
+    ]
+    return cast(tuple[int, int], chooser.choice(candidates))
+
+
+def _compatible_legacy_park_givens(
+    scenario_id: str,
+    context: ParkSessionContext | None,
+) -> dict[str, int]:
+    """Keep only reviewed givens from an older BE during a rolling deploy.
+
+    Child-facing copy, derived answers, strategies and transfers from the
+    caller are never reused. Invalid or out-of-catalog values fall back to a
+    fresh AI-owned variant instead of widening the reviewed problem space.
+    """
+
+    if context is None:
+        return {}
+    expected_stage = {
+        "amusement_ticket_multiply": "ticket",
+        "amusement_snack_divide": "snack_split",
+        "amusement_pass_compare": "pass_break_even",
+    }.get(scenario_id)
+    if context.stage_id != expected_stage:
+        return {}
+    values = {fact.key: fact.value for fact in context.facts}
+    if scenario_id == "amusement_ticket_multiply":
+        price = values.get("ticket_price")
+        count = values.get("party_count")
+        if price in {2_000, 3_000, 4_000, 5_000} and count in {2, 3, 4, 5}:
+            return {"ticket_price": price, "party_count": count}
+    elif scenario_id == "amusement_snack_divide":
+        total = values.get("snack_total")
+        count = values.get("payer_count")
+        if (
+            isinstance(total, int)
+            and count in {2, 3, 4, 5}
+            and total % count == 0
+            and total // count in {1_000, 2_000, 3_000}
+        ):
+            return {"snack_total": total, "payer_count": count}
+    elif scenario_id == "amusement_pass_compare":
+        single = values.get("single_ride_price")
+        day_pass = values.get("day_pass_price")
+        if (
+            single in {1_000, 2_000, 3_000}
+            and isinstance(day_pass, int)
+            and day_pass % single == 0
+            and day_pass // single in {3, 4, 5, 6}
+        ):
+            return {"single_ride_price": single, "day_pass_price": day_pass}
+    return {}
+
+
+def generate_park_context(
+    scenario_id: str,
+    rng: Any | None = None,
+    *,
+    compatibility_context: ParkSessionContext | None = None,
+) -> ParkSessionContext:
+    """Generate one reviewed, solvable amusement-park problem and transfer.
+
+    The catalog owns the ranges, labels, pedagogy and copy. Randomness only
+    selects values inside those reviewed constraints; it never asks an LLM to
+    invent arithmetic or child-facing instructions. The resulting snapshot is
+    persisted in ``scenario_data`` and therefore cannot change mid-session.
+    """
+
+    chooser = rng or random.SystemRandom()
+    legacy_givens = _compatible_legacy_park_givens(scenario_id, compatibility_context)
+    if scenario_id == "amusement_ticket_multiply":
+        prices = (2_000, 3_000, 4_000, 5_000)
+        counts = (2, 3, 4, 5)
+        price = legacy_givens.get("ticket_price", chooser.choice(prices))
+        count = legacy_givens.get("party_count", chooser.choice(counts))
+        transfer_price, transfer_count = _pick_different_pair(
+            chooser, prices, counts, (price, count)
+        )
+        total = price * count
+        transfer_total = transfer_price * transfer_count
+        return ParkSessionContext(
+            theme_id="amusement_park",
+            variant_id=(
+                f"ticket_{price}_{count}__{transfer_price}_{transfer_count}"
+            ),
+            stage_id="ticket",
+            title="매표소 표값 계산하기",
+            mission="우리 일행 모두의 표값을 구한다.",
+            skill="같은 값 여러 번 더하기",
+            strategy="표 한 장 값에 사람 수를 곱하면 전체 표값을 구할 수 있어.",
+            mormi_misconception="여럿이 가도 표 한 장 값만 내면 된다고 생각함",
+            prompt=(
+                f"표 한 장이 {price:,}원이고 {count}명이 가려고 해. "
+                "표값이 모두 얼마인지 알려줄래?"
+            ),
+            facts=[
+                ParkFact(key="ticket_price", label="표 한 장 값", value=price, unit="원"),
+                ParkFact(key="party_count", label="함께 갈 사람", value=count, unit="명"),
+                ParkFact(key="total_price", label="전체 표값", value=total, unit="원"),
+            ],
+            required_verified_fact_keys=["ticket_price", "party_count", "total_price"],
+            transfer=ParkTransfer(
+                prompt=(
+                    f"이번에는 표 한 장이 {transfer_price:,}원이고 "
+                    f"{transfer_count}명이야. 모두 얼마인지 또 알려줄래?"
+                ),
+                equation=f"{transfer_price}×{transfer_count}={transfer_total}",
+                conclusion=(
+                    f"{transfer_price:,}원짜리 표 {transfer_count}장은 "
+                    f"모두 {transfer_total:,}원이야."
+                ),
+            ),
+        )
+
+    if scenario_id == "amusement_snack_divide":
+        per_people = (1_000, 2_000, 3_000)
+        counts = (2, 3, 4, 5)
+        legacy_total = legacy_givens.get("snack_total")
+        count = legacy_givens.get("payer_count", chooser.choice(counts))
+        per_person = (
+            legacy_total // count if legacy_total is not None else chooser.choice(per_people)
+        )
+        transfer_per_person, transfer_count = _pick_different_pair(
+            chooser, per_people, counts, (per_person, count)
+        )
+        total = per_person * count
+        transfer_total = transfer_per_person * transfer_count
+        return ParkSessionContext(
+            theme_id="amusement_park",
+            variant_id=(
+                f"snack_{total}_{count}__{transfer_total}_{transfer_count}"
+            ),
+            stage_id="snack_split",
+            title="간식가게에서 똑같이 나누기",
+            mission="간식값을 친구들과 똑같이 나누어 낸다.",
+            skill="똑같이 나누기",
+            strategy="간식 전체 값을 함께 낼 사람 수로 나누면 한 사람 값을 구할 수 있어.",
+            mormi_misconception="한 사람이 간식값을 전부 내야 한다고 생각함",
+            prompt=(
+                f"간식값이 모두 {total:,}원이고 {count}명이 똑같이 내려고 해. "
+                "한 명은 얼마씩 내면 되는지 알려줄래?"
+            ),
+            facts=[
+                ParkFact(key="snack_total", label="간식 전체 값", value=total, unit="원"),
+                ParkFact(key="payer_count", label="함께 낼 사람", value=count, unit="명"),
+                ParkFact(key="per_person", label="한 사람의 값", value=per_person, unit="원"),
+            ],
+            required_verified_fact_keys=["snack_total", "payer_count", "per_person"],
+            transfer=ParkTransfer(
+                prompt=(
+                    f"이번에는 {transfer_total:,}원을 {transfer_count}명이 "
+                    "똑같이 내려고 해. 한 명은 얼마씩 내면 될까?"
+                ),
+                equation=f"{transfer_total}÷{transfer_count}={transfer_per_person}",
+                conclusion=(
+                    f"{transfer_total:,}원을 {transfer_count}명이 나누면 "
+                    f"한 명은 {transfer_per_person:,}원씩 내면 돼."
+                ),
+            ),
+        )
+
+    if scenario_id == "amusement_pass_compare":
+        single_prices = (1_000, 2_000, 3_000)
+        break_even_counts = (3, 4, 5, 6)
+        single = legacy_givens.get("single_ride_price", chooser.choice(single_prices))
+        legacy_pass = legacy_givens.get("day_pass_price")
+        break_even = (
+            legacy_pass // single
+            if legacy_pass is not None
+            else chooser.choice(break_even_counts)
+        )
+        transfer_single, transfer_break_even = _pick_different_pair(
+            chooser, single_prices, break_even_counts, (single, break_even)
+        )
+        day_pass = single * break_even
+        transfer_pass = transfer_single * transfer_break_even
+        return ParkSessionContext(
+            theme_id="amusement_park",
+            variant_id=(
+                f"pass_{single}_{break_even}__{transfer_single}_{transfer_break_even}"
+            ),
+            stage_id="pass_break_even",
+            title="자유이용권이 이득인지 비교하기",
+            mission="몇 번부터 자유이용권이 더 나은지 알아본다.",
+            skill="값을 나누고 비교하기",
+            strategy="자유이용권 값을 한 번 타는 값으로 나눈 뒤 한 번 더 탈 때부터 비교해.",
+            mormi_misconception="자유이용권은 낱장보다 비싸 보여서 언제나 손해라고 생각함",
+            prompt=(
+                f"놀이기구는 한 번에 {single:,}원이고 자유이용권은 {day_pass:,}원이야. "
+                "몇 번부터 자유이용권이 더 나은지 알려줄래?"
+            ),
+            facts=[
+                ParkFact(
+                    key="single_ride_price", label="한 번 타는 값", value=single, unit="원"
+                ),
+                ParkFact(
+                    key="day_pass_price", label="자유이용권 값", value=day_pass, unit="원"
+                ),
+                ParkFact(
+                    key="break_even_rides", label="값이 같아지는 횟수", value=break_even, unit="번"
+                ),
+                ParkFact(
+                    key="benefit_from_rides",
+                    label="자유이용권이 나은 시작 횟수",
+                    value=break_even + 1,
+                    unit="번",
+                ),
+            ],
+            required_verified_fact_keys=[
+                "single_ride_price",
+                "day_pass_price",
+                "break_even_rides",
+                "benefit_from_rides",
+            ],
+            transfer=ParkTransfer(
+                prompt=(
+                    f"이번에는 한 번에 {transfer_single:,}원이고 자유이용권은 "
+                    f"{transfer_pass:,}원이야. 몇 번부터 더 나을까?"
+                ),
+                equation=f"{transfer_pass}÷{transfer_single}={transfer_break_even}",
+                conclusion=(
+                    f"{transfer_break_even}번이면 값이 같고 "
+                    f"{transfer_break_even + 1}번부터 자유이용권이 더 나아."
+                ),
+            ),
+        )
+
+    raise ValueError(f"unsupported amusement scenario: {scenario_id}")
 
 
 def _park_context_from_data(data: Mapping[str, Any]) -> ParkSessionContext:
@@ -2803,15 +3058,6 @@ def _park_strategy_choices(
 def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
     values = _park_fact_values(context)
     labels = _park_fact_labels(context)
-    visual_facts = [fact.model_dump(mode="json") for fact in context.facts]
-    common_visual = {
-        "theme_id": context.theme_id,
-        "stage_id": context.stage_id,
-        "title": context.title,
-        "mission": context.mission,
-        "facts": visual_facts,
-        "hide_required_results": True,
-    }
 
     if context.stage_id == "ticket":
         left_key, right_key, answer_key = (
@@ -2885,6 +3131,27 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
         misconception_tags = ["break_even_confusion", "comparison_error"]
     else:  # ParkSessionContext already constrains stage IDs at the API boundary.
         raise ValueError(f"unsupported amusement stage: {context.stage_id}")
+
+    result_fact_keys = {answer_key}
+    if context.stage_id == "pass_break_even":
+        result_fact_keys.add("benefit_from_rides")
+    given_visual_facts = [
+        fact.model_dump(mode="json")
+        for fact in context.facts
+        if fact.key not in result_fact_keys
+    ]
+    solution_visual_facts = [fact.model_dump(mode="json") for fact in context.facts]
+    common_visual = {
+        "theme_id": context.theme_id,
+        "stage_id": context.stage_id,
+        "variant_id": context.variant_id,
+        "title": context.title,
+        "mission": context.mission,
+        # The primary visual contains only givens. Results appear only in the
+        # explicitly revealed H3 joint model.
+        "facts": given_visual_facts,
+        "hide_required_results": True,
+    }
 
     answer_choices, answer_effects = _park_number_choices(
         values[answer_key],
@@ -3017,8 +3284,6 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
         visible_facts={
             left_key: values[left_key],
             right_key: values[right_key],
-            "skill": context.skill,
-            "mormi_misconception": context.mormi_misconception,
         },
         arithmetic_contract=ArithmeticValidationContract(
             operation=operation,
@@ -3089,7 +3354,12 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
                 fact_refs=[left_key, right_key, *required_slots],
                 action="완성된 풀이를 함께 확인하기",
                 visual_type="amusement_joint_solution",
-                visual_data={**common_visual, "result_hidden": False},
+                visual_data={
+                    **common_visual,
+                    "facts": solution_visual_facts,
+                    "hide_required_results": False,
+                    "result_hidden": False,
+                },
             ),
         },
         base_visual=VisualContract(type="amusement_park", data=common_visual),
@@ -3469,13 +3739,16 @@ def create_scenario_data(
             raise ValueError("cafe_context is required for menu scenarios")
         data.update(cafe_context.model_dump(mode="json", exclude_none=True))
     if scenario_id in PARK_SCENARIO_IDS:
-        if park_context is None:
-            raise ValueError("park_context is required for amusement scenarios")
-        if context_for_scenario(park_context) != scenario_id:
-            raise ValueError("park_context.stage_id does not match scenario_id")
-        # Freeze the complete BE-reviewed contract for all turns and retries.
-        # AI must never regenerate stage numbers or instructional copy.
-        data["park_context"] = park_context.model_dump(mode="json")
+        # During a rolling deploy, the old BE still validates completion
+        # against the givens it sent. Reuse only reviewed givens so that old
+        # visits keep working; all copy, derived answers, hints and transfers
+        # are rebuilt by the AI catalog. The new BE sends no park_context.
+        generated_context = generate_park_context(
+            scenario_id,
+            chooser,
+            compatibility_context=park_context,
+        )
+        data["park_context"] = generated_context.model_dump(mode="json")
     if scenario_id == "home_teach":
         if not curriculum_session_id:
             raise ValueError("curriculum_session_id is required for home_teach")

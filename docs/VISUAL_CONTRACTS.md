@@ -9,9 +9,9 @@
 
 ## 놀이동산 시각 계약
 
-놀이동산 시각자료는 Spring BE가 대화 시작 시 보낸 `park_context`의 숫자와 문구만
-사용합니다. `facts`는 `{key,label,value,unit}` 배열이며 FE는 필수 결과 키를 추측하지
-않고 전달받은 값만 표시합니다.
+놀이동산 시각자료는 AI의 검수된 시나리오 스냅샷에서 만듭니다. `facts`는
+`{key,label,value,unit}` 배열이며, 기본 `amusement_park` 시각에는 주어진 값만 들어갑니다.
+FE는 BE 방문 응답에 문제 수를 기대하지 않고 현재 `TurnContract.visual`만 표시합니다.
 
 ### `amusement_park`와 `amusement_joint_solution`
 
@@ -21,8 +21,9 @@
   "data": {
     "theme_id": "amusement_park",
     "stage_id": "ticket",
-    "title": "놀이동산 표 사기",
-    "mission": "함께 갈 사람들의 표 값을 구한다.",
+    "variant_id": "ticket_3000_2__4000_3",
+    "title": "매표소 표값 계산하기",
+    "mission": "우리 일행 모두의 표값을 구한다.",
     "facts": [
       {"key": "ticket_price", "label": "표 한 장 값", "value": 3000, "unit": "원"}
     ],
@@ -31,7 +32,7 @@
 }
 ```
 
-- `amusement_park`: 기본 문제에서 필수 결과를 숨깁니다.
+- `amusement_park`: 기본 문제는 결과 사실 자체를 포함하지 않습니다.
 - `amusement_joint_solution`: H3/L0 공동 수행에서 같은 장면을 유지하고
   `result_hidden=false`로 완성된 결과를 보여 줍니다.
 
@@ -48,7 +49,7 @@ H2에서 `×` 또는 `÷` 식의 결과 칸을 숨겨 표시합니다.
 
 ### `amusement_park_transfer`와 `amusement_transfer_solution`
 
-`amusement_park_transfer`는 BE가 준 새 숫자의 문제를 표시합니다. 필드는
+`amusement_park_transfer`는 AI 스냅샷의 새 숫자 문제를 표시합니다. 필드는
 `theme_id`, `stage_id`, `prompt`, `left`, `right`, `operation`, `result_hidden`입니다.
 H3 공동 수행에서는 `amusement_transfer_solution`의 검수된 `equation`과
 `conclusion`을 그대로 보여 줍니다.

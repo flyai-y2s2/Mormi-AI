@@ -154,11 +154,12 @@ pip install -r requirements.txt
 바뀌지 않습니다.
 
 놀이동산은 `amusement_ticket_multiply`, `amusement_snack_divide`,
-`amusement_pass_compare`의 3개 독립 시나리오를 지원합니다. 인증된 Spring BE가
-화면에 표시한 제목·미션·숫자·전이 문제를 `park_context`로 전달하며, AI는 이 스냅샷의
-산술 정합성과 필수 완료 사실을 검증한 뒤 같은 값만 사용합니다. 각 시나리오는 기본
-문제를 완료한 뒤 BE가 준 새로운 수의 전이 문제까지 진행하고, 완료 응답에는
-`required_verified_fact_keys`에 지정된 사실만 반환합니다.
+`amusement_pass_compare`의 3개 독립 시나리오를 지원합니다. Spring BE는 방문 권한과
+`scenario_id`만 전달하고, AI의 검수된 카탈로그가 제목·미션·문제 수·정답·오개념·힌트와
+전이 문제를 함께 생성해 한 대화에 고정합니다. 기본 문제를 완료한 뒤 같은 기능을 새
+숫자에 적용하며, 완료 응답에는 결정적 엔진이 실제로 검증한 기본 문제 사실만 반환합니다.
+구버전 순차 배포를 위해 요청의 `park_context`는 당분간 허용합니다. 이때 검수 범위 안의
+주어진 숫자만 기존 화면과 맞추고, 문구·정답·전략·힌트·전이 문제는 모두 AI가 다시 만듭니다.
 
 집 가르치기는 `scenario_id=home_teach`로 시작합니다. AI가 반복 결과의
 `curriculum_session_id`를 검수된 카탈로그에서 찾아 발화사다리 질문, 도움 카드,
