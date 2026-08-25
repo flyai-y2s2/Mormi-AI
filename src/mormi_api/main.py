@@ -37,7 +37,7 @@ from .ladder_model.runtime import LadderModelRuntime
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
 from .migrations import require_observation_schema
 from .outbox import OutboxDispatcher, OutboxStore
-from .reporting import validate_report_summary
+from .reporting import validate_report_summary, validate_speech_change_summary
 from .repository import (
     ConversationNotFoundError,
     PersistenceError,
@@ -59,6 +59,8 @@ from .schemas import (
     SessionCreate,
     SessionEnvelope,
     SkillProfilesResponse,
+    SpeechChangeSummaryRequest,
+    SpeechChangeSummaryResponse,
     StarNotesResponse,
 )
 from .security import StoredTextCodec
@@ -66,6 +68,16 @@ from .service import ConversationService
 from .settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+# Timing logs (`llm_call`, `turn`) are emitted at INFO. Without a root handler
+# Python surfaces only WARNING and above, so configure one here. The root stays
+# at WARNING to keep third-party INFO (SQLAlchemy, httpx) out of the stream.
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+logging.getLogger("mormi_api").setLevel(logging.INFO)
 
 
 async def run_startup_maintenance(
@@ -775,6 +787,36 @@ async def create_report_summary(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"code": "report_summary_ungrounded", "issues": []},
+        ) from error
+    except (ModelUnavailableError, ModelOutputError) as error:
+        code = _model_error_code(error)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": code, "issues": []},
+            headers=_diagnostic_headers(code),
+        ) from error
+
+
+@app.post(
+    "/v1/internal/speech-change-summaries",
+    response_model=SpeechChangeSummaryResponse,
+    tags=["internal reporting"],
+)
+async def create_speech_change_summary(
+    body: SpeechChangeSummaryRequest,
+    _: InternalReportingAuth,
+    request: Request,
+) -> SpeechChangeSummaryResponse:
+    gateway: ClaudeGateway = request.app.state.gateway
+    try:
+        return validate_speech_change_summary(
+            body,
+            await gateway.summarize_speech_change(body),
+        )
+    except (ValueError, ValidationError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "speech_change_ungrounded", "issues": []},
         ) from error
     except (ModelUnavailableError, ModelOutputError) as error:
         code = _model_error_code(error)

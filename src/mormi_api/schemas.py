@@ -1226,6 +1226,23 @@ class ReportSummaryResponse(BaseModel):
         ]
 
 
+class SpeechChangeSample(BaseModel):
+    utterance: str = Field(min_length=1, max_length=500)
+    expression_level: str | None = Field(default=None, pattern=r"^L[0-4]$")
+    hint_level: str | None = Field(default=None, pattern=r"^H[0-4]$")
+
+
+class SpeechChangeSummaryRequest(BaseModel):
+    domain_label: str = Field(min_length=1, max_length=40)
+    past: SpeechChangeSample
+    recent: SpeechChangeSample
+
+
+class SpeechChangeSummaryResponse(BaseModel):
+    text: str = Field(min_length=1, max_length=220)
+    evidence_spans: list[str] = Field(min_length=2, max_length=6)
+
+
 class ConflictDetail(BaseModel):
     code: Literal["stale_turn"] = "stale_turn"
     message: str

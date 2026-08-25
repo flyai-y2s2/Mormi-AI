@@ -16,6 +16,8 @@ from .schemas import (
     RetentionPolicy,
     SceneType,
     SessionState,
+    SpeechChangeSummaryRequest,
+    SpeechChangeSummaryResponse,
     utc_now,
 )
 
@@ -28,6 +30,61 @@ _REPORT_UNITS = r"%|퍼센트|원|개|명|회|점|분|시간|시|cm|mm|m|g|kg|�
 _REPORT_NUMBER_TOKEN = re.compile(
     rf"(?P<number>\d[\d,]*)(?P<magnitude>(?:\s*[십백천만억])*)\s*(?P<unit>{_REPORT_UNITS})?"
 )
+_REPORT_NATIVE_ONES = {
+    "한": 1,
+    "하나": 1,
+    "두": 2,
+    "둘": 2,
+    "세": 3,
+    "셋": 3,
+    "네": 4,
+    "넷": 4,
+    "다섯": 5,
+    "여섯": 6,
+    "일곱": 7,
+    "여덟": 8,
+    "아홉": 9,
+}
+_REPORT_NATIVE_TENS = {
+    "열": 10,
+    "스물": 20,
+    "서른": 30,
+    "마흔": 40,
+    "쉰": 50,
+    "예순": 60,
+    "일흔": 70,
+    "여든": 80,
+    "아흔": 90,
+}
+_REPORT_KOREAN_NUMBERS = dict(_REPORT_NATIVE_ONES)
+_REPORT_KOREAN_NUMBERS.update(_REPORT_NATIVE_TENS)
+_REPORT_KOREAN_NUMBERS["스무"] = 20
+for _native_tens_word, _native_tens_value in _REPORT_NATIVE_TENS.items():
+    for _native_one_word, _native_one_value in _REPORT_NATIVE_ONES.items():
+        if _native_one_word in {"하나", "둘", "셋", "넷"}:
+            continue
+        _REPORT_KOREAN_NUMBERS[f"{_native_tens_word}{_native_one_word}"] = (
+            _native_tens_value + _native_one_value
+        )
+_REPORT_KOREAN_COUNT_UNITS = r"원|개|명|회|점|분|시간|시|칸|묶음|장|문제|가지|번"
+_REPORT_KOREAN_PARTICLE = r"(?:은|는|이|가|을|를|의|만|도|씩|마다|에서|으로|와|과)?"
+_REPORT_KOREAN_NUMBER_TOKEN = re.compile(
+    rf"(?<![가-힣])(?:(?P<native>{'|'.join(sorted(_REPORT_KOREAN_NUMBERS, key=len, reverse=True))})"
+    rf"|(?P<sino>[일이삼사오육칠팔구십백천만]+))\s*"
+    rf"(?P<unit>{_REPORT_KOREAN_COUNT_UNITS})(?={_REPORT_KOREAN_PARTICLE}(?:[^가-힣]|$))"
+)
+_REPORT_SINO_DIGITS = {
+    "일": 1,
+    "이": 2,
+    "삼": 3,
+    "사": 4,
+    "오": 5,
+    "육": 6,
+    "칠": 7,
+    "팔": 8,
+    "구": 9,
+}
+_REPORT_SINO_UNITS = {"십": 10, "백": 100, "천": 1_000}
 _REPORT_QUOTE_PAIRS = {
     "‘": "’",
     "“": "”",
@@ -107,7 +164,31 @@ def numeric_tokens(text: str) -> set[str]:
         if unit == "퍼센트":
             unit = "%"
         tokens.add(f"{number}{unit}")
+    for match in _REPORT_KOREAN_NUMBER_TOKEN.finditer(text):
+        native = match.group("native")
+        sino = match.group("sino")
+        if sino == "이":
+            continue
+        number = _REPORT_KOREAN_NUMBERS[native] if native else _parse_sino_number(sino)
+        tokens.add(f"{number}{match.group('unit')}")
     return tokens
+
+
+def _parse_sino_number(word: str) -> int:
+    total = 0
+    section = 0
+    current = 0
+    for character in word:
+        if character in _REPORT_SINO_DIGITS:
+            current = _REPORT_SINO_DIGITS[character]
+        elif character in _REPORT_SINO_UNITS:
+            section += (current or 1) * _REPORT_SINO_UNITS[character]
+            current = 0
+        elif character == "만":
+            total += (section + current or 1) * 10_000
+            section = 0
+            current = 0
+    return total + section + current
 
 
 def _quoted_text(text: str) -> list[str]:
@@ -171,6 +252,38 @@ def validate_report_summary(
         if not is_exactly_grounded:
             raise ValueError("ungrounded report language")
     return response
+
+
+def validate_speech_change_summary(
+    request: SpeechChangeSummaryRequest,
+    response: SpeechChangeSummaryResponse | dict[str, object],
+) -> SpeechChangeSummaryResponse:
+    """Allow short interpretation only when its concrete evidence stays traceable."""
+
+    value = SpeechChangeSummaryResponse.model_validate(response)
+    past = request.past.utterance.strip()
+    recent = request.recent.utterance.strip()
+    grounded = f"{past} {recent}"
+    spans = [span.strip() for span in value.evidence_spans]
+    if any(not span or (span not in past and span not in recent) for span in spans):
+        raise ValueError("ungrounded speech evidence span")
+    if not any(span in past for span in spans) or not any(span in recent for span in spans):
+        raise ValueError("speech comparison requires evidence from both utterances")
+    if not numeric_tokens(value.text).issubset(numeric_tokens(grounded)):
+        raise ValueError("ungrounded speech change number")
+    if any(quote not in grounded for quote in _quoted_text(value.text)):
+        raise ValueError("ungrounded speech change quote")
+    reject_forbidden_report_language(value.text)
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<!\d)[.!?。！？]+(?!\d)", value.text.strip())
+        if sentence.strip()
+    ]
+    if not 1 <= len(sentences) <= 2 or any(
+        re.search(r"[가-힣]", sentence) is None for sentence in sentences
+    ):
+        raise ValueError("speech change must use one or two Korean sentences")
+    return value
 
 
 def _raw_response_is_available(state: SessionState, *, now: datetime) -> bool:

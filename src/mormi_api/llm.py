@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from typing import Any
 
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, transform_schema
 from pydantic import BaseModel, ValidationError
 
 from .content import SlotDefinition, TaskDefinition
-from .reporting import validate_report_summary
+from .observability import scope_fields
+from .reporting import validate_report_summary, validate_speech_change_summary
 from .schemas import (
     ChildResponse,
     DialogueHistoryTurn,
@@ -21,9 +24,13 @@ from .schemas import (
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
+    SpeechChangeSummaryRequest,
+    SpeechChangeSummaryResponse,
     UtteranceAnalysis,
 )
 from .settings import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class ModelUnavailableError(RuntimeError):
@@ -94,6 +101,10 @@ def _safe_provider_error_code(error: APIConnectionError | APIStatusError) -> str
     return "model_provider_unavailable"
 
 
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
 class ClaudeGateway:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -107,12 +118,50 @@ class ClaudeGateway:
     def configured(self) -> bool:
         return self.client is not None
 
+    async def _create_timed(self, stage: str, **kwargs: Any) -> Any:
+        """Call the model and log wall-clock time per call.
+
+        Only stage, model, duration and outcome are logged; prompt and output
+        text never reach the log stream because it may contain a child's
+        utterance.
+        """
+        if not self.client:
+            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
+        started = time.perf_counter()
+        try:
+            message = await self.client.messages.create(**kwargs)
+        except (APIConnectionError, APIStatusError) as error:
+            conversation_id, turn_id = scope_fields()
+            logger.info(
+                "llm_call conversation_id=%s turn_id=%s stage=%s model=%s "
+                "duration_ms=%d status=error error_code=%s",
+                conversation_id,
+                turn_id,
+                stage,
+                kwargs.get("model"),
+                _elapsed_ms(started),
+                _safe_provider_error_code(error),
+            )
+            raise
+        conversation_id, turn_id = scope_fields()
+        logger.info(
+            "llm_call conversation_id=%s turn_id=%s stage=%s model=%s "
+            "duration_ms=%d status=ok stop_reason=%s",
+            conversation_id,
+            turn_id,
+            stage,
+            kwargs.get("model"),
+            _elapsed_ms(started),
+            getattr(message, "stop_reason", None),
+        )
+        return message
+
     async def summarize_report(self, request: ReportSummaryRequest) -> ReportSummaryResponse:
         if not self.client:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         schema = structured_output_schema(ReportSummaryResponse)
         try:
-            message = await self.client.messages.create(
+            message = await self._create_timed("report_summary",
                 model=self.settings.speaker_model,
                 max_tokens=700,
                 temperature=0,
@@ -141,6 +190,39 @@ class ClaudeGateway:
             raise ModelOutputError("Report summary output did not match schema") from error
         return validate_report_summary(request, response)
 
+    async def summarize_speech_change(
+        self,
+        request: SpeechChangeSummaryRequest,
+    ) -> SpeechChangeSummaryResponse:
+        if not self.client:
+            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
+        schema = structured_output_schema(SpeechChangeSummaryResponse)
+        try:
+            message = await self._create_timed("speech_change_summary",
+                model=self.settings.speaker_model,
+                max_tokens=320,
+                temperature=0,
+                system=SPEECH_CHANGE_SYSTEM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": json.dumps(request.model_dump(mode="json"), ensure_ascii=False),
+                    }
+                ],
+                output_config={"format": {"type": "json_schema", "schema": schema}},
+            )
+        except (APIConnectionError, APIStatusError) as error:
+            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
+        if message.stop_reason in {"refusal", "max_tokens"}:
+            raise ModelOutputError(f"Speech change summary stopped with {message.stop_reason}")
+        try:
+            response = SpeechChangeSummaryResponse.model_validate_json(
+                _text_content(message.content)
+            )
+        except ValidationError as error:
+            raise ModelOutputError("Speech change output did not match schema") from error
+        return validate_speech_change_summary(request, response)
+
     async def classify(
         self,
         *,
@@ -166,7 +248,7 @@ class ClaudeGateway:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         schema = structured_output_schema(UtteranceAnalysis)
         try:
-            message = await self.client.messages.create(
+            message = await self._create_timed("classifier",
                 model=self.settings.classifier_model,
                 max_tokens=1300,
                 temperature=0,
@@ -195,7 +277,7 @@ class ClaudeGateway:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         schema = structured_output_schema(SpeakerOutput)
         try:
-            message = await self.client.messages.create(
+            message = await self._create_timed("speaker",
                 model=self.settings.speaker_model,
                 max_tokens=220,
                 temperature=0.35,
@@ -231,7 +313,7 @@ class ClaudeGateway:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         schema = structured_output_schema(SpeakerOutput)
         try:
-            message = await self.client.messages.create(
+            message = await self._create_timed("bridge",
                 model=self.settings.bridge_model,
                 max_tokens=220,
                 temperature=0.25,
@@ -263,7 +345,7 @@ class ClaudeGateway:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         schema = structured_output_schema(NoteContextualizationOutput)
         try:
-            message = await self.client.messages.create(
+            message = await self._create_timed("note",
                 model=self.settings.speaker_model,
                 max_tokens=280,
                 temperature=0.2,
@@ -611,6 +693,16 @@ REPORT_SUMMARY_SYSTEM = """
 각 필드는 evidence_refs 중 한 fact의 문구를 그대로 복사하거나, evidence_refs 순서대로
 fact 문구를 한 칸 공백으로 정확히 이어 붙여서만 작성한다. 바꿔쓰기, 조사 변경, 요약,
 원인·진단·치료·심리적 해석·또래·평균·등수 비교의 추가나 추론은 하지 않는다.
+""".strip()
+
+
+SPEECH_CHANGE_SYSTEM = """
+너는 교사용 주간 리포트에서 한 소단원의 과거 발화와 최근 발화를 비교한다.
+관찰 가능한 말하기 변화만 한국어 1~2문장으로 작성한다. 답만 말했는지, 수나 계산의
+순서를 표현했는지, 이유나 풀이 과정이 더 구체적으로 드러났는지를 비교할 수 있다.
+아이의 능력·심리·진단·원인을 단정하거나 또래와 비교하지 않는다. 입력에 없는 숫자나
+발화를 만들지 않는다. evidence_spans에는 판단에 사용한 과거와 최근 원문 구절을 각각
+하나 이상 글자 그대로 넣는다.
 """.strip()
 
 
