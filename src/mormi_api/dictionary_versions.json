@@ -68,8 +68,8 @@
     },
     {
       "card_id": "dictionary.home.multiply-groups",
-      "content_version": 2,
-      "content_hash": "457b14e3c65711789460a1947b21cb751a0fe98c0c8f90d6db63d364076c6f93"
+      "content_version": 3,
+      "content_hash": "a7294f289cf893b6d4642e96b878ef9c43a3e091f6be178fcd457a092bbd81ad"
     },
     {
       "card_id": "dictionary.home.multiply-addition",
@@ -83,8 +83,8 @@
     },
     {
       "card_id": "dictionary.home.multiply-easy-tables",
-      "content_version": 3,
-      "content_hash": "52c1df84b8ef8329a441fc489a35157ada77f73d46021d1b62ed82912d99ff27"
+      "content_version": 4,
+      "content_hash": "d0f6268d2e0be87b19e6f4dfbbed5be35c2db4ed0cd1f0af5e9c6cd8cdf56cf2"
     },
     {
       "card_id": "dictionary.home.multiply-tables",
@@ -93,13 +93,13 @@
     },
     {
       "card_id": "dictionary.home.divide-share",
-      "content_version": 2,
-      "content_hash": "b0b9a8e3c805d9587f970c0d2fc287eb913cda3cbcf1de6d8a15f20f3dda93c4"
+      "content_version": 3,
+      "content_hash": "1dc1a006409108f58bbdc17557a4f10e319b303f468421c4396ce07eccaa6f6b"
     },
     {
       "card_id": "dictionary.home.divide-group",
-      "content_version": 2,
-      "content_hash": "d7eed6a60d6feaf78ca6d1fa65c0b3930e99edb35043e54a89f300b6ab3abb7f"
+      "content_version": 3,
+      "content_hash": "aa66fe447a4f1408ad74c2f42f610b826b53645f156dbe3ad184221130f846bd"
     },
     {
       "card_id": "dictionary.home.pattern-repeat",

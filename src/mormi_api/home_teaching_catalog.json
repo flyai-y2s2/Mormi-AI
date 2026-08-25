@@ -1105,32 +1105,33 @@
     "id": "multiply-groups",
     "dictionary_card_id": "dictionary.home.multiply-groups",
     "help_skills": [
-      "counting",
+      "addition",
       "grouping"
     ],
     "subject": "multiplication",
-    "unit": "곱셈",
-    "title": "같은 수씩 묶어요",
-    "learned_line": "한 묶음의 수 × 묶음 수로 전체를 구해!",
-    "note_context": "2개씩 3묶음의 전체 수를 구하는 방법",
-    "fill_before": "2개씩 3묶음은",
-    "fill_after": "으로 나타내!",
-    "fill_correct": "2×3",
+    "unit": "돈 계산 곱셈",
+    "title": "가격과 개수를 곱해요",
+    "learned_line": "한 개 가격과 필요한 개수를 곱하면 전체 값을 구할 수 있어!",
+    "note_context": "4,000원짜리 장난감 4개의 전체 값을 구하는 방법",
+    "fill_before": "장난감 한 개가 4,000원이고 4개가 필요하면",
+    "fill_after": "전체 값을 구해!",
+    "fill_correct": "4,000×4를 계산해",
     "fill_options": [
-      "2×3",
-      "2+3",
-      "3-2"
+      "4,000×4를 계산해",
+      "4,000+4를 계산해",
+      "4,000원만 보고"
     ],
-    "short_prompt": "2개씩 3묶음을 식으로 어떻게 나타낼까?",
-    "short_correct": "2×3으로 나타내기",
+    "short_prompt": "장난감 한 개가 4,000원일 때 네 개 값을 어떻게 구할까?",
+    "answer_followup_prompt": "장난감 네 개는 모두 얼마야?",
+    "short_correct": "4,000×4로 구하기",
     "short_options": [
-      "2×3으로 나타내기",
-      "2+3으로 나타내기",
-      "3-2로 나타내기"
+      "4,000×4로 구하기",
+      "4,000+4로 구하기",
+      "4,000원만 내기"
     ],
     "help_plan": {
       "H1": {
-        "body": "한 묶음의 개수와 묶음 수를 확인해 보자.",
+        "body": "장난감 한 개 값과 필요한 장난감 개수를 찾아보자.",
         "support_type": "attention",
         "answer_policy": "hidden",
         "support_mode": "attention",
@@ -1139,17 +1140,17 @@
         ]
       },
       "H2": {
-        "body": "2개씩 있는 묶음 3개를 모두 세어 보자.",
+        "body": "4,000원짜리 장난감이 네 개이니 4,000×4=□를 계산해 보자.",
         "support_type": "guided_action",
         "answer_policy": "partial",
-        "support_mode": "guided_manipulation",
+        "support_mode": "guided_equation",
         "fact_refs": [
           "sample_problem"
         ],
-        "action": "2개짜리 묶음 3개 세기"
+        "action": "4,000×4 식의 빈칸 채우기"
       },
       "H3": {
-        "body": "2개씩 3묶음은 2×3이고 모두 6개야.",
+        "body": "4,000×4=16,000이라서 장난감 네 개는 모두 16,000원이야.",
         "support_type": "joint_model",
         "answer_policy": "revealed",
         "support_mode": "joint_model",
@@ -1157,32 +1158,65 @@
           "sample_problem",
           "sample_answer"
         ],
-        "action": "2×3=6을 함께 확인하기"
+        "action": "4,000×4=16,000을 함께 확인하기"
       }
     },
-    "misconception": "묶음 수와 한 묶음의 수 중 하나만 셈",
+    "valid_explanations": [
+      "4,000원을 네 번 더하기"
+    ],
+    "misconception": "한 개 가격과 필요한 개수를 더하거나 한 개 값만 전체 값으로 답함",
     "sample_problem": {
-      "prompt": "2개씩 3묶음은 모두 몇 개일까?",
+      "prompt": "4,000원짜리 장난감 4개는 모두 얼마일까?",
       "answers": [
-        "6",
-        "5",
-        "8"
+        "16,000원",
+        "4,000원",
+        "4,004원",
+        "12,000원"
       ],
-      "correct": "6",
+      "correct": "16,000원",
+      "arithmetic_contract": {
+        "operation": "multiplication",
+        "left": 4000,
+        "right": 4,
+        "result": 16000,
+        "left_label": "장난감 한 개 값",
+        "right_label": "장난감 개수",
+        "result_label": "장난감 네 개 값",
+        "unit": "원"
+      },
       "visual": {
-        "type": "groups",
-        "groups": 3,
-        "each": 2,
-        "mode": "multiply"
+        "type": "money-practice",
+        "image": "/life-missions/products/toy.jpg",
+        "imageAlt": "장난감 네 개",
+        "badge": "선물 가게",
+        "facts": [
+          {
+            "label": "한 개",
+            "value": "4,000원"
+          },
+          {
+            "label": "장난감",
+            "value": "4개"
+          }
+        ],
+        "equation": "4,000원 × 4개",
+        "items": [
+          {
+            "image": "/life-missions/products/toy.jpg",
+            "label": "장난감",
+            "count": 4
+          }
+        ]
       }
     },
-    "content_version": 7,
+    "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 모두 몇 개인지랑 어떻게 계산하는지 헷갈려. 알려줄 수 있어?",
+    "l4_prompt": "나 장난감 네 개 값이 헷갈려. 모두 얼마고 어떻게 구하는지도 알려줄래?",
     "help_method_policy": "target_method",
     "accepted_methods": [
-      "2×3으로 나타내기",
-      "한 묶음의 수 × 묶음 수로 전체를 구해!"
+      "4,000×4로 구하기",
+      "4,000원을 네 번 더하기",
+      "한 개 가격과 필요한 개수를 곱하면 전체 값을 구할 수 있어!"
     ]
   },
   {
@@ -1362,32 +1396,35 @@
     "id": "multiply-easy-tables",
     "dictionary_card_id": "dictionary.home.multiply-easy-tables",
     "help_skills": [
-      "counting",
-      "grouping"
+      "addition",
+      "grouping",
+      "budget",
+      "comparison"
     ],
     "subject": "multiplication",
-    "unit": "곱셈",
-    "title": "2·5·10단을 생활에서 써요",
-    "learned_line": "2단은 2씩, 5단은 5씩, 10단은 10씩 뛰어 세!",
-    "note_context": "2 곱하기 4를 구하는 방법",
-    "fill_before": "2×4는 2, 4, 6,",
-    "fill_after": "세어!",
-    "fill_correct": "8까지",
+    "unit": "돈 계산 혼합",
+    "title": "여러 물건값과 예산을 비교해요",
+    "learned_line": "각 물건의 가격과 개수를 곱하고 모두 더한 뒤 예산과 비교해!",
+    "note_context": "여러 물건을 살 때 예산에서 모자란 돈을 구하는 방법",
+    "fill_before": "각 물건의 값을 계산하고",
+    "fill_after": "예산과 비교해!",
+    "fill_correct": "모두 더한 뒤",
     "fill_options": [
-      "8까지",
-      "6까지",
-      "10까지"
+      "모두 더한 뒤",
+      "가장 비싼 것만 보고",
+      "물건 개수만 더한 뒤"
     ],
-    "short_prompt": "2×4를 뛰어 세기로 구하면 어디까지 셀까?",
-    "short_correct": "2, 4, 6, 8까지 세기",
+    "short_prompt": "표·주스·스티커를 살 때 모자란 돈을 어떻게 확인할까?",
+    "answer_followup_prompt": "예산에서 얼마가 모자라?",
+    "short_correct": "각 값을 계산해 더한 뒤 10,000원과 비교하기",
     "short_options": [
-      "2, 4, 6, 8까지 세기",
-      "2, 4, 6까지 세기",
-      "1, 2, 3, 4까지 세기"
+      "각 값을 계산해 더한 뒤 10,000원과 비교하기",
+      "가장 비싼 값만 10,000원과 비교하기",
+      "물건 개수만 더해 10,000원과 비교하기"
     ],
     "help_plan": {
       "H1": {
-        "body": "2개씩 몇 묶음 있는지 확인해 보자.",
+        "body": "표 두 장, 주스 두 잔, 스티커 한 장의 값을 각각 확인해 보자.",
         "support_type": "attention",
         "answer_policy": "hidden",
         "support_mode": "attention",
@@ -1396,17 +1433,17 @@
         ]
       },
       "H2": {
-        "body": "2를 네 번 더하거나 2씩 네 번 세어 보자.",
+        "body": "표값 5,000원, 주스값 3,000원, 스티커값 3,000원을 더해 보자.",
         "support_type": "guided_action",
         "answer_policy": "partial",
         "support_mode": "guided_sequence",
         "fact_refs": [
           "sample_problem"
         ],
-        "action": "2씩 네 번 뛰어 세기"
+        "action": "각 물건값을 계산한 뒤 차례로 더하기"
       },
       "H3": {
-        "body": "2개씩 4묶음은 2×4이고 모두 8개야.",
+        "body": "가격×개수를 계산해 더하면 11,000원. 예산보다 1,000원이 모자라.",
         "support_type": "joint_model",
         "answer_policy": "revealed",
         "support_mode": "joint_model",
@@ -1414,32 +1451,82 @@
           "sample_problem",
           "sample_answer"
         ],
-        "action": "2×4=8을 함께 확인하기"
+        "action": "전체 값 11,000원과 예산 10,000원을 함께 비교하기"
       }
     },
-    "misconception": "곱하는 수만큼 한 번 더 세거나 중간 수를 빠뜨림",
+    "valid_explanations": [
+      "표 5,000원, 주스 3,000원, 스티커 3,000원을 더해 예산과 비교하기"
+    ],
+    "misconception": "개수 곱셈을 빼먹거나 한 물건값만 합계로 답함",
     "sample_problem": {
-      "prompt": "2×4는?",
+      "prompt": "예산 10,000원으로 표 2장, 주스 2잔, 스티커 1장을 사려면 얼마가 모자랄까?",
       "answers": [
-        "8",
-        "6",
-        "10"
+        "1,000원",
+        "2,000원",
+        "3,000원"
       ],
-      "correct": "8",
+      "correct": "1,000원",
+      "arithmetic_contract": {
+        "operation": "subtraction",
+        "left": 11000,
+        "right": 10000,
+        "result": 1000,
+        "left_label": "전체 물건값",
+        "right_label": "예산",
+        "result_label": "모자란 돈",
+        "unit": "원"
+      },
       "visual": {
-        "type": "groups",
-        "groups": 4,
-        "each": 2,
-        "mode": "multiply"
+        "type": "money-practice",
+        "image": "/amusement-park/pass-elements-v2.png",
+        "imageAlt": "입장권과 주스와 스티커",
+        "badge": "예산 확인",
+        "facts": [
+          {
+            "label": "표",
+            "value": "2,500원 × 2장"
+          },
+          {
+            "label": "주스",
+            "value": "1,500원 × 2잔"
+          },
+          {
+            "label": "스티커",
+            "value": "3,000원"
+          },
+          {
+            "label": "예산",
+            "value": "10,000원"
+          }
+        ],
+        "equation": "전체 값과 예산의 차이를 찾아요",
+        "items": [
+          {
+            "image": "/amusement-park/pass-elements-v2.png",
+            "label": "이용권",
+            "count": 2
+          },
+          {
+            "image": "/life-missions/juice.webp",
+            "label": "주스",
+            "count": 2
+          },
+          {
+            "image": "/life-missions/products/stickers.jpg",
+            "label": "스티커",
+            "count": 1
+          }
+        ]
       }
     },
-    "content_version": 7,
-    "entry_mode": "incomplete_attempt",
-    "l4_prompt": "나 2씩 세는데 2, 4, 6 다음이 헷갈려... 알려줄 수 있어?",
+    "content_version": 8,
+    "entry_mode": "genuine_question",
+    "l4_prompt": "나 표랑 간식이랑 스티커를 사려는데 돈이 모자랄까 봐 걱정돼. 얼마가 모자라고 어떻게 구하는지 알려줄래?",
     "help_method_policy": "target_method",
     "accepted_methods": [
-      "2, 4, 6, 8까지 세기",
-      "2단은 2씩, 5단은 5씩, 10단은 10씩 뛰어 세!"
+      "각 값을 계산해 더한 뒤 10,000원과 비교하기",
+      "표 5,000원, 주스 3,000원, 스티커 3,000원을 더해 예산과 비교하기",
+      "각 물건의 가격과 개수를 곱하고 모두 더한 뒤 예산과 비교해!"
     ]
   },
   {
@@ -1533,28 +1620,29 @@
       "grouping"
     ],
     "subject": "division",
-    "unit": "나눗셈",
-    "title": "똑같이 나누어요",
-    "learned_line": "모두에게 하나씩 번갈아 주면 똑같이 나눌 수 있어!",
-    "note_context": "6개를 2명에게 똑같이 나누는 방법",
-    "fill_before": "6개를 2명에게",
-    "fill_after": "주면 똑같아!",
-    "fill_correct": "한 개씩 번갈아",
+    "unit": "돈 계산 나눗셈",
+    "title": "물건값을 똑같이 나눠요",
+    "learned_line": "전체 금액을 사람 수로 나누면 한 사람이 낼 금액을 알 수 있어!",
+    "note_context": "선물 세트 10,500원을 3명이 똑같이 나누어 내는 방법",
+    "fill_before": "전체 금액을",
+    "fill_after": "나누면 한 사람이 낼 금액을 알 수 있어!",
+    "fill_correct": "사람 수로",
     "fill_options": [
-      "한 개씩 번갈아",
-      "한 사람에게 먼저",
-      "한 사람에게 네 개씩"
+      "사람 수로",
+      "간식 수로",
+      "가장 큰 금액으로"
     ],
-    "short_prompt": "6개를 두 사람에게 어떻게 나눌까?",
-    "short_correct": "한 개씩 번갈아 나누기",
+    "short_prompt": "10,500원을 세 명이 똑같이 내려면 어떤 계산을 해야 해?",
+    "answer_followup_prompt": "선물 세트 값 10,500원을 세 명이 똑같이 나눠 내면 한 명은 얼마를 내?",
+    "short_correct": "10,500원을 3으로 나누기",
     "short_options": [
-      "한 개씩 번갈아 나누기",
-      "한 사람에게 먼저 모두 주기",
-      "한 사람에게 네 개 먼저 주기"
+      "10,500원을 3으로 나누기",
+      "10,500원을 2로 나누기",
+      "10,500원을 나누지 않기"
     ],
     "help_plan": {
       "H1": {
-        "body": "6개를 나눠 줄 두 사람을 확인해 보자.",
+        "body": "전체 값 10,500원과 함께 낼 사람 3명을 먼저 찾아보자.",
         "support_type": "attention",
         "answer_policy": "hidden",
         "support_mode": "attention",
@@ -1563,17 +1651,17 @@
         ]
       },
       "H2": {
-        "body": "6개를 두 사람에게 한 개씩 번갈아 나눠 보자.",
+        "body": "10,500원÷3=□에 들어갈 금액을 찾아보자.",
         "support_type": "guided_action",
         "answer_policy": "partial",
-        "support_mode": "guided_manipulation",
+        "support_mode": "guided_equation",
         "fact_refs": [
           "sample_problem"
         ],
-        "action": "두 사람에게 한 개씩 번갈아 주기"
+        "action": "10,500÷3 식의 빈칸 채우기"
       },
       "H3": {
-        "body": "6개를 두 사람에게 똑같이 나누면 한 명당 3개야.",
+        "body": "10,500÷3=3,500이라서 한 명은 3,500원씩 내면 돼.",
         "support_type": "joint_model",
         "answer_policy": "revealed",
         "support_mode": "joint_model",
@@ -1581,32 +1669,65 @@
           "sample_problem",
           "sample_answer"
         ],
-        "action": "한 명당 3개를 함께 확인하기"
+        "action": "한 명이 낼 3,500원을 함께 확인하기"
       }
     },
-    "misconception": "한 사람에게 먼저 모두 주고 남은 것을 나눔",
+    "valid_explanations": [
+      "세 사람이 같은 금액을 내도록 나누기"
+    ],
+    "misconception": "전체 금액을 그대로 한 사람이 낼 돈으로 답하거나 사람 수로 나누지 않음",
     "sample_problem": {
-      "prompt": "6개를 2명에게 똑같이 나누면 한 명당?",
+      "prompt": "선물 세트 10,500원을 3명이 똑같이 내면 한 명당 얼마일까?",
       "answers": [
-        "3개",
-        "2개",
-        "4개"
+        "3,500원",
+        "5,250원",
+        "2,500원"
       ],
-      "correct": "3개",
+      "correct": "3,500원",
+      "arithmetic_contract": {
+        "operation": "division",
+        "left": 10500,
+        "right": 3,
+        "result": 3500,
+        "left_label": "선물 세트 전체 값",
+        "right_label": "함께 낼 사람 수",
+        "result_label": "한 사람이 낼 금액",
+        "unit": "원"
+      },
       "visual": {
-        "type": "groups",
-        "groups": 2,
-        "each": 3,
-        "mode": "share"
+        "type": "money-practice",
+        "image": "/life-missions/products/gift.jpg",
+        "imageAlt": "친구에게 줄 선물 세트",
+        "badge": "선물 가게",
+        "facts": [
+          {
+            "label": "전체 값",
+            "value": "10,500원"
+          },
+          {
+            "label": "함께 낼 사람",
+            "value": "3명"
+          }
+        ],
+        "equation": "10,500원 ÷ 3명",
+        "items": [
+          {
+            "image": "/life-missions/products/gift.jpg",
+            "label": "선물 세트",
+            "count": 1
+          }
+        ]
       }
     },
-    "content_version": 7,
+    "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 6개를 2명에게 똑같이 나누는 방법이 헷갈려... 알려줄 수 있어?",
+    "l4_prompt": "나 선물값을 셋이 똑같이 내는 게 헷갈려. 한 명이 얼마씩 내는지랑 계산 방법을 알려줄래?",
     "help_method_policy": "target_method",
     "accepted_methods": [
-      "한 개씩 번갈아 나누기",
-      "모두에게 하나씩 번갈아 주면 똑같이 나눌 수 있어!"
+      "10,500원을 3으로 나누기",
+      "전체 금액을 사람 수로 나누기",
+      "세 사람이 같은 금액을 내도록 나누기",
+      "전체 금액을 사람 수로 나누면 한 사람이 낼 금액을 알 수 있어!"
     ]
   },
   {
@@ -1616,28 +1737,29 @@
       "grouping"
     ],
     "subject": "division",
-    "unit": "나눗셈",
-    "title": "몇 묶음인지 찾아요",
-    "learned_line": "같은 수씩 묶은 뒤 만들어진 묶음의 수를 세어!",
-    "note_context": "8개를 2개씩 묶어 묶음 수를 찾는 방법",
-    "fill_before": "8개를 2개씩 묶은 뒤",
-    "fill_after": "세어!",
-    "fill_correct": "만들어진 4묶음을",
+    "unit": "돈 계산 나눗셈",
+    "title": "예산으로 살 수 있는 개수를 찾아요",
+    "learned_line": "예산을 한 개 가격으로 나누면 살 수 있는 개수를 알 수 있어!",
+    "note_context": "14,000원으로 2,000원짜리 책을 살 수 있는 권수를 구하는 방법",
+    "fill_before": "예산 14,000원으로 2,000원짜리를 살 때",
+    "fill_after": "살 수 있는 권수를 구해!",
+    "fill_correct": "14,000÷2,000으로",
     "fill_options": [
-      "만들어진 4묶음을",
-      "한 묶음의 2개를",
-      "처음의 8개를"
+      "14,000÷2,000으로",
+      "14,000-2,000으로",
+      "14,000+2,000으로"
     ],
-    "short_prompt": "8개를 2개씩 묶은 뒤 무엇을 세어야 답이 될까?",
-    "short_correct": "만들어진 4묶음을 세기",
+    "short_prompt": "14,000원으로 2,000원짜리 책을 몇 권 살 수 있는지 어떻게 구할까?",
+    "answer_followup_prompt": "책을 몇 권 살 수 있어?",
+    "short_correct": "14,000÷2,000으로 구하기",
     "short_options": [
-      "만들어진 4묶음을 세기",
-      "한 묶음의 2개를 세기",
-      "처음의 8개를 다시 세기"
+      "14,000÷2,000으로 구하기",
+      "14,000-2,000으로 구하기",
+      "14,000+2,000으로 구하기"
     ],
     "help_plan": {
       "H1": {
-        "body": "한 묶음에 2개씩 들어가야 하는지 확인해 보자.",
+        "body": "쓸 수 있는 예산과 책 한 권 가격을 찾아보자.",
         "support_type": "attention",
         "answer_policy": "hidden",
         "support_mode": "attention",
@@ -1646,17 +1768,17 @@
         ]
       },
       "H2": {
-        "body": "8개에서 2개짜리 묶음을 만들어 보자.",
+        "body": "14,000원 안에 2,000원이 몇 번 들어가는지 14,000÷2,000=□로 찾아보자.",
         "support_type": "guided_action",
         "answer_policy": "partial",
-        "support_mode": "guided_manipulation",
+        "support_mode": "guided_equation",
         "fact_refs": [
           "sample_problem"
         ],
-        "action": "8개를 2개씩 묶기"
+        "action": "14,000÷2,000 식의 빈칸 채우기"
       },
       "H3": {
-        "body": "8개를 2개씩 묶으면 모두 4묶음이야.",
+        "body": "14,000÷2,000=7이라서 책은 7권 살 수 있어.",
         "support_type": "joint_model",
         "answer_policy": "revealed",
         "support_mode": "joint_model",
@@ -1664,32 +1786,65 @@
           "sample_problem",
           "sample_answer"
         ],
-        "action": "4묶음을 함께 확인하기"
+        "action": "살 수 있는 책 7권을 함께 확인하기"
       }
     },
-    "misconception": "한 묶음의 수를 답으로 말함",
+    "valid_explanations": [
+      "2,000원을 일곱 번 모으면 14,000원이 되는지 세기"
+    ],
+    "misconception": "예산과 한 개 가격을 더하거나 한 번 산 뒤 남은 돈만 답함",
     "sample_problem": {
-      "prompt": "8개를 2개씩 묶으면 몇 묶음?",
+      "prompt": "예산 14,000원으로 2,000원짜리 책을 몇 권 살 수 있을까?",
       "answers": [
-        "4묶음",
-        "2묶음",
-        "6묶음"
+        "7권",
+        "2권",
+        "6권",
+        "14권"
       ],
-      "correct": "4묶음",
+      "correct": "7권",
+      "arithmetic_contract": {
+        "operation": "division",
+        "left": 14000,
+        "right": 2000,
+        "result": 7,
+        "left_label": "예산",
+        "right_label": "책 한 권 가격",
+        "result_label": "살 수 있는 책 수",
+        "unit": "권"
+      },
       "visual": {
-        "type": "groups",
-        "groups": 4,
-        "each": 2,
-        "mode": "share"
+        "type": "money-practice",
+        "image": "/life-missions/products/book.jpg",
+        "imageAlt": "읽고 싶은 책",
+        "badge": "서점",
+        "facts": [
+          {
+            "label": "한 권 가격",
+            "value": "2,000원"
+          },
+          {
+            "label": "예산",
+            "value": "14,000원"
+          }
+        ],
+        "equation": "14,000원 ÷ 2,000원",
+        "items": [
+          {
+            "image": "/life-missions/products/book.jpg",
+            "label": "책",
+            "count": 1
+          }
+        ]
       }
     },
-    "content_version": 7,
+    "content_version": 8,
     "entry_mode": "genuine_question",
-    "l4_prompt": "나 몇 묶음인지랑 어떻게 세는지 헷갈려. 알려줄 수 있어?",
+    "l4_prompt": "나 가진 돈으로 책을 몇 권 살 수 있는지 헷갈려. 몇 권이고 어떻게 구하는지도 알려줄래?",
     "help_method_policy": "target_method",
     "accepted_methods": [
-      "만들어진 4묶음을 세기",
-      "같은 수씩 묶은 뒤 만들어진 묶음의 수를 세어!"
+      "14,000÷2,000으로 구하기",
+      "2,000원을 일곱 번 모으면 14,000원이 되는지 세기",
+      "예산을 한 개 가격으로 나누면 살 수 있는 개수를 알 수 있어!"
     ]
   },
   {

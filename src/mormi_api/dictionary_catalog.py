@@ -118,7 +118,10 @@ def _normalize_assessment_answer(value: object) -> str | int | float | bool:
     if compact in _ANSWER_ALIASES:
         return _ANSWER_ALIASES[compact]
     numeric = re.fullmatch(
-        r"([+-]?\d+(?:\.\d+)?)(?:원|개|명|묶음|cm|g|l|시간|일)?",
+        (
+            r"([+-]?\d+(?:\.\d+)?)"
+            r"(?:원|개|명|묶음|장|잔|권|봉지|통|자루|조각|병|상자|모둠|번|cm|g|l|시간|일)?"
+        ),
         compact,
     )
     if numeric:
