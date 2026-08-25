@@ -159,8 +159,10 @@ X-Mormi-Service-Key: <service-key>
 
 ### `POST /v1/practice-results`
 
-일반 학습 백엔드가 반복학습 결과를 미리 저장할 때 사용합니다. 대화 시작 시
-`practice_result_id`만 전달하려면 이 API에 먼저 저장되어 있어야 합니다.
+반복학습 결과를 AI에 미리 적재해야 하는 별도 서버 연동에서 선택적으로 사용합니다.
+대화 시작 시 `practice_result_id`만 전달하려면 이 API에 먼저 저장되어 있어야 합니다.
+현재 Spring 운영 경로는 이 API를 호출하지 않고 `POST /v1/conversations`에
+`practice_result_id`와 구조화된 `practice_summary`를 함께 전달합니다.
 
 요청:
 
@@ -190,9 +192,9 @@ X-Mormi-Service-Key: <service-key>
 `attempts`와 집계 필드는 함께 또는 집계 필드만 전달할 수 있습니다. 아이 이름,
 문제 원문, 음성 파일은 전달하지 않습니다.
 
-Spring은 학습 세션 전체 완료를 기다리지 않고 반복 목표를 채운 시점에
-`practice_result_id`를 확정해 이 API를 호출해야 합니다. 그 ID로 AI 대화를 시작하고,
-AI 대화가 끝난 뒤 `conversation_id`와 함께 학습 세션 완료를 확정합니다.
+사전 적재 방식을 선택한 연동 서버는 반복 목표를 채운 시점에 `practice_result_id`를
+확정해 이 API를 호출합니다. 인라인 방식을 사용하는 현재 Spring은 모든 반복 시도 저장을
+확인한 뒤 동일 ID와 요약을 대화 생성 요청에 함께 보냅니다.
 
 집 가르치기에는 `curriculum_session_id`가 필수입니다. AI는 이 ID로 검수된
 가르치기 카탈로그를 선택합니다. 현재 FE 커리큘럼의 36개 세션을 지원하며 알 수 없는
@@ -334,6 +336,7 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
   "scene": "home_teach",
   "scenario_id": "home_teach",
   "learning_session_id": "session_123",
+  "conversation_round": 1,
   "practice_result_id": "practice_123",
   "conversation_storage_consent": true,
   "retention_policy": "permanent"
@@ -375,6 +378,12 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 `practice_result_id`가 모두 필요합니다. `practice_summary`는 같은 요청에 인라인으로
 넣을 수 있고, 생략할 경우 해당 `practice_result_id`가 사전에 저장되어 있어야 합니다.
 같은 `practice_result_id`를 재시도해도 최초 저장된 반복 결과가 정본으로 유지됩니다.
+
+`conversation_round`는 기본값이 1인 양의 정수입니다. 동일한
+`(learner_id, learning_session_id, conversation_round)` 요청은 네트워크 재시도로 보고
+기존 대화를 반환합니다. 명시적 재시작은 Spring이 회차를 증가시켜 보내며, 같은
+`learning_session_id`와 `practice_result_id`를 유지하더라도 새 `conversation_id`를
+생성합니다.
 
 AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionState.scenario_data`에
 복사되어 고정됩니다. 따라서 이후 카탈로그가 갱신되거나 요청을 재시도해도 진행 중인

@@ -150,8 +150,9 @@ class Repository:
         self,
         learner_id: int,
         learning_session_id: str,
+        conversation_round: int,
     ) -> str | None:
-        """Return the already-created home dialogue after a network retry."""
+        """Return the home dialogue for the same round after a network retry."""
 
         async with self.database.sessions() as db:
             statement = (
@@ -159,6 +160,7 @@ class Repository:
                 .where(
                     ConversationRecord.learner_id == learner_id,
                     ConversationRecord.learning_session_id == learning_session_id,
+                    ConversationRecord.conversation_round == conversation_round,
                 )
                 .order_by(ConversationRecord.created_at.desc())
                 .limit(1)
@@ -171,6 +173,7 @@ class Repository:
                 conversation_id=state.conversation_id,
                 learner_id=state.learner_id,
                 learning_session_id=state.learning_session_id,
+                conversation_round=state.conversation_round,
                 scene=state.scene.value,
                 scenario_id=state.scenario_id,
                 state_json=self._dump_state(state),

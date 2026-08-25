@@ -178,6 +178,9 @@ pip install -r requirements.txt
 반드시 필요합니다. `practice_summary`는 시작 요청에 함께 보내거나, 같은
 `practice_result_id`로 미리 저장한 결과를 복구할 수 있습니다. 같은 결과 ID를
 재전송하면 최초 저장된 반복 결과가 유지됩니다.
+현재 Spring 운영 경로는 별도 `/v1/practice-results` 호출 없이 인라인 요약을 사용합니다.
+같은 학습 세션·같은 `conversation_round`는 생성 재시도로 복구하고, 명시적 재시작은
+회차를 증가시켜 기존 기록을 보존한 새 `conversation_id`를 만듭니다.
 
 궁금해사전은 집 커리큘럼 36개와 현재 카페 4개에 각각 한 장씩 등록되어 있습니다.
 각 카드는 도움 문구와 별개인 `concept`, 구체적인 `example`, 그 예시에 근거한 전용
