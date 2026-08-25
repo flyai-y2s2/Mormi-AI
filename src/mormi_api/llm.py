@@ -8,7 +8,7 @@ from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, transf
 from pydantic import BaseModel, ValidationError
 
 from .content import SlotDefinition, TaskDefinition
-from .reporting import validate_report_summary
+from .reporting import validate_report_summary, validate_speech_change_summary
 from .schemas import (
     ChildResponse,
     DialogueHistoryTurn,
@@ -21,6 +21,8 @@ from .schemas import (
     SpeakerContext,
     SpeakerGuardContract,
     SpeakerOutput,
+    SpeechChangeSummaryRequest,
+    SpeechChangeSummaryResponse,
     UtteranceAnalysis,
 )
 from .settings import Settings
@@ -140,6 +142,39 @@ class ClaudeGateway:
         except ValidationError as error:
             raise ModelOutputError("Report summary output did not match schema") from error
         return validate_report_summary(request, response)
+
+    async def summarize_speech_change(
+        self,
+        request: SpeechChangeSummaryRequest,
+    ) -> SpeechChangeSummaryResponse:
+        if not self.client:
+            raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
+        schema = structured_output_schema(SpeechChangeSummaryResponse)
+        try:
+            message = await self.client.messages.create(
+                model=self.settings.speaker_model,
+                max_tokens=320,
+                temperature=0,
+                system=SPEECH_CHANGE_SYSTEM,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": json.dumps(request.model_dump(mode="json"), ensure_ascii=False),
+                    }
+                ],
+                output_config={"format": {"type": "json_schema", "schema": schema}},
+            )
+        except (APIConnectionError, APIStatusError) as error:
+            raise ModelUnavailableError(_safe_provider_error_code(error)) from error
+        if message.stop_reason in {"refusal", "max_tokens"}:
+            raise ModelOutputError(f"Speech change summary stopped with {message.stop_reason}")
+        try:
+            response = SpeechChangeSummaryResponse.model_validate_json(
+                _text_content(message.content)
+            )
+        except ValidationError as error:
+            raise ModelOutputError("Speech change output did not match schema") from error
+        return validate_speech_change_summary(request, response)
 
     async def classify(
         self,
@@ -611,6 +646,16 @@ REPORT_SUMMARY_SYSTEM = """
 각 필드는 evidence_refs 중 한 fact의 문구를 그대로 복사하거나, evidence_refs 순서대로
 fact 문구를 한 칸 공백으로 정확히 이어 붙여서만 작성한다. 바꿔쓰기, 조사 변경, 요약,
 원인·진단·치료·심리적 해석·또래·평균·등수 비교의 추가나 추론은 하지 않는다.
+""".strip()
+
+
+SPEECH_CHANGE_SYSTEM = """
+너는 교사용 주간 리포트에서 한 소단원의 과거 발화와 최근 발화를 비교한다.
+관찰 가능한 말하기 변화만 한국어 1~2문장으로 작성한다. 답만 말했는지, 수나 계산의
+순서를 표현했는지, 이유나 풀이 과정이 더 구체적으로 드러났는지를 비교할 수 있다.
+아이의 능력·심리·진단·원인을 단정하거나 또래와 비교하지 않는다. 입력에 없는 숫자나
+발화를 만들지 않는다. evidence_spans에는 판단에 사용한 과거와 최근 원문 구절을 각각
+하나 이상 글자 그대로 넣는다.
 """.strip()
 
 

@@ -16,6 +16,8 @@ from .schemas import (
     RetentionPolicy,
     SceneType,
     SessionState,
+    SpeechChangeSummaryRequest,
+    SpeechChangeSummaryResponse,
     utc_now,
 )
 
@@ -171,6 +173,48 @@ def validate_report_summary(
         if not is_exactly_grounded:
             raise ValueError("ungrounded report language")
     return response
+
+
+def validate_speech_change_summary(
+    request: SpeechChangeSummaryRequest,
+    response: SpeechChangeSummaryResponse | dict[str, object],
+) -> SpeechChangeSummaryResponse:
+    """Allow short interpretation only when its concrete evidence stays traceable."""
+
+    value = SpeechChangeSummaryResponse.model_validate(response)
+    past = request.past.utterance.strip()
+    recent = request.recent.utterance.strip()
+    grounded = " ".join(
+        item
+        for item in (
+            request.domain_label,
+            past,
+            recent,
+            request.past.expression_level,
+            request.past.hint_level,
+            request.recent.expression_level,
+            request.recent.hint_level,
+        )
+        if item
+    )
+    spans = [span.strip() for span in value.evidence_spans]
+    if any(not span or (span not in past and span not in recent) for span in spans):
+        raise ValueError("ungrounded speech evidence span")
+    if not any(span in past for span in spans) or not any(span in recent for span in spans):
+        raise ValueError("speech comparison requires evidence from both utterances")
+    if not numeric_tokens(value.text).issubset(numeric_tokens(grounded)):
+        raise ValueError("ungrounded speech change number")
+    if any(quote not in grounded for quote in _quoted_text(value.text)):
+        raise ValueError("ungrounded speech change quote")
+    reject_forbidden_report_language(value.text)
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?。！？])\s+", value.text.strip())
+        if sentence.strip()
+    ]
+    if len(sentences) > 2:
+        raise ValueError("speech change must use at most two sentences")
+    return value
 
 
 def _raw_response_is_available(state: SessionState, *, now: datetime) -> bool:

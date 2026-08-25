@@ -408,6 +408,97 @@ def test_summary_route_returns_sanitized_provider_failure(
     }
 
 
+def test_speech_change_route_returns_grounded_before_after_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class GroundedGateway:
+        async def summarize_speech_change(self, body: object) -> dict[str, object]:
+            return {
+                "text": (
+                    "답만 짧게 말하던 모습에서 수를 세는 순서를 말로 표현하는 모습으로 "
+                    "변화했습니다. 풀이 과정이 이전보다 구체적으로 드러납니다."
+                ),
+                "evidence_spans": ["점 3개야", "하나 둘 셋 3개"],
+            }
+
+    monkeypatch.setattr(
+        app.state,
+        "settings",
+        Settings(service_api_key="shared-secret"),
+        raising=False,
+    )
+    monkeypatch.setattr(app.state, "gateway", GroundedGateway(), raising=False)
+
+    response = TestClient(app).post(
+        "/v1/internal/speech-change-summaries",
+        headers={"X-Mormi-Service-Key": "shared-secret"},
+        json={
+            "domain_label": "수 세기",
+            "past": {
+                "utterance": "점 3개야",
+                "expression_level": "L4",
+                "hint_level": "H0",
+            },
+            "recent": {
+                "utterance": "하나 둘 셋 3개",
+                "expression_level": "L4",
+                "hint_level": "H0",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "text": (
+            "답만 짧게 말하던 모습에서 수를 세는 순서를 말로 표현하는 모습으로 "
+            "변화했습니다. 풀이 과정이 이전보다 구체적으로 드러납니다."
+        ),
+        "evidence_spans": ["점 3개야", "하나 둘 셋 3개"],
+    }
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "최근에는 5개를 셀 수 있게 되었습니다.",
+        "첫 문장입니다. 둘째 문장입니다. 셋째 문장입니다.",
+    ],
+)
+def test_speech_change_route_rejects_ungrounded_or_overlong_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe_text: str,
+) -> None:
+    class UnsafeGateway:
+        async def summarize_speech_change(self, body: object) -> dict[str, object]:
+            return {
+                "text": unsafe_text,
+                "evidence_spans": ["점 3개야", "하나 둘 셋 3개"],
+            }
+
+    monkeypatch.setattr(
+        app.state,
+        "settings",
+        Settings(service_api_key="shared-secret"),
+        raising=False,
+    )
+    monkeypatch.setattr(app.state, "gateway", UnsafeGateway(), raising=False)
+
+    response = TestClient(app).post(
+        "/v1/internal/speech-change-summaries",
+        headers={"X-Mormi-Service-Key": "shared-secret"},
+        json={
+            "domain_label": "수 세기",
+            "past": {"utterance": "점 3개야", "expression_level": "L4", "hint_level": "H0"},
+            "recent": {"utterance": "하나 둘 셋 3개", "expression_level": "L4", "hint_level": "H0"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"code": "speech_change_ungrounded", "issues": []}
+    }
+
+
 async def reporting_repository(tmp_path: object) -> Repository:
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/reporting.db")
     await database.create_schema()
