@@ -9,6 +9,9 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from mormi_api.content import (
+    HOME_TEACHING_CATALOG,
+    PARK_PREPARATION_SESSION_IDS,
+    PARK_REQUIRED_HOME_SESSION_IDS,
     PARK_SCENARIO_IDS,
     SCENARIOS,
     create_scenario_data,
@@ -24,6 +27,8 @@ from mormi_api.schemas import (
     ArithmeticClaim,
     ChildResponse,
     ExpressionLevel,
+    HintLevel,
+    InputKind,
     LearnerProfile,
     ParkSessionContext,
     SafetyCategory,
@@ -64,6 +69,33 @@ EXPECTED_PRIMARY = {
     },
 }
 
+EXPECTED_PREPARATION_SESSIONS = {
+    "amusement_ticket_multiply": "multiply-groups",
+    "amusement_snack_divide": "divide-share",
+    "amusement_pass_compare": "divide-group",
+}
+
+EXPECTED_STRATEGY_MISCONCEPTIONS = {
+    "amusement_ticket_multiply": {
+        "입장권 한 장 값과 사람 수를 더해",
+        "입장권 한 장 값만 내",
+    },
+    "amusement_snack_divide": {
+        "한 사람이 간식값을 모두 내",
+        "간식값과 사람 수를 더해",
+    },
+    "amusement_pass_compare": {
+        "두 이용권 값을 더해",
+        "자유이용권이 비싸니까 바로 골라",
+    },
+}
+
+
+def _park_tasks(scenario_id: str, context: ParkSessionContext):
+    data = {"park_context": context.model_dump(mode="json")}
+    primary_id, transfer_id = SCENARIOS[scenario_id].task_ids
+    return get_task(primary_id, data), get_task(transfer_id, data)
+
 
 def _request(scenario_id: str) -> SessionCreate:
     return SessionCreate(
@@ -71,6 +103,26 @@ def _request(scenario_id: str) -> SessionCreate:
         scene=SceneType.AMUSEMENT_PARK,
         scenario_id=scenario_id,
     )
+
+
+def test_park_scenarios_retrieve_their_required_home_preparation_session() -> None:
+    assert PARK_REQUIRED_HOME_SESSION_IDS == (
+        "multiply-groups",
+        "divide-share",
+        "divide-group",
+        "multiply-easy-tables",
+    )
+    assert PARK_PREPARATION_SESSION_IDS == EXPECTED_PREPARATION_SESSIONS
+
+    for scenario_id, preparation_session_id in EXPECTED_PREPARATION_SESSIONS.items():
+        context = representative_park_context(scenario_id)
+        primary, transfer = _park_tasks(scenario_id, context)
+        preparation = HOME_TEACHING_CATALOG[preparation_session_id]
+
+        assert primary.dictionary_card_id == preparation.dictionary_card_id
+        assert transfer.dictionary_card_id == preparation.dictionary_card_id
+        assert primary.help_method_policy == preparation.help_method_policy
+        assert transfer.help_method_policy == preparation.help_method_policy
 
 
 @pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
@@ -108,6 +160,13 @@ def test_park_catalog_generates_only_solvable_reviewed_problems(
                 values["day_pass_price"] // values["single_ride_price"]
             )
             assert values["benefit_from_rides"] == values["break_even_rides"] + 1
+        primary, transfer = _park_tasks(scenario_id, context)
+        assert primary.slots["answer"].expected != transfer.slots["answer"].expected
+        if scenario_id == "amusement_pass_compare":
+            assert (
+                primary.slots["benefit_from_rides"].expected
+                != transfer.slots["benefit_from_rides"].expected
+            )
         assert context.transfer.prompt != context.prompt
     assert len(variants) > 3
 
@@ -196,8 +255,216 @@ def test_park_content_uses_ai_snapshot_and_never_exposes_internal_pedagogy(
     assert set(primary.steps[ExpressionLevel.L0][0].input.config["completion_values"]) == set(
         primary.required_slots
     )
-    assert context.transfer.equation in transfer.hints["H3"].visual_data["equation"]
-    assert transfer.hints["H3"].body == context.transfer.conclusion
+    assert transfer.hints[HintLevel.H3].visual_data["equation"]
+    assert transfer.hints[HintLevel.H3].visual_data["conclusion"] == context.transfer.conclusion
+
+
+@pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
+def test_primary_and_transfer_keep_the_full_expression_ladder_contract(
+    scenario_id: str,
+) -> None:
+    context = representative_park_context(scenario_id)
+
+    for task in _park_tasks(scenario_id, context):
+        assert set(task.steps) == {
+            ExpressionLevel.L4,
+            ExpressionLevel.L3,
+            ExpressionLevel.L2,
+            ExpressionLevel.L0,
+        }
+
+        l4_steps = task.steps[ExpressionLevel.L4]
+        assert len(l4_steps) == 1
+        assert l4_steps[0].input.kind is InputKind.TEXT
+        assert l4_steps[0].target_slots == task.required_slots
+        assert l4_steps[0].input.target_slots == task.required_slots
+        assert any(term in l4_steps[0].prompt for term in ("어떻게", "방법"))
+
+        l3_steps = task.steps[ExpressionLevel.L3]
+        assert all(step.input.kind is InputKind.TEXT for step in l3_steps)
+        assert all(len(step.target_slots) == 1 for step in l3_steps)
+        assert [step.target_slots[0] for step in l3_steps] == task.required_slots
+        assert len({step.prompt for step in l3_steps}) == len(l3_steps)
+
+        l2_steps = task.steps[ExpressionLevel.L2]
+        assert all(step.input.kind is InputKind.CHOICES for step in l2_steps)
+        assert all(len(step.target_slots) == 1 for step in l2_steps)
+        assert [step.target_slots[0] for step in l2_steps] == task.required_slots
+        for step in l2_steps:
+            assert "골라" in step.prompt
+            assert "골라" in step.fallback_text
+            assert "같이" not in step.prompt
+            assert "함께" not in step.prompt
+
+        l0_steps = task.steps[ExpressionLevel.L0]
+        assert len(l0_steps) == 1
+        joint = l0_steps[0]
+        assert joint.input.kind is InputKind.JOINT
+        assert joint.target_slots == task.required_slots
+        assert joint.input.target_slots == task.required_slots
+        assert set(joint.input.config["completion_values"]) == set(task.required_slots)
+        assert "나와 같이" in joint.prompt
+
+
+@pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
+def test_park_h0_transfer_visual_does_not_preteach_the_equation(
+    scenario_id: str,
+) -> None:
+    _, transfer = _park_tasks(scenario_id, representative_park_context(scenario_id))
+    visual = transfer.base_visual.data
+
+    assert visual["result_hidden"] is True
+    assert {fact["key"] for fact in visual["facts"]} == {"left", "right"}
+    assert {"operation", "equation", "symbol", "result"}.isdisjoint(visual)
+    assert {"operation", "equation", "symbol", "result"}.isdisjoint(
+        transfer.visible_facts
+    )
+    assert not any(symbol in visual["prompt"] for symbol in ("=", "×", "÷"))
+
+
+@pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
+def test_park_hint_ladder_is_grounded_progressive_and_closes_with_the_answer(
+    scenario_id: str,
+) -> None:
+    context = representative_park_context(scenario_id)
+
+    for task in _park_tasks(scenario_id, context):
+        h1 = task.hints[HintLevel.H1]
+        h2 = task.hints[HintLevel.H2]
+        h3 = task.hints[HintLevel.H3]
+        contract = task.arithmetic_contract
+        assert contract is not None
+        answer_token = f"{contract.result:,}{contract.unit}"
+
+        assert (h1.support_type, h1.answer_policy, h1.support_mode) == (
+            "attention",
+            "hidden",
+            "attention",
+        )
+        assert set(h1.fact_refs) <= set(task.visible_facts)
+        assert answer_token not in h1.body
+
+        assert (h2.support_type, h2.answer_policy, h2.support_mode) == (
+            "guided_action",
+            "partial",
+            "guided_equation",
+        )
+        assert set(h2.fact_refs) <= set(task.visible_facts)
+        assert "□" in h2.body
+        assert answer_token not in h2.body
+        if h2.visual_type is not None:
+            assert h2.visual_data["result_hidden"] is True
+
+        assert (h3.support_type, h3.answer_policy, h3.support_mode) == (
+            "joint_model",
+            "revealed",
+            "joint_model",
+        )
+        assert set(task.required_slots) <= set(h3.fact_refs)
+        assert f"{contract.result:,}" in h3.body
+        assert "□" not in h3.body
+        assert task.steps[ExpressionLevel.L0][0].input.config["text"] == h3.body
+        assert len({h1.body, h2.body, h3.body}) == 3
+
+
+@pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
+def test_park_hints_reuse_each_preparation_sessions_representation(
+    scenario_id: str,
+) -> None:
+    context = representative_park_context(scenario_id)
+
+    for task in _park_tasks(scenario_id, context):
+        contract = task.arithmetic_contract
+        assert contract is not None
+        h2 = task.hints[HintLevel.H2]
+        h3 = task.hints[HintLevel.H3]
+
+        if scenario_id == "amusement_ticket_multiply":
+            equation = f"{contract.left:,}×{contract.right}"
+            assert h2.body == f"{equation}=□로 나타내 보자."
+            assert h2.visual_type is None
+            assert h3.body == f"{equation}={contract.result:,}원이야."
+        elif scenario_id == "amusement_snack_divide":
+            equation = f"{contract.left:,}÷{contract.right}"
+            assert equation in h2.body
+            assert "번갈아" in h2.body
+            assert h2.visual_data["symbol"] == "÷"
+            assert "한 명" in h3.body
+            assert "번갈아" in h3.body
+        else:
+            equation = f"{contract.left:,}÷{contract.right:,}=□"
+            assert f"{contract.right:,}원" in h2.body
+            assert "묶음" in h2.body
+            assert equation in h2.body
+            assert h2.visual_data["symbol"] == "÷"
+            assert f"{contract.result}번이면 같" in h3.body
+            assert (
+                f"{contract.result + 1}번부터 자유이용권이 더 저렴"
+                in h3.body
+            )
+
+
+@pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
+def test_park_choices_use_reviewed_misconceptions_instead_of_nearby_noise(
+    scenario_id: str,
+) -> None:
+    context = representative_park_context(scenario_id)
+
+    for task in _park_tasks(scenario_id, context):
+        contract = task.arithmetic_contract
+        assert contract is not None
+        answer_step = next(
+            step
+            for step in task.steps[ExpressionLevel.L2]
+            if step.target_slots == ["answer"]
+        )
+        answer_values = {
+            int(effects["answer"])
+            for effects in answer_step.choice_effects.values()
+        }
+        answer_distractors = answer_values - {contract.result}
+
+        if scenario_id == "amusement_ticket_multiply":
+            assert answer_distractors == {
+                contract.left,
+                contract.result + contract.left,
+            }
+        elif scenario_id == "amusement_snack_divide":
+            assert contract.left in answer_distractors
+            assert any(
+                abs(value - contract.result) == 1_000
+                for value in answer_distractors
+            )
+        else:
+            assert answer_distractors == {
+                contract.result - 1,
+                contract.result + 1,
+            }
+
+        strategy_step = next(
+            step
+            for step in task.steps[ExpressionLevel.L2]
+            if step.target_slots == ["strategy"]
+        )
+        wrong_strategy_labels = {
+            choice.label
+            for choice in strategy_step.input.choices
+            if choice.id.startswith("strategy_wrong_")
+        }
+        assert wrong_strategy_labels == EXPECTED_STRATEGY_MISCONCEPTIONS[scenario_id]
+
+        if scenario_id == "amusement_pass_compare":
+            benefit_step = next(
+                step
+                for step in task.steps[ExpressionLevel.L2]
+                if step.target_slots == ["benefit_from_rides"]
+            )
+            benefit = int(task.slots["benefit_from_rides"].expected)
+            benefit_values = {
+                int(effects["benefit_from_rides"])
+                for effects in benefit_step.choice_effects.values()
+            }
+            assert benefit_values - {benefit} == {benefit - 1, benefit + 1}
 
 
 @pytest.mark.parametrize(

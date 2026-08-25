@@ -92,14 +92,65 @@ CONTENT_VERSION_8_HOME_SESSION_IDS = {
     "add-pictures",
     "money-price",
     "sub-borrow",
+    "multiply-groups",
     "multiply-addition",
+    "multiply-easy-tables",
     "multiply-tables",
+    "divide-share",
+    "divide-group",
     "clock-basic",
     "clock-quarter",
     "time-calendar",
     "measure-weight-capacity",
     "geometry-compose",
     "data-chance",
+}
+
+
+PARK_PREPARATION_HOME_CASES = {
+    "multiply-groups": {
+        "prompt": "4,000원짜리 장난감 4개는 모두 얼마일까?",
+        "correct": "16,000원",
+        "operation": "multiplication",
+        "left": 4000,
+        "right": 4,
+        "result": 16000,
+        "unit": "원",
+        "h2_mode": "guided_equation",
+    },
+    "divide-share": {
+        "prompt": "선물 세트 10,500원을 3명이 똑같이 내면 한 명당 얼마일까?",
+        "correct": "3,500원",
+        "operation": "division",
+        "left": 10500,
+        "right": 3,
+        "result": 3500,
+        "unit": "원",
+        "h2_mode": "guided_equation",
+    },
+    "divide-group": {
+        "prompt": "예산 14,000원으로 2,000원짜리 책을 몇 권 살 수 있을까?",
+        "correct": "7권",
+        "operation": "division",
+        "left": 14000,
+        "right": 2000,
+        "result": 7,
+        "unit": "권",
+        "h2_mode": "guided_equation",
+    },
+    "multiply-easy-tables": {
+        "prompt": (
+            "예산 10,000원으로 표 2장, 주스 2잔, 스티커 1장을 "
+            "사려면 얼마가 모자랄까?"
+        ),
+        "correct": "1,000원",
+        "operation": "subtraction",
+        "left": 11000,
+        "right": 10000,
+        "result": 1000,
+        "unit": "원",
+        "h2_mode": "guided_sequence",
+    },
 }
 
 
@@ -115,6 +166,151 @@ def test_home_catalog_covers_current_frontend_curriculum() -> None:
     assert all(spec.effective_l4_prompt.strip() for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.entry_mode != "wrong_guess" for spec in HOME_TEACHING_CATALOG.values())
     assert all(spec.entry_prompt is None for spec in HOME_TEACHING_CATALOG.values())
+
+
+@pytest.mark.parametrize(
+    ("curriculum_session_id", "expected"),
+    PARK_PREPARATION_HOME_CASES.items(),
+)
+def test_park_preparation_home_content_matches_the_fifth_frontend_drill(
+    curriculum_session_id: str,
+    expected: dict[str, object],
+) -> None:
+    """가르치기는 FE에서 방금 끝낸 다섯 번째 반복 문항을 그대로 이어 간다."""
+
+    spec = HOME_TEACHING_CATALOG[curriculum_session_id]
+    task = home_teaching_task(spec, skill_id=spec.id)
+    sample = spec.sample_problem
+
+    assert spec.content_version == 8
+    assert sample["prompt"] == expected["prompt"]
+    assert sample["correct"] == expected["correct"]
+    assert sample["correct"] in sample["answers"]
+    assert sample["visual"]["type"] == "money-practice"
+    assert sample["visual"]["facts"]
+    assert sample["visual"]["items"]
+    assert sample["visual"]["equation"]
+
+    assert task.visible_facts["sample_answer"] == expected["correct"]
+    assert task.visible_facts["sample_problem"]["prompt"] == expected["prompt"]
+    assert "correct" not in task.visible_facts["sample_problem"]
+    assert task.base_visual.type == "home_teaching"
+    assert task.base_visual.data["problem"] == task.visible_facts["sample_problem"]
+    assert task.base_visual.data["problem"]["visual"]["type"] == "money-practice"
+
+
+@pytest.mark.parametrize("curriculum_session_id", PARK_PREPARATION_HOME_CASES)
+def test_park_preparation_home_expression_ladders_keep_answer_and_method_separate(
+    curriculum_session_id: str,
+) -> None:
+    spec = HOME_TEACHING_CATALOG[curriculum_session_id]
+    task = home_teaching_task(spec, skill_id=spec.id)
+
+    assert ExpressionLevel.L1 not in task.steps
+
+    l4 = task.steps[ExpressionLevel.L4]
+    assert len(l4) == 1
+    assert l4[0].target_slots == ["answer", "rule"]
+    assert l4[0].input.kind is InputKind.TEXT
+    assert l4[0].prompt == spec.effective_l4_prompt
+
+    l3 = task.steps[ExpressionLevel.L3]
+    assert [step.target_slots for step in l3] == [["answer"], ["rule"]]
+    assert all(step.input.kind is InputKind.TEXT for step in l3)
+    assert l3[0].prompt == spec.answer_followup_prompt
+    assert l3[1].prompt == spec.short_prompt
+    assert l3[0].prompt != l3[1].prompt
+
+    l2 = task.steps[ExpressionLevel.L2]
+    assert [step.target_slots for step in l2] == [["answer"], ["rule"]]
+    assert all(step.input.kind is InputKind.CHOICES for step in l2)
+    assert [choice.label for choice in l2[0].input.choices] == [
+        str(answer) for answer in spec.sample_problem["answers"]
+    ]
+    assert [choice.label for choice in l2[1].input.choices] == spec.short_options
+    assert any(
+        effects == {"answer": spec.sample_problem["correct"]}
+        for effects in l2[0].choice_effects.values()
+    )
+    assert any(
+        effects == {"rule": spec.learned_line}
+        for effects in l2[1].choice_effects.values()
+    )
+
+    l0 = task.steps[ExpressionLevel.L0]
+    assert len(l0) == 1
+    assert l0[0].target_slots == ["answer", "rule"]
+    assert l0[0].input.kind is InputKind.JOINT
+    assert l0[0].input.config["completion_values"] == {
+        "answer": spec.sample_problem["correct"],
+        "rule": spec.learned_line,
+    }
+
+
+@pytest.mark.parametrize(
+    ("curriculum_session_id", "expected"),
+    PARK_PREPARATION_HOME_CASES.items(),
+)
+def test_park_preparation_home_hint_ladder_is_progressive_and_grounded(
+    curriculum_session_id: str,
+    expected: dict[str, object],
+) -> None:
+    spec = HOME_TEACHING_CATALOG[curriculum_session_id]
+    task = home_teaching_task(spec, skill_id=spec.id)
+    h1 = task.hints[HintLevel.H1]
+    h2 = task.hints[HintLevel.H2]
+    h3 = task.hints[HintLevel.H3]
+    answer = str(expected["correct"])
+
+    assert (h1.support_type, h1.answer_policy, h1.support_mode) == (
+        "attention",
+        "hidden",
+        "attention",
+    )
+    assert answer not in h1.body
+    assert set(h1.fact_refs) <= set(task.visible_facts)
+
+    assert (h2.support_type, h2.answer_policy, h2.support_mode) == (
+        "guided_action",
+        "partial",
+        expected["h2_mode"],
+    )
+    assert answer not in h2.body
+    assert h2.action
+    assert set(h2.fact_refs) <= set(task.visible_facts)
+    assert h2.visual_data["visual"]["type"] == "money-practice"
+
+    assert (h3.support_type, h3.answer_policy, h3.support_mode) == (
+        "joint_model",
+        "revealed",
+        "joint_model",
+    )
+    assert answer in h3.body
+    assert h3.action
+    assert set(h3.fact_refs) <= set(task.visible_facts)
+    assert task.steps[ExpressionLevel.L0][0].input.config["text"] == h3.body
+    assert len({h1.body, h2.body, h3.body}) == 3
+
+
+@pytest.mark.parametrize(
+    ("curriculum_session_id", "expected"),
+    PARK_PREPARATION_HOME_CASES.items(),
+)
+def test_park_preparation_money_practice_has_deterministic_arithmetic_truth(
+    curriculum_session_id: str,
+    expected: dict[str, object],
+) -> None:
+    spec = HOME_TEACHING_CATALOG[curriculum_session_id]
+    task = home_teaching_task(spec, skill_id=spec.id)
+    contract = task.arithmetic_contract
+
+    assert spec.sample_problem["visual"]["type"] == "money-practice"
+    assert contract is not None
+    assert contract.operation == expected["operation"]
+    assert contract.left == expected["left"]
+    assert contract.right == expected["right"]
+    assert contract.result == expected["result"]
+    assert contract.unit == expected["unit"]
 
 
 def test_number_count_copy_sounds_like_a_younger_sibling_asking_for_help() -> None:
