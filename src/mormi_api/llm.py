@@ -116,6 +116,18 @@ def _safe_provider_error_code(error: APIConnectionError | APIStatusError) -> str
     status = error.status_code
     body_text = str(error.body).lower()
     if status == 400:
+        if (
+            "credit balance" in body_text
+            or "purchase credits" in body_text
+            or "billing" in body_text
+        ):
+            return "model_credit_exhausted"
+        if "organization" in body_text and ("disabled" in body_text or "deactivated" in body_text):
+            return "model_account_disabled"
+        if "context" in body_text and ("limit" in body_text or "too long" in body_text):
+            return "model_context_limit"
+        if "message" in body_text and ("empty" in body_text or "invalid" in body_text):
+            return "model_message_invalid"
         if "additionalproperties" in body_text:
             return "structured_schema_not_strict"
         if "schema is too complex" in body_text or "compiled grammar is too large" in body_text:

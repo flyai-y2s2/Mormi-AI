@@ -437,6 +437,10 @@ def _model_error_code(error: ModelUnavailableError | ModelOutputError) -> str:
     allowed = {
         "model_connection_failed",
         "model_bad_request",
+        "model_credit_exhausted",
+        "model_account_disabled",
+        "model_context_limit",
+        "model_message_invalid",
         "model_auth_failed",
         "model_forbidden",
         "model_not_found",
