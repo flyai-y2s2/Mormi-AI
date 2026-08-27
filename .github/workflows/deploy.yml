@@ -80,6 +80,11 @@ jobs:
             echo "no running mormi-ai image is available for the V2 kill switch"
             exit 1
           fi
+          current_health="$(curl -fsS http://localhost:8000/health 2>/dev/null || true)"
+          EMERGENCY_RUNTIME_CONTRACT_VERSION="legacy-v1"
+          if printf '%s' "${current_health}" | grep -q '"verdict-v1"'; then
+            EMERGENCY_RUNTIME_CONTRACT_VERSION="verdict-v1"
+          fi
 
           docker network create mormi-services 2>/dev/null || true
           docker rm -f mormi-ai-canary-zero 2>/dev/null || true
@@ -88,6 +93,7 @@ jobs:
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
             -e MORMI_ENVIRONMENT=production \
+            -e MORMI_RUNTIME_CONTRACT_VERSION="${EMERGENCY_RUNTIME_CONTRACT_VERSION}" \
             -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -147,6 +153,7 @@ jobs:
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
             -e MORMI_ENVIRONMENT=production \
+            -e MORMI_RUNTIME_CONTRACT_VERSION="${EMERGENCY_RUNTIME_CONTRACT_VERSION}" \
             -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -366,6 +373,10 @@ jobs:
               | grep -q '"dialogue-v3-snapshot-reader-v1"'; then
             previous_supports_v2="yes"
           fi
+          ROLLBACK_RUNTIME_CONTRACT_VERSION="legacy-v1"
+          if [ -n "${previous_supports_v2}" ]; then
+            ROLLBACK_RUNTIME_CONTRACT_VERSION="verdict-v1"
+          fi
 
           MIGRATION_TARGET="20260826_05"
           EXPECTED_IDENTITY_SCHEMA_PHASE="transition"
@@ -446,6 +457,7 @@ jobs:
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
             -e MORMI_ENVIRONMENT=production \
+            -e MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1 \
             "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -568,6 +580,15 @@ jobs:
                 "${PERSISTED_CANARY_PERCENT}" >> "${CANARY_ENV_FILE}"
             fi
           fi
+          RUNTIME_ENV_FILE=/etc/mormi-ai/mormi.env
+          if grep -q '^MORMI_RUNTIME_CONTRACT_VERSION=' "${RUNTIME_ENV_FILE}"; then
+            sed -i \
+              's/^MORMI_RUNTIME_CONTRACT_VERSION=.*/MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1/' \
+              "${RUNTIME_ENV_FILE}"
+          else
+            printf '\nMORMI_RUNTIME_CONTRACT_VERSION=verdict-v1\n' \
+              >> "${RUNTIME_ENV_FILE}"
+          fi
           docker rm -f mormi-ai-candidate
 
           # 검증된 후보로 API를 교체합니다.
@@ -578,6 +599,7 @@ jobs:
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
             -e MORMI_ENVIRONMENT=production \
+            -e MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1 \
             "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -616,6 +638,7 @@ jobs:
                 --network mormi-services \
                 --env-file /etc/mormi-ai/mormi.env \
                 -e MORMI_ENVIRONMENT=production \
+                -e MORMI_RUNTIME_CONTRACT_VERSION="${ROLLBACK_RUNTIME_CONTRACT_VERSION}" \
                 "${DEPLOY_CANARY_ARGS[@]}" \
                 -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
                 -e MORMI_CLASSIFIER_EFFORT=low \

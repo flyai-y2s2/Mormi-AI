@@ -98,6 +98,11 @@ def test_emergency_canary_zero_path_skips_build_migration_and_prewarm() -> None:
     assert "inputs.deployment_action == 'disable-v2'" in emergency
     assert "MORMI_DIALOGUE_V2_CANARY_PERCENT=0" in emergency
     assert "CURRENT_IMAGE" in emergency
+    assert 'EMERGENCY_RUNTIME_CONTRACT_VERSION="legacy-v1"' in emergency
+    assert 'EMERGENCY_RUNTIME_CONTRACT_VERSION="verdict-v1"' in emergency
+    assert emergency.count(
+        'MORMI_RUNTIME_CONTRACT_VERSION="${EMERGENCY_RUNTIME_CONTRACT_VERSION}"'
+    ) == 2
     assert "docker build" not in emergency
     assert "scripts/migrate_database.py" not in emergency
     assert "scripts/prewarm_dialogue_v2_copy.py" not in emergency
@@ -149,11 +154,20 @@ def test_scenario_identity_uses_two_phase_migration_and_reader_safe_rollback() -
     assert 'PERSISTED_CANARY_PERCENT="0"' in workflow
 
 
-def test_live_api_uses_env_owned_runtime_flag_instead_of_forcing_legacy() -> None:
+def test_live_api_persists_verdict_runtime_and_rollback_matches_previous_reader() -> None:
     workflow = _workflow()
     candidate_and_live = workflow[workflow.index("--name mormi-ai-candidate") :]
 
-    # The one migration container may force legacy because it never serves a
-    # conversation. Candidate, live, rollback, and worker containers must keep
-    # the env-file value so pinned verdict-v1 conversations remain readable.
-    assert "MORMI_RUNTIME_CONTRACT_VERSION=legacy-v1" not in candidate_and_live
+    # Candidate and live start as verdict readers even while assignment stays
+    # at zero. The host source of truth is updated only after candidate gates;
+    # an older rollback image is explicitly given the runtime it can read.
+    assert candidate_and_live.count(
+        "MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1"
+    ) >= 3
+    assert 'ROLLBACK_RUNTIME_CONTRACT_VERSION="legacy-v1"' in workflow
+    assert 'ROLLBACK_RUNTIME_CONTRACT_VERSION="verdict-v1"' in workflow
+    assert (
+        'MORMI_RUNTIME_CONTRACT_VERSION="${ROLLBACK_RUNTIME_CONTRACT_VERSION}"'
+        in workflow
+    )
+    assert "^MORMI_RUNTIME_CONTRACT_VERSION=" in workflow
