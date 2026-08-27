@@ -1699,6 +1699,7 @@ class SpeakerRuntimeAudit(BaseModel):
         "not_applicable",
         "hit",
         "generated",
+        "seeded_reviewed_fallback",
         "contended_fallback",
         "generation_fallback",
         "reviewed_fallback",

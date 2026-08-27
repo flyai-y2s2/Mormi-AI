@@ -474,6 +474,40 @@ async def test_guard_rejection_records_backoff_and_returns_reviewed_fallback(
 
 
 @pytest.mark.asyncio
+async def test_l0_guard_rejection_caches_only_reviewed_joint_fallback(
+    tmp_path: Path,
+) -> None:
+    item = next(
+        candidate
+        for candidate in build_stable_copy_work_items_v2(
+            required_home_content_pack_v2("money-budget")
+        )
+        if candidate.plan.purpose == "l0_intro"
+    )
+    generator = ReviewedCopyGenerator(
+        _fallbacks(),
+        invalid_slot=item.plan.copy_slot,
+    )
+    database, repository, resolver = await _runtime(tmp_path, generator)
+
+    result = await resolver.resolve(
+        item.plan,
+        reviewed_fallback=item.reviewed_fallback,
+        pack_hash=item.pack_hash,
+        output_firewall=item.output_firewall,
+    )
+    ready = await repository.get_ready(result.full_cache_key)
+
+    assert result.status == "seeded_reviewed_fallback"
+    assert result.text == item.reviewed_fallback
+    assert result.fallback_reason is None
+    assert ready is not None
+    assert ready.artifact["metadata"]["origin"] == "reviewed_fallback"
+    assert ready.artifact["output"]["text"] == item.reviewed_fallback
+    await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_busy_lease_uses_fallback_without_calling_generator(
     tmp_path: Path,
 ) -> None:

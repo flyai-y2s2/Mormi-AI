@@ -106,6 +106,7 @@ StableCopyResolutionStatusV2 = Literal[
     "pinned",
     "hit",
     "generated",
+    "seeded_reviewed_fallback",
     "contended_fallback",
     "generation_fallback",
     "reviewed_fallback",
@@ -720,14 +721,14 @@ class StableCopyResolverV2:
         *,
         plan: StableCopyPlanV2,
         pack_hash: str,
-        status: Literal["hit", "generated"],
+        status: Literal["hit", "generated", "seeded_reviewed_fallback"],
         output_firewall: StableCopyOutputFirewallV2,
     ) -> StableCopyResolutionV2:
         envelope = StableCopyCacheArtifactV2.model_validate(artifact.artifact)
         expected = self._metadata(
             plan,
             pack_hash,
-            origin="generated",
+            origin=envelope.metadata.origin,
             generated_at=envelope.metadata.generated_at,
         )
         if envelope.metadata != expected:
@@ -979,6 +980,49 @@ class StableCopyResolverV2:
             forbidden_surfaces=output_firewall.forbidden_surfaces,
         )
         if violation is not None:
+            if plan.purpose in {"l0_intro", "l0_action"}:
+                # L0 copy is deliberately reviewed-only: the child-facing text
+                # may ask for joint action, but it must never learn or restate
+                # anything from the fully revealed H3 card.  If a generated
+                # draft crosses that boundary, persist the reviewed fallback as
+                # the immutable artifact instead of retrying unsafe drafts.
+                metadata = self._metadata(
+                    plan,
+                    pack_hash,
+                    origin="reviewed_fallback",
+                    generated_at=utc_now(),
+                )
+                envelope = StableCopyCacheArtifactV2(
+                    output=fallback,
+                    metadata=metadata,
+                )
+                try:
+                    completed = await self.repository.complete(
+                        lease,
+                        artifact=envelope.model_dump(mode="json"),
+                    )
+                except Exception:
+                    completed = None
+                if completed is not None:
+                    return self._from_cached_artifact(
+                        completed,
+                        plan=plan,
+                        pack_hash=pack_hash,
+                        status="seeded_reviewed_fallback",
+                        output_firewall=output_firewall,
+                    )
+                try:
+                    winner = await self.repository.get_ready(cache_key)
+                except Exception:
+                    winner = None
+                if winner is not None:
+                    return self._from_cached_artifact(
+                        winner,
+                        plan=plan,
+                        pack_hash=pack_hash,
+                        status="hit",
+                        output_firewall=output_firewall,
+                    )
             await self._mark_failure(lease, "OUTPUT_GUARD_REJECTED")
             return self._fallback_result(
                 plan,
@@ -1063,7 +1107,11 @@ async def prewarm_required_home_copy_v2(
             pack_hash=item.pack_hash,
             output_firewall=item.output_firewall,
         )
-        if resolution.status not in {"hit", "generated"}:
+        if resolution.status not in {
+            "hit",
+            "generated",
+            "seeded_reviewed_fallback",
+        }:
             failures.append(
                 PrewarmFailureV2(
                     pack_id=item.plan.pack_id,

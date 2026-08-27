@@ -126,6 +126,7 @@ class StableCopyResolution:
     status: Literal[
         "hit",
         "generated",
+        "seeded_reviewed_fallback",
         "contended_fallback",
         "generation_fallback",
         "reviewed_fallback",
@@ -452,7 +453,11 @@ class DialogueV2Engine:
                 text, mood = stable.text, stable.mood
                 source = (
                     "stable_copy_cache"
-                    if stable.status in {"hit", "generated"}
+                    if stable.status in {
+                        "hit",
+                        "generated",
+                        "seeded_reviewed_fallback",
+                    }
                     else "stable_copy_fallback"
                 )
                 fallback_reason = None
