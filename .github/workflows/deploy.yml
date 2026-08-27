@@ -391,15 +391,32 @@ jobs:
           # Stable copy is a deployment artifact, not a live child-request side
           # effect.  Prewarm every reviewed V2 slot after the additive migration;
           # any missing/invalid ready row blocks the candidate before traffic moves.
-          docker run --rm \
-            --network mormi-services \
-            --env-file /etc/mormi-ai/mormi.env \
-            -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
-            -e MORMI_STABLE_COPY_EFFORT=low \
-            -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
-            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
-            "${IMAGE_URI}" \
-            python scripts/prewarm_dialogue_v2_copy.py
+          # Provider latency and a single rejected draft are transient here: retry
+          # the still-missing immutable rows, while keeping the final gate strict.
+          # The cache backoff is at most eight seconds across these three attempts.
+          PREWARM_READY=false
+          for PREWARM_ATTEMPT in 1 2 3; do
+            if docker run --rm \
+              --network mormi-services \
+              --env-file /etc/mormi-ai/mormi.env \
+              -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+              -e MORMI_STABLE_COPY_EFFORT=low \
+              -e MORMI_STABLE_COPY_TIMEOUT_SECONDS=20 \
+              -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+              -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+              "${IMAGE_URI}" \
+              python scripts/prewarm_dialogue_v2_copy.py; then
+              PREWARM_READY=true
+              break
+            fi
+            if [ "${PREWARM_ATTEMPT}" -lt 3 ]; then
+              sleep 12
+            fi
+          done
+          if [ "${PREWARM_READY}" != "true" ]; then
+            echo "Stable-copy prewarm did not produce all 45 validated ready artifacts" >&2
+            exit 1
+          fi
 
           # A warm copy cache does not exercise the live classifier or the
           # child-facing Haiku schema. Verify both provider roles with a
