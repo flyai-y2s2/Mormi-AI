@@ -504,19 +504,34 @@ jobs:
           # A warm copy cache does not exercise the live classifier or the
           # child-facing Haiku schema. Verify both provider roles with a
           # synthetic, PII-free contract before starting the candidate API.
-          docker run --rm \
-            --network mormi-services \
-            --env-file /etc/mormi-ai/mormi.env \
-            -e MORMI_ENVIRONMENT=production \
-            -e MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1 \
-            -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
-            -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
-            -e MORMI_CLASSIFIER_EFFORT=low \
-            -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
-            -e MORMI_SPEAKER_EFFORT=low \
-            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
-            "${IMAGE_URI}" \
-            python scripts/smoke_dialogue_v2_models.py
+          # A single provider-side availability failure must not force another
+          # image build, but all bounded attempts must pass the exact schemas.
+          MODEL_SMOKE_READY=false
+          for MODEL_SMOKE_ATTEMPT in 1 2 3; do
+            if docker run --rm \
+              --network mormi-services \
+              --env-file /etc/mormi-ai/mormi.env \
+              -e MORMI_ENVIRONMENT=production \
+              -e MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1 \
+              -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
+              -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+              -e MORMI_CLASSIFIER_EFFORT=low \
+              -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
+              -e MORMI_SPEAKER_EFFORT=low \
+              -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+              "${IMAGE_URI}" \
+              python scripts/smoke_dialogue_v2_models.py; then
+              MODEL_SMOKE_READY=true
+              break
+            fi
+            if [ "${MODEL_SMOKE_ATTEMPT}" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+          if [ "${MODEL_SMOKE_READY}" != "true" ]; then
+            echo "Sonnet understanding and Haiku speaker smoke failed all attempts" >&2
+            exit 1
+          fi
 
           # 실제 API를 내리기 전에 동일한 환경의 후보 컨테이너를 먼저 확인합니다.
           docker rm -f mormi-ai-candidate 2>/dev/null || true

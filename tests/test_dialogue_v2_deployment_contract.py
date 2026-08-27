@@ -24,6 +24,9 @@ def test_v2_copy_is_migrated_and_prewarmed_before_candidate_start() -> None:
     assert 'if [ "${PREWARM_ATTEMPT}" -lt 3 ]' in workflow
     assert "sleep 12" in workflow
     assert "Stable-copy prewarm did not produce all 45 validated ready artifacts" in workflow
+    assert "for MODEL_SMOKE_ATTEMPT in 1 2 3" in workflow
+    assert 'if [ "${MODEL_SMOKE_ATTEMPT}" -lt 3 ]' in workflow
+    assert "Sonnet understanding and Haiku speaker smoke failed all attempts" in workflow
     # A stale host env file must not revive cache artifacts accepted by the
     # weaker pre-firewall validator in prewarm, candidate, live, rollback, or worker.
     assert workflow.count(
