@@ -120,6 +120,18 @@ def _safe_provider_error_code(error: APIConnectionError | APIStatusError) -> str
             return "structured_schema_not_strict"
         if "schema is too complex" in body_text or "compiled grammar is too large" in body_text:
             return "structured_schema_too_complex"
+        if "union" in body_text and ("limit" in body_text or "maximum" in body_text):
+            return "structured_schema_union_limit"
+        if "optional" in body_text and ("limit" in body_text or "maximum" in body_text):
+            return "structured_schema_optional_limit"
+        if "effort" in body_text:
+            return "model_effort_invalid"
+        if "temperature" in body_text:
+            return "model_temperature_invalid"
+        if "max_tokens" in body_text or "max tokens" in body_text:
+            return "model_max_tokens_invalid"
+        if "request too large" in body_text or "prompt is too long" in body_text:
+            return "model_request_too_large"
         if "output_config" in body_text or "json_schema" in body_text or "schema" in body_text:
             return "structured_schema_invalid"
         return "model_bad_request"

@@ -105,3 +105,7 @@ def test_model_smoke_failure_diagnostics_are_bounded_codes() -> None:
         )
         == "understanding_model_bad_request"
     )
+    assert (
+        safe_model_smoke_error_code(ModelUnavailableError("model_effort_invalid"))
+        == "model_effort_invalid"
+    )

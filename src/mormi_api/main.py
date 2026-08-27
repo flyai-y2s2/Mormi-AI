@@ -444,7 +444,13 @@ def _model_error_code(error: ModelUnavailableError | ModelOutputError) -> str:
         "model_provider_unavailable",
         "structured_schema_not_strict",
         "structured_schema_too_complex",
+        "structured_schema_union_limit",
+        "structured_schema_optional_limit",
         "structured_schema_invalid",
+        "model_effort_invalid",
+        "model_temperature_invalid",
+        "model_max_tokens_invalid",
+        "model_request_too_large",
     }
     code = str(error)
     if code in allowed:
