@@ -77,6 +77,9 @@ def test_natural_speaker_timeouts_are_bounded_but_not_overly_aggressive(
     monkeypatch.delenv("MORMI_BRIDGE_MODEL", raising=False)
     monkeypatch.delenv("MORMI_SPEAKER_MODEL", raising=False)
     monkeypatch.delenv("MORMI_SPEAKER_EFFORT", raising=False)
+    monkeypatch.delenv("MORMI_STAR_NOTE_MODEL", raising=False)
+    monkeypatch.delenv("MORMI_REPORT_MODEL", raising=False)
+    monkeypatch.delenv("MORMI_CLASSIFIER_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MORMI_SPEAKER_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MORMI_BRIDGE_TIMEOUT_SECONDS", raising=False)
 
@@ -84,10 +87,13 @@ def test_natural_speaker_timeouts_are_bounded_but_not_overly_aggressive(
     engine = ConversationEngine(FakeGateway([]))  # type: ignore[arg-type]
 
     assert settings.classifier_model == "claude-sonnet-4-6"
-    assert settings.classifier_effort == "medium"
+    assert settings.classifier_effort == "low"
     assert settings.bridge_model == "claude-haiku-4-5-20251001"
-    assert settings.speaker_model == "claude-sonnet-4-6"
+    assert settings.speaker_model == "claude-haiku-4-5-20251001"
     assert settings.speaker_effort == "low"
+    assert settings.star_note_model == "claude-haiku-4-5-20251001"
+    assert settings.report_model == "claude-sonnet-4-6"
+    assert settings.classifier_timeout_seconds == 15.0
     assert settings.speaker_timeout_seconds == 10.0
     assert settings.bridge_timeout_seconds == 4.0
     assert engine.speaker_timeout_seconds == 10.0

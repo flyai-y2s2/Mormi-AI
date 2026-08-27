@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .schemas import DialogueRuntimeContractVersion
+
 EffortLevel = Literal["low", "medium", "high", "max"]
 
 
@@ -19,10 +21,39 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/mormi.db"
     anthropic_api_key: str | None = None
     classifier_model: str = "claude-sonnet-4-6"
-    classifier_effort: EffortLevel = "medium"
+    classifier_effort: EffortLevel = "low"
     bridge_model: str = "claude-haiku-4-5-20251001"
-    speaker_model: str = "claude-sonnet-4-6"
+    speaker_model: str = "claude-haiku-4-5-20251001"
     speaker_effort: EffortLevel = "low"
+    star_note_model: str = "claude-haiku-4-5-20251001"
+    # Teacher-facing summaries are not Mormi dialogue. Keep their existing
+    # Sonnet model independent from the child-facing speaker selection.
+    report_model: str = "claude-sonnet-4-6"
+    # This is an enum-valued feature flag. Only newly created conversations
+    # receive the configured value; existing conversations use their pinned
+    # state snapshot.
+    runtime_contract_version: DialogueRuntimeContractVersion = (
+        DialogueRuntimeContractVersion.LEGACY_V1
+    )
+    # V2 is assigned only to new conversations backed by a native home pack or
+    # a reviewed cafe/amusement scenario pack. A stable server-side hash selects
+    # the configured percentage and the chosen runtime is persisted in state.
+    dialogue_v2_canary_percent: int = Field(default=0, ge=0, le=100)
+    dialogue_v2_canary_salt: str = Field(
+        default="mormi-dialogue-v2-default",
+        min_length=8,
+        max_length=200,
+    )
+    stable_copy_model: str = "claude-sonnet-4-6"
+    stable_copy_effort: EffortLevel = "low"
+    stable_copy_timeout_seconds: float = Field(default=8.0, ge=0.5, le=30)
+    stable_copy_prompt_version: str = Field(default="stable-copy-v1", min_length=1)
+    stable_copy_schema_version: str = Field(default="stable-copy-output-v1", min_length=1)
+    stable_copy_validator_version: str = Field(default="stable-copy-validator-v2", min_length=1)
+    stable_copy_cache_lease_seconds: float = Field(default=30.0, ge=2, le=300)
+    stable_copy_cache_retry_base_seconds: float = Field(default=2.0, ge=0.1, le=300)
+    stable_copy_cache_retry_max_seconds: float = Field(default=120.0, ge=1, le=3600)
+    classifier_timeout_seconds: float = Field(default=15.0, ge=0.5, le=60)
     speaker_timeout_seconds: float = Field(default=10.0, ge=0.5, le=30)
     bridge_timeout_seconds: float = Field(default=4.0, ge=0.5, le=10)
     raw_data_encryption_key: str | None = None
@@ -72,6 +103,22 @@ class Settings(BaseSettings):
         return self.ladder_analysis_worker_enabled and self.ladder_model_dir is not None
 
     def validate_runtime_safety(self) -> None:
+        if (
+            self.dialogue_v2_canary_percent
+            and self.runtime_contract_version is not DialogueRuntimeContractVersion.VERDICT_V1
+        ):
+            raise RuntimeError(
+                "MORMI_DIALOGUE_V2_CANARY_PERCENT requires "
+                "MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1"
+            )
+        if (
+            self.stable_copy_cache_retry_max_seconds
+            < self.stable_copy_cache_retry_base_seconds
+        ):
+            raise RuntimeError(
+                "MORMI_STABLE_COPY_CACHE_RETRY_MAX_SECONDS must be greater than or "
+                "equal to MORMI_STABLE_COPY_CACHE_RETRY_BASE_SECONDS"
+            )
         if self.skip_startup_maintenance and self.environment.lower() not in {
             "local",
             "development",

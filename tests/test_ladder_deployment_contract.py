@@ -12,11 +12,12 @@ def test_runtime_image_installs_inference_dependencies() -> None:
 
 def test_deployment_preflights_model_before_replacing_api() -> None:
     workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
+    normal_deploy = workflow[workflow.index("  deploy:") :]
 
-    preflight = workflow.index("scripts/check_ladder_runtime.py")
-    replace_api = workflow.index("docker rm -f mormi-ai")
+    preflight = normal_deploy.index("scripts/check_ladder_runtime.py")
+    replace_api = normal_deploy.index("docker rm -f mormi-ai")
     assert preflight < replace_api
-    assert "/opt/mormi/models:/opt/mormi/models:ro" in workflow
+    assert "/opt/mormi/models:/opt/mormi/models:ro" in normal_deploy
 
 
 def test_deployment_separates_api_and_ladder_worker() -> None:
@@ -36,9 +37,10 @@ def test_deployment_overrides_stale_ec2_dialogue_model_settings() -> None:
     workflow = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
 
     assert workflow.count("MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6") >= 3
-    assert workflow.count("MORMI_CLASSIFIER_EFFORT=medium") >= 3
-    assert workflow.count("MORMI_SPEAKER_MODEL=claude-sonnet-4-6") >= 3
+    assert workflow.count("MORMI_CLASSIFIER_EFFORT=low") >= 3
+    assert workflow.count("MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001") >= 3
     assert workflow.count("MORMI_SPEAKER_EFFORT=low") >= 3
+    assert workflow.count("MORMI_REPORT_MODEL=claude-sonnet-4-6") >= 3
 
 
 def test_deployment_health_checks_candidate_before_removing_live_api() -> None:

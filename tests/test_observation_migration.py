@@ -9,6 +9,7 @@ from alembic.config import Config
 from conftest import FakeGateway
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, delete, inspect, select
+from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from mormi_api.db import (
@@ -146,6 +147,7 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
         assert "dialogue_task_outcomes" in tables
         assert "note_evidence_links" in tables
         assert "ai_outbox_events" in tables
+        assert "dialogue_generated_copy_cache" in tables
         observation_columns = {
             column["name"]
             for column in inspect(connection).get_columns(
@@ -157,7 +159,37 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
             constraint["name"]
             for constraint in inspect(connection).get_unique_constraints("conversations")
         }
-        assert "uq_conversation_learning_session_round" in conversation_unique_constraints
+        assert (
+            "uq_conversation_learning_session_scene_scenario_round"
+            in conversation_unique_constraints
+        )
+        assert "uq_conversation_learning_session_round" not in conversation_unique_constraints
+        cache_columns = {
+            column["name"]
+            for column in inspect(connection).get_columns(
+                "dialogue_generated_copy_cache"
+            )
+        }
+        assert {
+            "cache_key",
+            "key_version",
+            "status",
+            "attempts",
+            "available_at",
+            "lease_token",
+            "artifact_json",
+            "artifact_sha256",
+            "last_error_code",
+            "ready_at",
+            "created_at",
+            "updated_at",
+        } == cache_columns
+        assert {
+            index["name"]
+            for index in inspect(connection).get_indexes(
+                "dialogue_generated_copy_cache"
+            )
+        } == {"ix_dialogue_generated_copy_cache_available"}
 
     command.downgrade(config, "base")
     with engine.connect() as connection:
@@ -167,6 +199,111 @@ def test_additive_migration_preserves_legacy_conversation_and_turn_rows(
         assert connection.execute(
             select(TurnRecord.turn_id)
         ).scalar_one() == "turn_legacy"
+        assert "dialogue_generated_copy_cache" not in set(
+            inspect(connection).get_table_names()
+        )
+    engine.dispose()
+
+
+def test_scenario_idempotency_migration_preserves_rows_and_rolls_back_safely(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "scenario-idempotency.db"
+    database_url = f"sqlite:///{database_path}"
+    engine = create_engine(database_url)
+    config = _alembic_config(database_url)
+    Base.metadata.create_all(engine)
+    command.stamp(config, "head")
+    command.downgrade(config, "20260825_04")
+
+    def unique_constraints() -> dict[str, tuple[str, ...]]:
+        return {
+            str(constraint["name"]): tuple(constraint.get("column_names") or ())
+            for constraint in inspect(engine).get_unique_constraints("conversations")
+            if constraint.get("name")
+        }
+
+    old_name = "uq_conversation_learning_session_round"
+    new_name = "uq_conversation_learning_session_scene_scenario_round"
+    assert old_name in unique_constraints()
+    assert new_name not in unique_constraints()
+
+    now = utc_now()
+    first_row = {
+        "conversation_id": "conversation_queue",
+        "learner_id": 77,
+        "learning_session_id": "cafe_visit_77",
+        "conversation_round": 1,
+        "scene": "cafe",
+        "scenario_id": "cafe_queue",
+        "state_json": {},
+        "state_version": 1,
+        "status": "active",
+        "raw_retention_until": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with engine.begin() as connection:
+        connection.execute(ConversationRecord.__table__.insert().values(**first_row))
+
+    command.upgrade(config, "20260826_05")
+    constraints = unique_constraints()
+    assert old_name in constraints
+    assert constraints[new_name] == (
+        "learner_id",
+        "learning_session_id",
+        "scene",
+        "scenario_id",
+        "conversation_round",
+    )
+
+    second_row = {
+        **first_row,
+        "conversation_id": "conversation_budget",
+        "scenario_id": "cafe_budget_menu",
+    }
+    # Expand phase still protects the currently live visit-wide reader, so a
+    # second scenario cannot be created until every rollback image is upgraded.
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(ConversationRecord.__table__.insert().values(**second_row))
+
+    command.upgrade(config, "head")
+    constraints = unique_constraints()
+    assert old_name not in constraints
+    assert new_name in constraints
+    with engine.begin() as connection:
+        connection.execute(ConversationRecord.__table__.insert().values(**second_row))
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            ConversationRecord.__table__.insert().values(
+                **{
+                    **first_row,
+                    "conversation_id": "conversation_queue_duplicate",
+                }
+            )
+        )
+
+    command.downgrade(config, "20260826_05")
+    constraints = unique_constraints()
+    assert new_name in constraints
+    assert old_name in constraints
+    with engine.connect() as connection:
+        rows = connection.execute(
+            select(
+                ConversationRecord.conversation_id,
+                ConversationRecord.conversation_round,
+                ConversationRecord.state_json,
+            ).order_by(ConversationRecord.conversation_id)
+        ).all()
+    assert rows == [
+        ("conversation_budget", 1, {"conversation_round": 1}),
+        ("conversation_queue", 2, {"conversation_round": 2}),
+    ]
+
+    command.downgrade(config, "20260825_04")
+    constraints = unique_constraints()
+    assert new_name not in constraints
+    assert old_name in constraints
     engine.dispose()
 
 
@@ -186,7 +323,130 @@ def test_migration_stamps_complete_schema_created_by_app_startup(
         version = connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar_one()
-        assert version == "20260825_03"
+        assert version == "20260826_06"
+    engine.dispose()
+
+
+def test_migration_runner_supports_transition_then_final_on_fresh_schema(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "fresh-expand-contract.db"
+    async_url = f"sqlite+aiosqlite:///{database_path}"
+    sync_url = f"sqlite:///{database_path}"
+    root = Path(__file__).resolve().parents[1]
+
+    transition_phase = apply_database_migrations(
+        async_url,
+        root,
+        target_revision="20260826_05",
+    )
+    engine = create_engine(sync_url)
+    with engine.connect() as connection:
+        constraints = {
+            str(item["name"])
+            for item in inspect(connection).get_unique_constraints("conversations")
+            if item.get("name")
+        }
+        assert connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one() == "20260826_05"
+    assert transition_phase == "transition"
+    assert "uq_conversation_learning_session_round" in constraints
+    assert "uq_conversation_learning_session_scene_scenario_round" in constraints
+    engine.dispose()
+
+    final_phase = apply_database_migrations(async_url, root, target_revision="head")
+    engine = create_engine(sync_url)
+    with engine.connect() as connection:
+        constraints = {
+            str(item["name"])
+            for item in inspect(connection).get_unique_constraints("conversations")
+            if item.get("name")
+        }
+        assert connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one() == "20260826_06"
+    assert final_phase == "final"
+    assert "uq_conversation_learning_session_round" not in constraints
+    assert "uq_conversation_learning_session_scene_scenario_round" in constraints
+    engine.dispose()
+
+
+def test_migration_repairs_missing_copy_cache_index_without_recreating_table(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "startup-created-without-cache-index.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP INDEX ix_dialogue_generated_copy_cache_available"
+        )
+
+    apply_database_migrations(
+        f"sqlite+aiosqlite:///{database_path}",
+        Path(__file__).resolve().parents[1],
+    )
+
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one() == "20260826_06"
+        assert {
+            index["name"]
+            for index in inspect(connection).get_indexes(
+                "dialogue_generated_copy_cache"
+            )
+        } == {"ix_dialogue_generated_copy_cache_available"}
+    engine.dispose()
+
+
+def test_migration_upgrades_complete_unversioned_baseline_through_current_head(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "unversioned-baseline.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    config = _alembic_config(sync_url)
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE dialogue_generated_copy_cache")
+    command.stamp(config, "20260825_03")
+    command.downgrade(config, "20260823_02")
+    with engine.begin() as connection:
+        assert "conversation_round" not in {
+            column["name"]
+            for column in inspect(connection).get_columns("conversations")
+        }
+        assert "dialogue_generated_copy_cache" not in set(
+            inspect(connection).get_table_names()
+        )
+        connection.exec_driver_sql("DROP TABLE alembic_version")
+
+    apply_database_migrations(
+        f"sqlite+aiosqlite:///{database_path}",
+        Path(__file__).resolve().parents[1],
+    )
+
+    with engine.connect() as connection:
+        version = connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one()
+        assert version == "20260826_06"
+        assert "conversation_round" in {
+            column["name"]
+            for column in inspect(connection).get_columns("conversations")
+        }
+        assert "dialogue_generated_copy_cache" in set(
+            inspect(connection).get_table_names()
+        )
+        assert {
+            index["name"]
+            for index in inspect(connection).get_indexes(
+                "dialogue_generated_copy_cache"
+            )
+        } == {"ix_dialogue_generated_copy_cache_available"}
     engine.dispose()
 
 
@@ -226,6 +486,122 @@ def test_migration_refuses_head_version_with_a_missing_observation_table(
         connection.exec_driver_sql("DROP TABLE dialogue_claims")
 
     with pytest.raises(RuntimeError, match="dialogue_claims:missing_table"):
+        apply_database_migrations(
+            f"sqlite+aiosqlite:///{database_path}",
+            Path(__file__).resolve().parents[1],
+        )
+
+    engine.dispose()
+
+
+def test_migration_refuses_head_version_with_a_missing_copy_cache_table(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "head-without-copy-cache.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    config = _alembic_config(sync_url)
+    command.stamp(config, "head")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE dialogue_generated_copy_cache")
+
+    with pytest.raises(
+        RuntimeError,
+        match="dialogue_generated_copy_cache:missing_table",
+    ):
+        apply_database_migrations(
+            f"sqlite+aiosqlite:///{database_path}",
+            Path(__file__).resolve().parents[1],
+        )
+
+    engine.dispose()
+
+
+def test_migration_refuses_head_version_without_conversation_round_contract(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "head-without-conversation-round.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    config = _alembic_config(sync_url)
+    command.stamp(config, "head")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE conversations")
+        connection.exec_driver_sql(
+            "CREATE TABLE conversations (conversation_id VARCHAR(100) PRIMARY KEY)"
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="conversations:missing_column:conversation_round",
+    ):
+        apply_database_migrations(
+            f"sqlite+aiosqlite:///{database_path}",
+            Path(__file__).resolve().parents[1],
+        )
+
+    engine.dispose()
+
+
+def test_migration_refuses_head_version_without_scenario_round_unique_constraint(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "head-without-round-unique.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    config = _alembic_config(sync_url)
+    command.stamp(config, "head")
+    with engine.begin() as connection:
+        # CTAS preserves every column but intentionally drops constraints and
+        # indexes, reproducing a manually stamped partial schema.
+        connection.exec_driver_sql(
+            "CREATE TABLE conversations_partial AS SELECT * FROM conversations"
+        )
+        connection.exec_driver_sql("DROP TABLE conversations")
+        connection.exec_driver_sql(
+            "ALTER TABLE conversations_partial RENAME TO conversations"
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "conversations:missing_unique:"
+            "uq_conversation_learning_session_scene_scenario_round"
+        ),
+    ):
+        apply_database_migrations(
+            f"sqlite+aiosqlite:///{database_path}",
+            Path(__file__).resolve().parents[1],
+        )
+
+    engine.dispose()
+
+
+def test_migration_refuses_head_version_with_obsolete_visit_wide_unique(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "head-with-obsolete-visit-unique.db"
+    sync_url = f"sqlite:///{database_path}"
+    engine = create_engine(sync_url)
+    Base.metadata.create_all(engine)
+    config = _alembic_config(sync_url)
+    command.stamp(config, "head")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX uq_conversation_learning_session_round "
+            "ON conversations (learner_id, learning_session_id, conversation_round)"
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "conversations:obsolete_unique:"
+            "uq_conversation_learning_session_round"
+        ),
+    ):
         apply_database_migrations(
             f"sqlite+aiosqlite:///{database_path}",
             Path(__file__).resolve().parents[1],

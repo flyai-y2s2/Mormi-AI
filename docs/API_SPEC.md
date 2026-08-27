@@ -62,12 +62,30 @@ X-Mormi-Service-Key: <service-key>
 {
   "status": "ok",
   "llm_configured": true,
-  "database": "postgresql"
+  "database": "postgresql",
+  "environment": "production",
+  "runtime_contract_version": "verdict-v1",
+  "dialogue_v2_canary_percent": 5,
+  "dialogue_runtime_capabilities": ["legacy-v1", "verdict-v1"],
+  "dialogue_snapshot_reader_capabilities": [
+    "dialogue-v2-snapshot-reader-v2",
+    "dialogue-v3-snapshot-reader-v1"
+  ],
+  "conversation_identity_reader_capabilities": [
+    "conversation-scenario-idempotency-reader-v1"
+  ],
+  "conversation_identity_schema_phase": "final"
 }
 ```
 
 `llm_configured=false`이면 선택·조작 기반 결정형 턴은 처리할 수 있지만 자유 발화
 분류에는 Claude API 키 설정이 필요합니다.
+`runtime_contract_version`과 `dialogue_v2_canary_percent`는 설치 capability가 아니라 현재
+프로세스에 실제 적용된 신규 대화 배정 설정입니다. 배포 후보는 `environment=production`,
+`runtime_contract_version=verdict-v1`과 의도한 canary 비율을 모두 확인한 뒤에만 traffic을
+교체합니다.
+`conversation_identity_schema_phase=transition`은 old+new unique가 공존하는 첫 reader 배포,
+`final`은 old unique가 제거된 상태다. transition에서는 신규 V2 canary가 반드시 0이다.
 
 ### `GET /health/authenticated`
 
@@ -220,6 +238,11 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 호환을 위해 `cafe_queue_demo`는 `cafe_queue`와 같은 흐름으로 유지합니다.
 5단계 통합 시나리오는 현재 프로토타입 API에 노출하지 않습니다.
 
+집의 필수 9개 콘텐츠, 위 카페 4개와 놀이동산 3개는 `verdict-v1` 네이티브 대상입니다.
+단, 신규 요청이 실제 네이티브 canary에 참여하려면 비어 있지 않은
+`learning_session_id`가 필요합니다. 값이 없으면 요청을 거절하지 않고 `legacy-v1`에
+고정합니다. 같은 방문의 독립 시나리오는 한 `learning_session_id`를 공유할 수 있습니다.
+
 ### 카페 단계별 입력
 
 카페 각 단계는 **독립된 대화**입니다. 각 대화를 열 때 그 화면에서 사용하는
@@ -244,6 +267,15 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 - 전달받은 메뉴 스냅샷과 생성된 줄 인원은 세션 상태에 저장됩니다.
 - 동일 `conversation_id` 복구와 멱등 재시도에서는 값이 다시 뽑히지 않습니다.
 
+카페 완료의 `completion.verified_facts` key는 고정 계약입니다.
+
+| `scenario_id` | 완료 fact key |
+|---|---|
+| `cafe_queue` | `left_count`, `right_count`, `final_choice`, `reason` |
+| `cafe_budget_menu` | `child_menu_id` |
+| `cafe_menu_total` | `child_menu_id`, `result` |
+| `cafe_change` | `result` |
+
 메뉴 시나리오 시작 예시:
 
 ```json
@@ -251,6 +283,8 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
   "learner_id": 1,
   "scene": "cafe",
   "scenario_id": "cafe_budget_menu",
+  "learning_session_id": "cafe_visit_20260826_01",
+  "conversation_round": 1,
   "cafe_context": {
     "menu_items": [
       {
@@ -296,6 +330,8 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
   "learner_id": 1,
   "scene": "amusement_park",
   "scenario_id": "amusement_ticket_multiply",
+  "learning_session_id": "park_visit_20260826_01",
+  "conversation_round": 1,
   "conversation_storage_consent": true,
   "retention_policy": "permanent"
 }
@@ -327,6 +363,9 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
   `teach_reward_eligible=false`라서 아이 주도 가르치기 보상과는 구분됩니다.
 - 별노트는 기본 문제에서 아이가 실제로 알려 준 근거 또는 L0 공동 수행 결과로 한 번만
   생성합니다. 전이 문제는 별도의 별노트를 만들지 않습니다.
+- 카페·놀이동산의 시작·L2·L0·과제 전환 문구는 대화별 값으로 조립한 사람 검수
+  `reviewed_template_only` 콘텐츠입니다. 홈 45-slot generated-copy cache/prewarm을 사용하지
+  않으며, 일반 자유발화 후속 대사만 Haiku 화자 경로를 사용합니다.
 
 ### 반복 결과가 이미 저장된 경우
 
@@ -380,10 +419,13 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 같은 `practice_result_id`를 재시도해도 최초 저장된 반복 결과가 정본으로 유지됩니다.
 
 `conversation_round`는 기본값이 1인 양의 정수입니다. 동일한
-`(learner_id, learning_session_id, conversation_round)` 요청은 네트워크 재시도로 보고
-기존 대화를 반환합니다. 명시적 재시작은 Spring이 회차를 증가시켜 보내며, 같은
-`learning_session_id`와 `practice_result_id`를 유지하더라도 새 `conversation_id`를
-생성합니다.
+`(learner_id, learning_session_id, scene, scenario_id, conversation_round)` 요청은 네트워크
+재시도로 보고 기존 대화를 반환합니다. 명시적 재시작은 Spring이 **해당 시나리오의**
+회차를 증가시켜 보내며, 같은 `learning_session_id`와 `practice_result_id`를 유지하더라도
+새 `conversation_id`를 생성합니다. `scene`과 `scenario_id`가 identity에 포함되므로 한 카페
+방문 ID에서 네 개 시나리오를 모두 `conversation_round=1`로 시작해도 충돌하지 않습니다.
+동일 tuple의 생성 요청이 동시에 도착해 둘 다 사전 조회를 통과해도 DB unique key가 하나의
+승자를 정하며, 나머지 요청은 그 승자의 `conversation_id`와 현재 turn을 읽어 반환합니다.
 
 AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionState.scenario_data`에
 복사되어 고정됩니다. 따라서 이후 카탈로그가 갱신되거나 요청을 재시도해도 진행 중인
@@ -399,6 +441,12 @@ AI가 생성한 가르치기 시나리오 전체는 대화 시작 시 `SessionSt
 | `true` | `permanent` | 평문 질문·아이 원문·선택 응답을 만료 없이 보관 |
 
 파일럿 운영 기본값은 사전 동의를 전제로 `true` / `permanent`다.
+
+`no_raw`에서는 자유문장뿐 아니라 구조화 응답 payload, claim 원문 구간과 legacy
+별노트 원문 근거도 저장하지 않는다. 기간형 정책은 같은 raw 저장소를 하나의 conversation
+deadline으로 관리한다. 서버는 매 시작과 매시간 만료분을 정리하고, commit 시점에도 deadline을
+다시 확인해 정리 작업과 경합한 턴이 원문을 되살리지 못하게 한다. 관찰 `analysis_json`에는
+닫힌 enum·검수 코드·confidence만 남기며 모델 자유문장과 exact span을 복제하지 않는다.
 
 그 외 조합은 `422`입니다.
 
@@ -561,8 +609,9 @@ Spring 프록시는 SSE 응답을 버퍼링하거나 JSON 한 덩어리로 변�
 type TurnContract = {
   conversation_id: string;
   turn: {
+    schema_version: "turn-contract-v1";
     turn_id: string;
-    scene: "home_teach" | "cafe";
+    scene: "home_teach" | "cafe" | "amusement_park";
     scenario_id: string;
     task_id: string;
     stage_id: string;
@@ -747,8 +796,9 @@ type TurnContract = {
 }
 ```
 
-- `child`: 아이가 직접 제공한 사실 근거를 검수된 문제 맥락으로만 완결함. 노트
-  본문 안의 인용 구절은 아이 원문에서 검증된 부분이며, 새 풀이 전략을 보충하지 않음
+- `child`: relation별 원문 offset으로 찾은 안전한 근거를 Haiku가 검수된 문제 맥락 안에서
+  독립 문장으로 완결함. 새 풀이 전략을 보충하지 않으며, 호출·검증 실패나 원문 비저장
+  대화에서는 reviewed direct fallback을 사용함
 - `coauthored`: 선택·빈칸·조작·도움 카드로 함께 완성
 - 결과·방향만 말한 `600원이야`, `오른쪽이 커`는 일반화 근거가 아니므로 그 자체로
   별노트를 만들지 않음

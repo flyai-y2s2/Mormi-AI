@@ -2714,7 +2714,7 @@ def representative_park_context(scenario_id: str) -> ParkSessionContext:
             "title": "간식 값 나누어 내기",
             "mission": "간식 값을 똑같이 나누어 낸다.",
             "skill": "똑같이 나누기",
-            "strategy": "간식값을 천 원씩 번갈아 나누면 한 사람 값을 구할 수 있어.",
+            "strategy": "간식 값 전체를 사람 수로 나누면 한 사람 값을 구할 수 있어.",
             "mormi_misconception": "한 사람이 전체 값을 다 내야 한다고 생각함",
             "prompt": (
                 "우리 세 명이 간식값 6,000원을 똑같이 내려고 해. "
@@ -2732,16 +2732,16 @@ def representative_park_context(scenario_id: str) -> ParkSessionContext:
                     "한 명은 얼마씩 내고 어떻게 나누는지도 알려줄래?"
                 ),
                 "equation": "9000÷3=3000",
-                "conclusion": "천 원씩 번갈아 나누면 한 명은 3,000원씩 내.",
+                "conclusion": "9,000원을 세 명으로 나누면 한 명은 3,000원씩 내.",
             },
         },
         "amusement_pass_compare": {
             "stage_id": "pass_break_even",
             "title": "1회 이용권과 자유이용권 비교하기",
             "mission": "몇 번부터 자유이용권이 더 저렴한지 비교한다.",
-            "skill": "같은 값씩 묶어 묶음 수 세기",
+            "skill": "자유이용권 값을 1회 이용권 값으로 나누기",
             "strategy": (
-                "자유이용권 값에서 1회 이용권 값이 몇 묶음인지 찾으면 "
+                "자유이용권 값을 1회 이용권 값으로 나누면 "
                 "값이 같아지는 횟수를 알 수 있어."
             ),
             "mormi_misconception": "자유이용권은 언제나 더 비싸다고 생각함",
@@ -2781,7 +2781,7 @@ def representative_park_context(scenario_id: str) -> ParkSessionContext:
                 ),
                 "equation": "12000÷3000=4",
                 "conclusion": (
-                    "12,000원에는 3,000원이 네 묶음 들어가. "
+                    "12,000원을 3,000원으로 나누면 4야. "
                     "4번이면 값이 같고 5번부터 자유이용권이 더 저렴해."
                 ),
             },
@@ -2971,7 +2971,7 @@ def generate_park_context(
             title="간식가게에서 똑같이 나누기",
             mission="간식값을 친구들과 똑같이 나누어 낸다.",
             skill="똑같이 나누기",
-            strategy="간식값을 천 원씩 번갈아 나누면 한 사람 값을 구할 수 있어.",
+            strategy="간식 값 전체를 사람 수로 나누면 한 사람 값을 구할 수 있어.",
             mormi_misconception="한 사람이 간식값을 전부 내야 한다고 생각함",
             prompt=(
                 f"우리 {count}명이 간식값 {total:,}원을 똑같이 내려고 해. "
@@ -2991,7 +2991,7 @@ def generate_park_context(
                 ),
                 equation=f"{transfer_total}÷{transfer_count}={transfer_per_person}",
                 conclusion=(
-                    "천 원씩 번갈아 나누면 "
+                    f"{transfer_total:,}원을 {transfer_count}명으로 나누면 "
                     f"한 명은 {transfer_per_person:,}원씩 내."
                 ),
             ),
@@ -3024,9 +3024,9 @@ def generate_park_context(
             stage_id="pass_break_even",
             title="1회 이용권과 자유이용권 비교하기",
             mission="몇 번부터 자유이용권이 더 저렴한지 알아본다.",
-            skill="같은 값씩 묶어 묶음 수 세기",
+            skill="자유이용권 값을 1회 이용권 값으로 나누기",
             strategy=(
-                "자유이용권 값에서 1회 이용권 값이 몇 묶음인지 찾으면 "
+                "자유이용권 값을 1회 이용권 값으로 나누면 "
                 "값이 같아지는 횟수를 알 수 있어."
             ),
             mormi_misconception="자유이용권은 낱장보다 비싸 보여서 언제나 손해라고 생각함",
@@ -3068,9 +3068,8 @@ def generate_park_context(
                 ),
                 equation=f"{transfer_pass}÷{transfer_single}={transfer_break_even}",
                 conclusion=(
-                    f"{transfer_pass:,}원에는 {transfer_single:,}원이 "
-                    f"{transfer_break_even}묶음 들어가. {transfer_break_even}번이면 "
-                    "값이 같고 "
+                    f"{transfer_pass:,}원을 {transfer_single:,}원으로 나누면 "
+                    f"{transfer_break_even}이야. {transfer_break_even}번이면 값이 같고 "
                     f"{transfer_break_even + 1}번부터 자유이용권이 더 저렴해."
                 ),
             ),
@@ -3196,10 +3195,9 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
         dictionary_card_id = "dictionary.home.divide-share"
         help_skills = ["grouping"]
         skill_id = "amusement_snack_divide"
-        strategy_choice = "천 원씩 한 사람씩 번갈아 나눠"
-        strategy_distractors = ["한 사람이 간식값을 모두 내", "간식값과 사람 수를 더해"]
+        strategy_choice = "간식 값 전체를 사람 수로 나눠"
+        strategy_distractors = ["간식 값을 사람 수만큼 곱해", "간식 값에서 사람 수를 빼"]
         alternative_methods = [
-            "간식값을 천 원씩 사람들에게 번갈아 나눠",
             "간식 전체 값을 사람 수에 맞게 똑같이 나눠",
         ]
         answer_distractors = [
@@ -3214,13 +3212,9 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
         strategy_choice_prompt = "한 명이 낼 값을 구하는 방법을 골라서 알려줄래?"
         joint_prompt = "도움 카드 순서대로 한 명이 낼 값을 나와 같이 구해 볼까?"
         h1 = "간식 전체 값과 함께 낼 사람 수부터 같이 볼까?"
-        h2 = (
-            f"천 원씩 번갈아 나누고 "
-            f"{values[left_key]:,}÷{values[right_key]}=□도 채워 보자."
-        )
-        h2_action = "천 원씩 나눈 뒤 식의 빈칸 확인하기"
+        h2 = f"{values[left_key]:,}÷{values[right_key]}=□를 채워 보자."
+        h2_action = "간식 값 전체를 사람 수로 나누기"
         h3 = (
-            f"천 원씩 번갈아 나누면 "
             f"{values[left_key]:,}÷{values[right_key]}={values[answer_key]:,}이어서 "
             f"한 명은 {values[answer_key]:,}원씩 내."
         )
@@ -3239,9 +3233,12 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
         dictionary_card_id = "dictionary.home.divide-group"
         help_skills = ["comparison", "grouping"]
         skill_id = "amusement_pass_compare"
-        strategy_choice = "1회 이용권 값이 몇 묶음인지 찾아"
-        strategy_distractors = ["두 이용권 값을 더해", "자유이용권이 비싸니까 바로 골라"]
-        alternative_methods = ["자유이용권 값을 1회 이용권 값으로 나누어 묶음 수를 구해"]
+        strategy_choice = "자유이용권 값을 1회 이용권 값으로 나눠"
+        strategy_distractors = [
+            "1회 이용권 값을 자유이용권 값으로 나눠",
+            "두 이용권 값의 차이를 구해",
+        ]
+        alternative_methods = ["자유이용권 가격을 1회 가격으로 나누어 횟수를 구해"]
         answer_distractors = [values[answer_key] - 1, values[answer_key] + 1]
         short_answer_prompt = "1회 이용권 값이 몇 묶음이면 자유이용권 값과 같은지 알려줄래?"
         answer_choice_prompt = "값이 같은 횟수를 여기서 골라서 알려줄래?"
@@ -3250,12 +3247,8 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
         strategy_choice_prompt = "값이 같은 횟수를 찾는 방법을 골라서 알려줄래?"
         joint_prompt = "도움 카드 순서대로 두 이용권 값을 나와 같이 비교해 볼까?"
         h1 = "1회 이용권 값과 자유이용권 값부터 같이 볼까?"
-        h2 = (
-            f"{values[left_key]:,}원 안에 {values[right_key]:,}원이 "
-            f"몇 묶음인지 식에 써 보자. "
-            f"{values[left_key]:,}÷{values[right_key]:,}=□"
-        )
-        h2_action = "같은 값 묶음을 세고 식의 빈칸 확인하기"
+        h2 = f"{values[left_key]:,}÷{values[right_key]:,}=□를 채워 보자."
+        h2_action = "자유이용권 값을 1회 이용권 값으로 나누기"
         h3 = (
             f"{values[left_key]:,}÷{values[right_key]:,}={values[answer_key]}. "
             f"{values[answer_key]}번이면 같고 "
@@ -3622,10 +3615,9 @@ def _park_transfer_task(context: ParkSessionContext) -> TaskDefinition:
         answer_description = "한 사람이 낼 값"
         answer_fact = f"한 명은 {result:,}원씩 내면 돼."
         help_skills = ["grouping"]
-        strategy_choice = "천 원씩 한 사람씩 번갈아 나눠"
-        strategy_distractors = ["한 사람이 간식값을 모두 내", "간식값과 사람 수를 더해"]
+        strategy_choice = "간식 값 전체를 사람 수로 나눠"
+        strategy_distractors = ["간식 값을 사람 수만큼 곱해", "간식 값에서 사람 수를 빼"]
         alternative_methods = [
-            "간식값을 천 원씩 사람들에게 번갈아 나눠",
             "간식 전체 값을 사람 수에 맞게 똑같이 나눠",
         ]
         answer_distractors = [
@@ -3640,10 +3632,10 @@ def _park_transfer_task(context: ParkSessionContext) -> TaskDefinition:
         strategy_choice_prompt = "한 명이 낼 값을 구하는 방법을 골라서 알려줄래?"
         joint_prompt = "도움 카드 순서대로 한 명이 낼 값을 나와 같이 구해 볼까?"
         h1 = "간식 전체 값과 함께 낼 사람 수부터 다시 볼까?"
-        h2 = f"천 원씩 번갈아 나누고 {left:,}÷{right}=□도 채워 보자."
-        h2_action = "천 원씩 나눈 뒤 식의 빈칸 확인하기"
+        h2 = f"{left:,}÷{right}=□를 채워 보자."
+        h2_action = "간식 값 전체를 사람 수로 나누기"
         h3 = (
-            f"천 원씩 번갈아 나누면 {left:,}÷{right}={result:,}이어서 "
+            f"{left:,}÷{right}={result:,}이어서 "
             f"한 명은 {result:,}원씩 내."
         )
         h2_visual_type = "amusement_transfer_equation"
@@ -3662,9 +3654,12 @@ def _park_transfer_task(context: ParkSessionContext) -> TaskDefinition:
         answer_description = "두 값이 같아지는 횟수"
         answer_fact = f"{result}번 타면 두 이용권 값이 같아."
         help_skills = ["comparison", "grouping"]
-        strategy_choice = "1회 이용권 값이 몇 묶음인지 찾아"
-        strategy_distractors = ["두 이용권 값을 더해", "자유이용권이 비싸니까 바로 골라"]
-        alternative_methods = ["자유이용권 값을 1회 이용권 값으로 나누어 묶음 수를 구해"]
+        strategy_choice = "자유이용권 값을 1회 이용권 값으로 나눠"
+        strategy_distractors = [
+            "1회 이용권 값을 자유이용권 값으로 나눠",
+            "두 이용권 값의 차이를 구해",
+        ]
+        alternative_methods = ["자유이용권 가격을 1회 가격으로 나누어 횟수를 구해"]
         answer_distractors = [result - 1, result + 1]
         short_answer_prompt = "몇 번 타면 자유이용권 값과 같은지 알려줄래?"
         answer_choice_prompt = "값이 같은 횟수를 여기서 골라서 알려줄래?"
@@ -3672,11 +3667,8 @@ def _park_transfer_task(context: ParkSessionContext) -> TaskDefinition:
         strategy_choice_prompt = "값이 같은 횟수를 찾는 방법을 골라서 알려줄래?"
         joint_prompt = "도움 카드 순서대로 두 이용권 값을 나와 같이 비교해 볼까?"
         h1 = "1회 이용권 값과 자유이용권 값부터 다시 볼까?"
-        h2 = (
-            f"{left:,}원 안에 {right:,}원이 몇 묶음인지 "
-            f"식에 써 보자. {left:,}÷{right:,}=□"
-        )
-        h2_action = "같은 값 묶음을 세고 식의 빈칸 확인하기"
+        h2 = f"{left:,}÷{right:,}=□를 채워 보자."
+        h2_action = "자유이용권 값을 1회 이용권 값으로 나누기"
         benefit = result + 1
         h3 = (
             f"{left:,}÷{right:,}={result}. {result}번이면 같고 "

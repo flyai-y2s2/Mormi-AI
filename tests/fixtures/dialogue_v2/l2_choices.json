@@ -1,0 +1,205 @@
+{
+  "schema_version": "turn-contract-v1",
+  "turn_id": "turn_fixture_v2_l2_choices",
+  "scene": "home_teach",
+  "scenario_id": "home_teach",
+  "task_id": "home_teaching",
+  "stage_id": "home_teach",
+  "task_index": 0,
+  "mormi": {
+    "text": "나 10,000원에서 얼마가 모자라는지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?",
+    "mood": "curious",
+    "max_lines": 2
+  },
+  "input": {
+    "kind": "choices",
+    "placeholder": null,
+    "choices": [
+      {
+        "id": "answer_0",
+        "label": "1,000원",
+        "image_url": null,
+        "disabled": null
+      },
+      {
+        "id": "answer_1",
+        "label": "2,000원",
+        "image_url": null,
+        "disabled": null
+      },
+      {
+        "id": "answer_2",
+        "label": "3,000원",
+        "image_url": null,
+        "disabled": null
+      }
+    ],
+    "target_slots": [
+      "fact:shortage"
+    ],
+    "submit_label": "알려주기",
+    "config": {
+      "plan_id": "l2.answer"
+    }
+  },
+  "visual": {
+    "type": "home_teaching",
+    "data": {
+      "curriculum_session_id": "multiply-easy-tables",
+      "subject": "math",
+      "unit": "여러 물건값과 예산을 비교해요",
+      "title": "여러 물건값과 예산을 비교해요",
+      "problem": {
+        "prompt": "예산 10,000원으로 표 2장, 주스 2잔, 스티커 1장을 사려면 얼마가 모자랄까?",
+        "answers": [
+          "1,000원",
+          "2,000원",
+          "3,000원"
+        ],
+        "visual": {
+          "type": "money-practice",
+          "image": "/amusement-park/pass-elements-v2.png",
+          "imageAlt": "표와 주스와 스티커",
+          "badge": "예산 확인",
+          "facts": [
+            {
+              "label": "표 한 장",
+              "value": "2,500원"
+            },
+            {
+              "label": "표",
+              "value": "2장"
+            },
+            {
+              "label": "주스 한 잔",
+              "value": "1,500원"
+            },
+            {
+              "label": "주스",
+              "value": "2잔"
+            },
+            {
+              "label": "스티커 한 장",
+              "value": "3,000원"
+            },
+            {
+              "label": "스티커",
+              "value": "1장"
+            },
+            {
+              "label": "예산",
+              "value": "10,000원"
+            }
+          ],
+          "items": [
+            {
+              "image": "/amusement-park/pass-elements-v2.png",
+              "label": "표",
+              "count": 2
+            },
+            {
+              "image": "/life-missions/juice.webp",
+              "label": "주스",
+              "count": 2
+            },
+            {
+              "image": "/life-missions/products/stickers.jpg",
+              "label": "스티커",
+              "count": 1
+            }
+          ]
+        }
+      }
+    }
+  },
+  "help_card": {
+    "visible": true,
+    "auto_open": true,
+    "level": "H2",
+    "title": "도움 카드",
+    "body": "5,000+3,000+3,000=□로 전체 값을 구한 뒤 10,000원과 비교해 보자.",
+    "visual_type": "home_practice_problem",
+    "visual_data": {
+      "prompt": "예산 10,000원으로 표 2장, 주스 2잔, 스티커 1장을 사려면 얼마가 모자랄까?",
+      "answers": [
+        "1,000원",
+        "2,000원",
+        "3,000원"
+      ],
+      "visual": {
+        "type": "money-practice",
+        "image": "/amusement-park/pass-elements-v2.png",
+        "imageAlt": "표와 주스와 스티커",
+        "badge": "예산 확인",
+        "facts": [
+          {
+            "label": "표 한 장",
+            "value": "2,500원"
+          },
+          {
+            "label": "표",
+            "value": "2장"
+          },
+          {
+            "label": "주스 한 잔",
+            "value": "1,500원"
+          },
+          {
+            "label": "주스",
+            "value": "2잔"
+          },
+          {
+            "label": "스티커 한 장",
+            "value": "3,000원"
+          },
+          {
+            "label": "스티커",
+            "value": "1장"
+          },
+          {
+            "label": "예산",
+            "value": "10,000원"
+          }
+        ],
+        "items": [
+          {
+            "image": "/amusement-park/pass-elements-v2.png",
+            "label": "표",
+            "count": 2
+          },
+          {
+            "image": "/life-missions/juice.webp",
+            "label": "주스",
+            "count": 2
+          },
+          {
+            "image": "/life-missions/products/stickers.jpg",
+            "label": "스티커",
+            "count": 1
+          }
+        ]
+      }
+    }
+  },
+  "note_update": null,
+  "status": "active",
+  "state_version": 3,
+  "completion": null,
+  "pedagogy": {
+    "expression_level": "L2",
+    "hint_level": "H2",
+    "subgoal_id": "l2.answer",
+    "verified_slots": {},
+    "bottleneck": null
+  },
+  "task_anchor": {
+    "anchor_id": "v2.home.multiply-easy-tables.v2",
+    "title": "지금 모르미에게 알려줄 것",
+    "prompt": "예산 10,000원으로 표 2장, 주스 2잔, 스티커 1장을 사려면 얼마가 모자랄까?",
+    "completed_items": [],
+    "target_slots": [
+      "fact:shortage"
+    ]
+  },
+  "dictionary_ref": null
+}

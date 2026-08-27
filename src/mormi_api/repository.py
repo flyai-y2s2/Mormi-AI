@@ -26,21 +26,28 @@ from .db import (
 from .outbox import DIALOGUE_OBSERVATION_EVENT_TYPE, STAR_NOTE_CREATED_EVENT_TYPE
 from .reporting import build_report_evidence
 from .schemas import (
+    BooleanValueV2,
     ChildResponse,
+    ChoiceValueV2,
     DialogueHistoryTurn,
+    DialogueRuntimeContractVersion,
     ExpressionLevel,
     LadderRecommendationEvidence,
     LearnerProfile,
+    MoneyValueV2,
     NoteAttribution,
     NoteEvidence,
     NoteUpdate,
+    NumberValueV2,
     PracticeResult,
     ReportEvidenceResponse,
     ResponseCategory,
     ResponseType,
     RetentionPolicy,
+    SceneType,
     SessionState,
     SpeakerRuntimeAudit,
+    TextValueV2,
     TurnContract,
     UtteranceAnalysis,
     new_id,
@@ -65,10 +72,36 @@ class PersistenceError(RuntimeError):
     """A turn could not be stored for a reason other than an idempotent replay."""
 
 
+def _canonical_value_primitive(
+    value: MoneyValueV2 | NumberValueV2 | TextValueV2 | BooleanValueV2 | ChoiceValueV2,
+) -> str | int | float | bool:
+    """Project a reviewed typed value to the existing outcome JSON contract."""
+
+    if isinstance(value, MoneyValueV2):
+        return value.amount
+    if isinstance(value, NumberValueV2):
+        return value.value
+    if isinstance(value, TextValueV2):
+        return value.text
+    if isinstance(value, BooleanValueV2):
+        return value.value
+    return value.choice_id
+
+
 _DUPLICATE_RESPONSE_CONSTRAINTS = {
     "uq_conversation_response",
     "uq_observation_conversation_response",
     "uq_observation_source_turn",
+}
+
+_CONVERSATION_IDEMPOTENCY_CONSTRAINTS = {
+    # Revision 05 keeps both keys during the rolling reader transition. Either
+    # one may be reported for two identical inserts depending on database index
+    # selection. The catch path still performs an exact five-part winner read,
+    # so an old-key conflict from a *different* scenario cannot be replayed as
+    # success.
+    "uq_conversation_learning_session_round",
+    "uq_conversation_learning_session_scene_scenario_round",
 }
 
 
@@ -104,6 +137,37 @@ def _is_duplicate_response_integrity_error(error: IntegrityError) -> bool:
     )
 
 
+def _is_conversation_idempotency_integrity_error(error: IntegrityError) -> bool:
+    """Recognize only the unique key that elects one create-request winner."""
+
+    current: BaseException | None = error.orig
+    seen: set[int] = set()
+    messages: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        if getattr(current, "constraint_name", None) in _CONVERSATION_IDEMPOTENCY_CONSTRAINTS:
+            return True
+        current = current.__cause__ or current.__context__
+
+    message = " ".join(messages)
+    sqlite_unique_fragments = (
+        (
+            "UNIQUE constraint failed: conversations.learner_id, "
+            "conversations.learning_session_id, conversations.conversation_round"
+        ),
+        (
+            "UNIQUE constraint failed: conversations.learner_id, "
+            "conversations.learning_session_id, conversations.scene, "
+            "conversations.scenario_id, conversations.conversation_round"
+        ),
+    )
+    return any(fragment in message for fragment in sqlite_unique_fragments) or any(
+        constraint in message
+        for constraint in _CONVERSATION_IDEMPOTENCY_CONSTRAINTS
+    )
+
+
 class Repository:
     PERMANENT_STORAGE_MIGRATION = "2026-08-permanent-raw-storage"
     PLAINTEXT_STORAGE_MIGRATION = "2026-08-plaintext-dialogue-storage"
@@ -117,12 +181,14 @@ class Repository:
         idempotency_retention_days: int = 30,
         classifier_model: str = "not_collected",
         speaker_model: str = "not_collected",
+        star_note_model: str = "not_collected",
     ) -> None:
         self.database = database
         self.text_codec = text_codec
         self.idempotency_retention_days = idempotency_retention_days
         self.classifier_model = classifier_model
         self.speaker_model = speaker_model
+        self.star_note_model = star_note_model
 
     async def save_practice_summary(self, summary: PracticeResult) -> None:
         success_rate = summary.success_rate or 0
@@ -150,9 +216,11 @@ class Repository:
         self,
         learner_id: int,
         learning_session_id: str,
+        scene: SceneType,
+        scenario_id: str,
         conversation_round: int,
     ) -> str | None:
-        """Return the home dialogue for the same round after a network retry."""
+        """Return the same scenario round after a network retry."""
 
         async with self.database.sessions() as db:
             statement = (
@@ -160,6 +228,8 @@ class Repository:
                 .where(
                     ConversationRecord.learner_id == learner_id,
                     ConversationRecord.learning_session_id == learning_session_id,
+                    ConversationRecord.scene == scene.value,
+                    ConversationRecord.scenario_id == scenario_id,
                     ConversationRecord.conversation_round == conversation_round,
                 )
                 .order_by(ConversationRecord.created_at.desc())
@@ -167,29 +237,51 @@ class Repository:
             )
             return (await db.execute(statement)).scalar_one_or_none()
 
-    async def create_conversation(self, state: SessionState, turn: TurnContract) -> None:
-        async with self.database.sessions() as db:
-            conversation = ConversationRecord(
-                conversation_id=state.conversation_id,
-                learner_id=state.learner_id,
-                learning_session_id=state.learning_session_id,
-                conversation_round=state.conversation_round,
-                scene=state.scene.value,
-                scenario_id=state.scenario_id,
-                state_json=self._dump_state(state),
-                state_version=state.state_version,
-                status=state.status.value,
-                raw_retention_until=state.raw_retention_until,
-                created_at=state.created_at,
-                updated_at=state.updated_at,
-            )
-            db.add(conversation)
-            # No ORM relationship is declared between these persistence
-            # records. Flush the FK parent explicitly instead of relying on
-            # incidental unit-of-work insertion order.
-            await db.flush([conversation])
-            db.add(self._turn_record(state, turn))
-            await db.commit()
+    async def create_conversation(self, state: SessionState, turn: TurnContract) -> str:
+        try:
+            async with self.database.sessions() as db:
+                conversation = ConversationRecord(
+                    conversation_id=state.conversation_id,
+                    learner_id=state.learner_id,
+                    learning_session_id=state.learning_session_id,
+                    conversation_round=state.conversation_round,
+                    scene=state.scene.value,
+                    scenario_id=state.scenario_id,
+                    state_json=self._dump_state(state),
+                    state_version=state.state_version,
+                    status=state.status.value,
+                    raw_retention_until=state.raw_retention_until,
+                    created_at=state.created_at,
+                    updated_at=state.updated_at,
+                )
+                db.add(conversation)
+                # No ORM relationship is declared between these persistence
+                # records. Flush the FK parent explicitly instead of relying on
+                # incidental unit-of-work insertion order.
+                await db.flush([conversation])
+                db.add(self._turn_record(state, turn))
+                await db.commit()
+        except IntegrityError as error:
+            if (
+                state.learning_session_id is not None
+                and _is_conversation_idempotency_integrity_error(error)
+            ):
+                # The unique key is the final arbiter after two requests both
+                # miss the optimistic read. PostgreSQL waits for the winning
+                # insert to finish before raising; SQLite does the same for the
+                # tested file-backed transaction, so the committed winner is
+                # now safe to read and replay.
+                winner_id = await self.conversation_id_for_learning_session(
+                    state.learner_id,
+                    state.learning_session_id,
+                    state.scene,
+                    state.scenario_id,
+                    state.conversation_round,
+                )
+                if winner_id is not None:
+                    return winner_id
+            raise
+        return state.conversation_id
 
     async def get_state(self, conversation_id: str) -> SessionState:
         async with self.database.sessions() as db:
@@ -293,26 +385,52 @@ class Repository:
                     raise DuplicateResponseError(response_id)
                 raise StaleConversationError("Turn was already answered")
 
+            committed_at = utc_now()
+            retention_expired = bool(
+                previous_state.raw_retention_until is not None
+                and previous_state.raw_retention_until <= committed_at
+            )
+            raw_storage_enabled = (
+                previous_state.raw_storage_enabled and not retention_expired
+            )
+            if retention_expired:
+                # A turn racing the periodic purge may have loaded the old
+                # state just before the deadline. Enforce the deadline again
+                # inside the canonical write transaction so this turn cannot
+                # recreate raw data after cleanup.
+                next_state.raw_storage_enabled = False
+                next_state.raw_retention_until = None
+                if (
+                    next_state.runtime_contract_version
+                    is not DialogueRuntimeContractVersion.VERDICT_V1
+                ):
+                    next_state.child_note_evidence = {}
+
             raw_response = response.text or self._structured_response_text(response)
             current_turn.response_id = response_id
             current_turn.response_expires_at = (
                 None
                 if previous_state.retention_policy is RetentionPolicy.PERMANENT
-                else utc_now() + timedelta(days=self.idempotency_retention_days)
+                else committed_at + timedelta(days=self.idempotency_retention_days)
             )
             current_turn.result_turn_id = next_turn.turn_id
             current_turn.response_type = response.type.value
             current_turn.response_raw_encrypted = (
-                self.text_codec.store(raw_response) if previous_state.raw_storage_enabled else None
+                self.text_codec.store(raw_response) if raw_storage_enabled else None
             )
-            current_turn.response_structured = response.model_dump(mode="json", exclude={"text"})
+            current_turn.response_structured = (
+                response.model_dump(mode="json", exclude={"text"})
+                if raw_storage_enabled
+                else None
+            )
             current_turn.safety_category = analysis.safety_category.value
             current_turn.response_category = analysis.response_category.value
 
-            next_state.updated_at = utc_now()
+            next_state.updated_at = committed_at
             conversation_record.state_json = self._dump_state(next_state)
             conversation_record.state_version = next_state.state_version
             conversation_record.status = next_state.status.value
+            conversation_record.raw_retention_until = next_state.raw_retention_until
             conversation_record.updated_at = next_state.updated_at
             db.add(self._turn_record(next_state, next_turn))
 
@@ -325,6 +443,7 @@ class Repository:
                     analysis=analysis,
                     classifier_response_category=classifier_response_category,
                     next_turn=next_turn,
+                    note=note,
                     runtime=runtime,
                 )
                 db.add(observation)
@@ -335,7 +454,9 @@ class Repository:
 
                 claim_records = self._claim_records(
                     observation.observation_id,
-                    previous_state,
+                    previous_state.model_copy(
+                        update={"raw_storage_enabled": raw_storage_enabled}
+                    ),
                     analysis,
                     accepted_claims,
                 )
@@ -365,6 +486,7 @@ class Repository:
                     note_evidence_links = await self._note_evidence_link_records(
                         db,
                         previous_state=previous_state,
+                        next_state=next_state,
                         note=note,
                     )
                     db.add_all(note_evidence_links)
@@ -410,6 +532,7 @@ class Repository:
         analysis: UtteranceAnalysis,
         classifier_response_category: ResponseCategory,
         next_turn: TurnContract,
+        note: NoteUpdate | None,
         runtime: SpeakerRuntimeAudit,
     ) -> DialogueTurnObservationRecord:
         input_payload = current_turn.turn_contract.get("input", {})
@@ -419,19 +542,47 @@ class Repository:
             else "not_collected"
         )
         current_stage = str(current_turn.turn_contract.get("stage_id", "not_collected"))
-        safe_analysis = analysis.model_dump(
-            mode="json",
-            exclude={
-                "claims",
-                "grounding_span",
-                "social_grounding_span",
-                "note_candidate",
-            },
+        task = get_task(previous_state.current_task_id, previous_state.scenario_data)
+        safe_misconception_tag = (
+            analysis.misconception_tag
+            if analysis.misconception_tag in task.misconception_tags
+            else None
         )
+        safe_bottleneck = (
+            analysis.bottleneck
+            if analysis.bottleneck
+            in {"unknown", "expression", "concept", "structured_input", "not_collected"}
+            else "unknown"
+        )
+        # Persist only closed, analytics-safe fields. Model prose, exact spans,
+        # reference resolutions, and arithmetic evidence can repeat child raw
+        # text or PII and belong only in the consent-controlled raw columns.
+        safe_analysis: dict[str, object] = {
+            "safety_category": analysis.safety_category.value,
+            "response_category": analysis.response_category.value,
+            "difficulty_class": analysis.difficulty_class.value,
+            "task_relation": analysis.task_relation.value,
+            "interaction_intent": analysis.interaction_intent.value,
+            "conversation_only": analysis.conversation_only,
+            "entry_stance": analysis.entry_stance.value,
+            "answer_status": analysis.answer_status.value,
+            "reason_status": analysis.reason_status.value,
+            "needs_adjudication": False,
+            "misconception_tag": safe_misconception_tag,
+            "bottleneck": safe_bottleneck,
+            "confidence": analysis.confidence,
+        }
         safe_analysis["classifier_response_category"] = classifier_response_category.value
         safe_analysis["effective_response_category"] = analysis.response_category.value
         safe_analysis["response_category_reconciled"] = (
             classifier_response_category is not analysis.response_category
+        )
+        runtime_json, version_extensions = self._observation_runtime_metadata(
+            previous_state=previous_state,
+            next_state=next_state,
+            next_turn=next_turn,
+            note=note,
+            runtime=runtime,
         )
         help_card = next_turn.help_card
         return DialogueTurnObservationRecord(
@@ -454,8 +605,8 @@ class Repository:
             difficulty_class=analysis.difficulty_class.value,
             concept_result=self._concept_result(analysis.response_category),
             safety_category=analysis.safety_category.value,
-            misconception_tag=analysis.misconception_tag,
-            bottleneck=analysis.bottleneck or "unknown",
+            misconception_tag=safe_misconception_tag,
+            bottleneck=safe_bottleneck,
             classifier_confidence=analysis.confidence,
             expression_before=previous_state.expression_level.value,
             expression_after=next_state.expression_level.value,
@@ -476,10 +627,11 @@ class Repository:
             ),
             record_origin="live",
             analysis_json=safe_analysis,
-            runtime_json=runtime.model_dump(mode="json"),
+            runtime_json=runtime_json,
             versions_json={
                 "observation_schema": 1,
                 "dialogue_policy": previous_state.dialogue_policy_version,
+                "runtime_contract": previous_state.runtime_contract_version.value,
                 "dictionary_catalog": previous_state.dictionary_catalog_version,
                 "content": (
                     previous_state.dictionary_snapshots[
@@ -488,10 +640,170 @@ class Repository:
                     if previous_state.current_task_id in previous_state.dictionary_snapshots
                     else "not_collected"
                 ),
+                # ``content`` above is the dictionary-card revision. Keep the
+                # dialogue pack identity separate so V2 observations can be
+                # reproduced without overloading the legacy key.
+                "dialogue_content_pack": (runtime.content_pack_id or "not_collected"),
+                "dialogue_content_version": (runtime.content_version or "not_collected"),
+                "dialogue_content_source_hash": (runtime.content_source_hash or "not_collected"),
                 "classifier_model": self.classifier_model,
                 "speaker_model": self.speaker_model,
+                "star_note_model": self.star_note_model,
+                **version_extensions,
             },
         )
+
+    @staticmethod
+    def _observation_runtime_metadata(
+        *,
+        previous_state: SessionState,
+        next_state: SessionState,
+        next_turn: TurnContract,
+        note: NoteUpdate | None,
+        runtime: SpeakerRuntimeAudit,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Bind a V3 observation to its immutable source and result tasks.
+
+        ``SpeakerRuntimeAudit`` is produced before persistence and normally
+        carries the completed/source task pack.  A life turn may already be
+        presenting the next task by the time it is committed, though, so the
+        repository re-derives both identities from the pinned aggregate rather
+        than trusting mutable call-site metadata.  Only raw-free IDs, hashes,
+        and provenance categories are added to analytics JSON.
+        """
+
+        runtime_json: dict[str, object] = runtime.model_dump(mode="json")
+        previous_pinned = previous_state.pinned_dialogue_scenario_v3
+        if previous_pinned is None:
+            return runtime_json, {}
+        next_pinned = next_state.pinned_dialogue_scenario_v3
+        if next_pinned is None:
+            raise PersistenceError("v3_observation_runtime_missing")
+
+        from .dialogue_v2_ledger import ReasoningLedgerV2
+        from .dialogue_v2_scenario_snapshot import (
+            resolve_life_scenario_runtime_v3,
+        )
+
+        resolve_life_scenario_runtime_v3(previous_pinned)
+        next_scenario = resolve_life_scenario_runtime_v3(next_pinned)
+        previous_scenario_identity = (
+            previous_pinned.scenario_pack_id,
+            previous_pinned.scenario_content_version,
+            previous_pinned.scenario_source_hash,
+        )
+        next_scenario_identity = (
+            next_pinned.scenario_pack_id,
+            next_pinned.scenario_content_version,
+            next_pinned.scenario_source_hash,
+        )
+        if previous_scenario_identity != next_scenario_identity:
+            raise PersistenceError("v3_observation_scenario_changed")
+
+        source_task_id = previous_state.current_task_id
+        result_task_id = next_turn.task_id
+        if result_task_id != next_state.current_task_id or (
+            next_turn.task_index != next_state.task_index
+        ):
+            raise PersistenceError("v3_observation_result_task_mismatch")
+        try:
+            source_variant_id = next_pinned.active_variant_ids[source_task_id]
+            if previous_pinned.active_variant_ids[source_task_id] != source_variant_id:
+                raise PersistenceError("v3_observation_source_variant_changed")
+            source_stage = next_scenario.stage_by_task_id(source_task_id)
+            source_pack = source_stage.variants[source_variant_id]
+            source_ledger = ReasoningLedgerV2.model_validate(
+                next_pinned.reasoning_ledgers[source_task_id]
+            )
+            result_variant_id = next_pinned.active_variant_ids[result_task_id]
+            result_stage = next_scenario.stage_by_task_id(result_task_id)
+            result_pack = result_stage.variants[result_variant_id]
+            result_ledger = ReasoningLedgerV2.model_validate(
+                next_pinned.reasoning_ledgers[result_task_id]
+            )
+        except (KeyError, ValueError) as error:
+            raise PersistenceError("v3_observation_task_runtime_missing") from error
+
+        expected_source_identity = (
+            source_pack.pack_id,
+            source_pack.content_version,
+            source_ledger.content_hash,
+        )
+        supplied_source_identity = (
+            runtime.content_pack_id,
+            runtime.content_version,
+            runtime.content_source_hash,
+        )
+        if supplied_source_identity != expected_source_identity:
+            raise PersistenceError("v3_observation_content_identity_mismatch")
+        if not set(runtime.newly_verified_fact_ids).issubset(
+            source_ledger.verified_facts
+        ) or not set(runtime.newly_verified_relation_ids).issubset(
+            source_ledger.verified_relations
+        ):
+            raise PersistenceError("v3_observation_progress_mismatch")
+
+        runtime_json.update(
+            {
+                "observation_runtime_schema": "life-v3-observation-runtime-v1",
+                "scenario_pack_id": previous_pinned.scenario_pack_id,
+                "scenario_content_version": previous_pinned.scenario_content_version,
+                "scenario_source_hash": previous_pinned.scenario_source_hash,
+                "source_task_id": source_task_id,
+                "source_task_index": previous_state.task_index,
+                "source_variant_id": source_variant_id,
+                "source_content_pack_id": source_pack.pack_id,
+                "source_content_version": source_pack.content_version,
+                "source_content_hash": source_ledger.content_hash,
+                "result_task_id": result_task_id,
+                "result_task_index": next_turn.task_index,
+                "result_variant_id": result_variant_id,
+                "result_content_pack_id": result_pack.pack_id,
+                "result_content_version": result_pack.content_version,
+                "result_content_hash": result_ledger.content_hash,
+                "task_transitioned": source_task_id != result_task_id,
+                "reasoning_ledger_schema": source_ledger.schema_version,
+                "reasoning_ledger_verified_fact_ids": sorted(source_ledger.verified_facts),
+                "reasoning_ledger_verified_relation_ids": sorted(source_ledger.verified_relations),
+                "reasoning_ledger_auxiliary_evidence_count": len(
+                    source_ledger.accepted_auxiliary_evidence
+                ),
+                "note_emitted": note is not None,
+            }
+        )
+
+        if note is not None:
+            source_note_ids = [
+                task_id
+                for task_id, note_state in next_pinned.task_note_states.items()
+                if note_state.emitted_note_id == note.note_id
+            ]
+            if source_note_ids != [source_task_id]:
+                raise PersistenceError("v3_observation_note_source_mismatch")
+            note_state = next_pinned.task_note_states[source_task_id]
+            runtime_json.update(
+                {
+                    "note_id": note.note_id,
+                    "note_source_task_id": source_task_id,
+                    "note_attribution": note.attribution.value,
+                    "note_evidence": note.evidence.value,
+                    "note_relation_ids": sorted(source_pack.policies.note_relation_ids),
+                    "note_independent_relation_ids": sorted(
+                        note_state.independent_relation_evidence
+                    ),
+                    "note_supported_relation_ids": sorted(note_state.supported_relation_ids),
+                    "note_joint_performance_used": note_state.joint_performance_used,
+                }
+            )
+
+        return runtime_json, {
+            "observation_runtime_schema": "life-v3-observation-runtime-v1",
+            "dialogue_scenario_pack": previous_pinned.scenario_pack_id,
+            "dialogue_scenario_content_version": (previous_pinned.scenario_content_version),
+            "dialogue_scenario_source_hash": previous_pinned.scenario_source_hash,
+            "dialogue_task_variant": source_variant_id,
+            "reasoning_ledger_schema": source_ledger.schema_version,
+        }
 
     def _claim_records(
         self,
@@ -547,6 +859,7 @@ class Repository:
         db: AsyncSession,
         *,
         previous_state: SessionState,
+        next_state: SessionState,
         note: NoteUpdate,
     ) -> list[NoteEvidenceLinkRecord]:
         """Link a note to every verified task turn that supplied its slots.
@@ -555,6 +868,19 @@ class Repository:
         turn. Linking only the completion turn loses that provenance and can
         make a teacher-facing report cite the wrong child response.
         """
+
+        if next_state.pinned_dialogue_scenario_v3 is not None:
+            return await self._v3_note_evidence_link_records(
+                db,
+                state=next_state,
+                note=note,
+            )
+        if next_state.runtime_contract_version is DialogueRuntimeContractVersion.VERDICT_V1:
+            return await self._v2_note_evidence_link_records(
+                db,
+                state=next_state,
+                note=note,
+            )
 
         task = get_task(previous_state.current_task_id, previous_state.scenario_data)
         note_slots = set(task.effective_note_slots)
@@ -590,6 +916,167 @@ class Repository:
             )
             for observation_id, slot_ids in sorted(slots_by_observation.items())
         ]
+
+    @staticmethod
+    async def _v3_note_evidence_link_records(
+        db: AsyncSession,
+        *,
+        state: SessionState,
+        note: NoteUpdate,
+    ) -> list[NoteEvidenceLinkRecord]:
+        """Resolve a life-scene note back to its task-scoped ledger evidence.
+
+        A note can be emitted while the runtime is already presenting the next
+        task. Its source therefore comes from the immutable emitted-note marker,
+        not from ``state.task_index``. The selected task ledger then supplies
+        raw-free evidence IDs and source turn IDs; only matching observations
+        from that source task index may become note links.
+        """
+
+        from .dialogue_v2_ledger import (
+            ReasoningLedgerV2,
+            RelationVerificationEvidenceV2,
+        )
+        from .dialogue_v2_scenario_snapshot import (
+            resolve_life_scenario_runtime_v3,
+        )
+
+        pinned = state.pinned_dialogue_scenario_v3
+        if pinned is None:  # pragma: no cover - caller owns this dispatch
+            raise PersistenceError("v3_note_runtime_missing")
+        scenario = resolve_life_scenario_runtime_v3(pinned)
+        source_task_ids = [
+            task_id
+            for task_id, note_state in pinned.task_note_states.items()
+            if note_state.emitted_note_id == note.note_id
+        ]
+        if len(source_task_ids) != 1:
+            raise PersistenceError("v3_note_source_missing")
+        source_task_id = source_task_ids[0]
+        try:
+            source_task_index = state.task_ids.index(source_task_id)
+            stage = scenario.stage_by_task_id(source_task_id)
+            pack = stage.variants[pinned.active_variant_ids[source_task_id]]
+            ledger = ReasoningLedgerV2.model_validate(pinned.reasoning_ledgers[source_task_id])
+            note_state = pinned.task_note_states[source_task_id]
+        except (KeyError, ValueError) as error:
+            raise PersistenceError("v3_note_runtime_missing") from error
+        if pack.policies.note_policy == "none" or note.skill_id != pack.policies.note_skill_id:
+            raise PersistenceError("v3_note_source_mismatch")
+        note_relation_ids = set(pack.policies.note_relation_ids)
+        if note.attribution is NoteAttribution.CHILD:
+            if (
+                note.evidence is not NoteEvidence.DIRECT_EXPLANATION
+                or note_state.joint_performance_used
+                or not note_relation_ids.issubset(note_state.independent_relation_evidence)
+            ):
+                raise PersistenceError("v3_note_source_mismatch")
+        elif note.evidence is not NoteEvidence.SUPPORTED_COMPLETION:
+            raise PersistenceError("v3_note_source_mismatch")
+
+        relation_ids_by_turn: dict[str, set[str]] = {}
+        for relation_id in pack.policies.note_relation_ids:
+            entry = ledger.verified_relations.get(relation_id)
+            if entry is None:
+                raise PersistenceError("note_evidence_missing")
+            independent_ids = set(note_state.independent_relation_evidence.get(relation_id, []))
+            if not independent_ids and relation_id not in note_state.supported_relation_ids:
+                raise PersistenceError("note_evidence_missing")
+            selected_evidence = [
+                evidence
+                for evidence in entry.evidence
+                if not independent_ids or evidence.evidence_id in independent_ids
+            ]
+            if (
+                independent_ids != {evidence.evidence_id for evidence in selected_evidence}
+                and independent_ids
+            ):
+                raise PersistenceError("note_evidence_missing")
+            if not selected_evidence:
+                raise PersistenceError("note_evidence_missing")
+            if note.attribution is NoteAttribution.CHILD and any(
+                not isinstance(evidence, RelationVerificationEvidenceV2)
+                for evidence in selected_evidence
+            ):
+                raise PersistenceError("v3_note_source_mismatch")
+            for evidence in selected_evidence:
+                relation_ids_by_turn.setdefault(evidence.source_turn_id, set()).add(relation_id)
+        if not relation_ids_by_turn:
+            raise PersistenceError("note_evidence_missing")
+
+        statement = select(
+            DialogueTurnObservationRecord.observation_id,
+            DialogueTurnObservationRecord.source_turn_id,
+        ).where(
+            DialogueTurnObservationRecord.conversation_id == state.conversation_id,
+            DialogueTurnObservationRecord.task_index == source_task_index,
+            DialogueTurnObservationRecord.source_turn_id.in_(relation_ids_by_turn),
+        )
+        observations_by_turn = {
+            source_turn_id: observation_id
+            for observation_id, source_turn_id in (await db.execute(statement)).all()
+        }
+        if set(observations_by_turn) != set(relation_ids_by_turn):
+            raise PersistenceError("note_evidence_missing")
+        return sorted(
+            (
+                NoteEvidenceLinkRecord(
+                    note_id=note.note_id,
+                    observation_id=observations_by_turn[source_turn_id],
+                    source_slot_ids_json=sorted(relation_ids),
+                )
+                for source_turn_id, relation_ids in relation_ids_by_turn.items()
+            ),
+            key=lambda item: item.observation_id,
+        )
+
+    @staticmethod
+    async def _v2_note_evidence_link_records(
+        db: AsyncSession,
+        *,
+        state: SessionState,
+        note: NoteUpdate,
+    ) -> list[NoteEvidenceLinkRecord]:
+        """Link a V2 note to the observations behind its verified relations."""
+
+        from .dialogue_v2_content import RequiredHomeTeachingPackV2
+        from .dialogue_v2_ledger import ReasoningLedgerV2
+
+        pinned = state.pinned_dialogue_v2
+        if pinned is None:
+            raise PersistenceError("v2_note_runtime_missing")
+        pack = RequiredHomeTeachingPackV2.model_validate(pinned.pack_snapshot)
+        ledger = ReasoningLedgerV2.model_validate(pinned.reasoning_ledger)
+        relation_ids = set(pack.policies.note_relation_ids)
+        relation_ids_by_turn: dict[str, set[str]] = {}
+        for relation_id in relation_ids:
+            entry = ledger.verified_relations.get(relation_id)
+            if entry is None:
+                continue
+            for evidence in entry.evidence:
+                relation_ids_by_turn.setdefault(evidence.source_turn_id, set()).add(relation_id)
+        if not relation_ids_by_turn:
+            raise PersistenceError("note_evidence_missing")
+
+        statement = select(
+            DialogueTurnObservationRecord.observation_id,
+            DialogueTurnObservationRecord.source_turn_id,
+        ).where(
+            DialogueTurnObservationRecord.conversation_id == state.conversation_id,
+            DialogueTurnObservationRecord.task_index == state.task_index,
+            DialogueTurnObservationRecord.source_turn_id.in_(relation_ids_by_turn),
+        )
+        links = [
+            NoteEvidenceLinkRecord(
+                note_id=note.note_id,
+                observation_id=observation_id,
+                source_slot_ids_json=sorted(relation_ids_by_turn[source_turn_id]),
+            )
+            for observation_id, source_turn_id in (await db.execute(statement)).all()
+        ]
+        if not links:
+            raise PersistenceError("note_evidence_missing")
+        return sorted(links, key=lambda item: item.observation_id)
 
     async def _task_outcome_record(
         self,
@@ -643,7 +1130,39 @@ class Repository:
             # explicitly unknown instead of inflating it to ``taught``.
             completion_outcome = "not_collected"
         verified_slots = dict(previous_state.verified_slots)
-        if next_state.task_index == previous_state.task_index:
+        if next_state.pinned_dialogue_scenario_v3 is not None:
+            # A life-task transition resets next_state.verified_slots for the
+            # following task.  The completed task's monotonic pinned ledger is
+            # the authoritative, raw-free source for its final outcome.
+            from .dialogue_v2_ledger import ReasoningLedgerV2
+            from .dialogue_v2_scenario_snapshot import (
+                resolve_life_scenario_runtime_v3,
+            )
+
+            pinned = next_state.pinned_dialogue_scenario_v3
+            scenario = resolve_life_scenario_runtime_v3(pinned)
+            source_task_id = previous_state.current_task_id
+            try:
+                stage = scenario.stage_by_task_id(source_task_id)
+                pack = stage.variants[pinned.active_variant_ids[source_task_id]]
+                ledger = ReasoningLedgerV2.model_validate(pinned.reasoning_ledgers[source_task_id])
+            except (KeyError, ValueError) as error:
+                raise PersistenceError("v3_task_outcome_runtime_missing") from error
+            relation_labels = {
+                relation.relation_id: relation.speaker_label
+                for relation in pack.reasoning_graph.relations
+            }
+            verified_slots = {
+                fact_id: _canonical_value_primitive(entry.canonical_value)
+                for fact_id, entry in ledger.verified_facts.items()
+            }
+            verified_slots.update(
+                {
+                    relation_id: relation_labels[relation_id]
+                    for relation_id in ledger.verified_relations
+                }
+            )
+        elif next_state.task_index == previous_state.task_index:
             verified_slots.update(next_state.verified_slots)
         else:
             # The next task starts with a fresh ``verified_slots`` mapping.
@@ -896,9 +1415,7 @@ class Repository:
                     ResponseType(record.response_type) if record.response_type else None
                 ),
                 response_category=(
-                    ResponseCategory(record.response_category)
-                    if record.response_category
-                    else None
+                    ResponseCategory(record.response_category) if record.response_category else None
                 ),
             )
             for record in reversed(records)
@@ -1098,8 +1615,12 @@ class Repository:
                         "dialogue_policy": "not_collected",
                         "dictionary_catalog": "not_collected",
                         "content": "not_collected",
+                        "dialogue_content_pack": "not_collected",
+                        "dialogue_content_version": "not_collected",
+                        "dialogue_content_source_hash": "not_collected",
                         "classifier_model": "not_collected",
                         "speaker_model": "not_collected",
+                        "star_note_model": "not_collected",
                     },
                     created_at=record.created_at,
                 )
@@ -1129,6 +1650,16 @@ class Repository:
             ]
 
     async def purge_expired_raw_data(self) -> None:
+        """Delete every child-authored raw fragment after its retention deadline.
+
+        ``response_raw_encrypted`` is not the only raw store.  Legacy dialogue
+        state can keep exact note evidence and observation claims keep literal
+        evidence spans.  They share the conversation retention boundary and
+        must be cleared in the same transaction.  Verdict-v1 note state uses
+        only the opaque ``verified_relation`` marker, so preserve that
+        provenance instead of treating it as child text.
+        """
+
         now = utc_now()
         async with self.database.sessions() as db:
             await db.execute(
@@ -1143,24 +1674,45 @@ class Repository:
                     result_turn_id=None,
                 )
             )
-            expired = select(ConversationRecord.conversation_id).where(
+            expired = select(ConversationRecord).where(
                 ConversationRecord.raw_retention_until.is_not(None),
                 ConversationRecord.raw_retention_until <= now,
             )
-            ids = list((await db.execute(expired)).scalars())
-            if ids:
+            records = list((await db.execute(expired)).scalars())
+            if records:
+                ids = [record.conversation_id for record in records]
                 await db.execute(
                     update(TurnRecord)
                     .where(TurnRecord.conversation_id.in_(ids))
                     .values(
                         response_raw_encrypted=None,
+                        response_structured=None,
                     )
                 )
+                observation_ids = select(
+                    DialogueTurnObservationRecord.observation_id
+                ).where(DialogueTurnObservationRecord.conversation_id.in_(ids))
                 await db.execute(
-                    update(ConversationRecord)
-                    .where(ConversationRecord.conversation_id.in_(ids))
-                    .values(raw_retention_until=None)
+                    update(DialogueClaimRecord)
+                    .where(DialogueClaimRecord.observation_id.in_(observation_ids))
+                    .values(evidence_span_encrypted=None)
                 )
+                for record in records:
+                    state_json = dict(record.state_json)
+                    runtime_version = state_json.get(
+                        "runtime_contract_version",
+                        DialogueRuntimeContractVersion.LEGACY_V1.value,
+                    )
+                    if runtime_version != DialogueRuntimeContractVersion.VERDICT_V1.value:
+                        state_json["child_note_evidence"] = {}
+                        state_json.pop(self._STATE_EVIDENCE_ENCRYPTED, None)
+                    # The deadline is a state transition as well as a cleanup
+                    # timestamp. Future turns must not recreate raw data after
+                    # this purge has made the indexed deadline NULL.
+                    state_json["raw_storage_enabled"] = False
+                    state_json["raw_retention_until"] = None
+                    record.state_json = state_json
+                    record.raw_retention_until = None
             await db.commit()
 
     def _dump_state(self, state: SessionState) -> dict[str, object]:
@@ -1179,7 +1731,22 @@ class Repository:
                 str(slot_id): self.text_codec.load(str(value))
                 for slot_id, value in evidence.items()
             }
-        return SessionState.model_validate(data)
+        state = SessionState.model_validate(data)
+        if (
+            state.raw_retention_until is not None
+            and state.raw_retention_until <= utc_now()
+        ):
+            # Enforce the deadline before the engine sees the state, not only
+            # when the hourly purge eventually updates the row. This prevents a
+            # resumed turn from using or re-persisting expired child wording.
+            state.raw_storage_enabled = False
+            state.raw_retention_until = None
+            if (
+                state.runtime_contract_version
+                is not DialogueRuntimeContractVersion.VERDICT_V1
+            ):
+                state.child_note_evidence = {}
+        return state
 
     async def migrate_existing_storage_to_plaintext(self) -> None:
         """Convert every legacy text envelope to plaintext in one transaction.

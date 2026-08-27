@@ -81,13 +81,19 @@ EXPECTED_STRATEGY_MISCONCEPTIONS = {
         "입장권 한 장 값만 내",
     },
     "amusement_snack_divide": {
-        "한 사람이 간식값을 모두 내",
-        "간식값과 사람 수를 더해",
+        "간식 값을 사람 수만큼 곱해",
+        "간식 값에서 사람 수를 빼",
     },
     "amusement_pass_compare": {
-        "두 이용권 값을 더해",
-        "자유이용권이 비싸니까 바로 골라",
+        "1회 이용권 값을 자유이용권 값으로 나눠",
+        "두 이용권 값의 차이를 구해",
     },
+}
+
+EXPECTED_STRATEGY_CHOICES = {
+    "amusement_ticket_multiply": "입장권 한 장 값과 사람 수를 곱해",
+    "amusement_snack_divide": "간식 값 전체를 사람 수로 나눠",
+    "amusement_pass_compare": "자유이용권 값을 1회 이용권 값으로 나눠",
 }
 
 
@@ -307,6 +313,31 @@ def test_primary_and_transfer_keep_the_full_expression_ladder_contract(
 
 
 @pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
+def test_park_method_choices_are_plain_and_match_the_mission_operation(
+    scenario_id: str,
+) -> None:
+    context = representative_park_context(scenario_id)
+
+    for task in _park_tasks(scenario_id, context):
+        strategy_step = next(
+            step
+            for step in task.steps[ExpressionLevel.L2]
+            if step.target_slots == ["strategy"]
+        )
+        labels = {choice.label for choice in strategy_step.input.choices}
+        assert EXPECTED_STRATEGY_CHOICES[scenario_id] in labels
+        assert labels - {EXPECTED_STRATEGY_CHOICES[scenario_id]} == (
+            EXPECTED_STRATEGY_MISCONCEPTIONS[scenario_id]
+        )
+
+    if scenario_id == "amusement_snack_divide":
+        assert "천 원씩" not in context.strategy
+        assert "천 원씩" not in context.transfer.conclusion
+    if scenario_id == "amusement_pass_compare":
+        assert "몇 묶음인지 찾아" not in context.strategy
+
+
+@pytest.mark.parametrize("scenario_id", sorted(PARK_SCENARIO_IDS))
 def test_park_h0_transfer_visual_does_not_preteach_the_equation(
     scenario_id: str,
 ) -> None:
@@ -387,14 +418,13 @@ def test_park_hints_reuse_each_preparation_sessions_representation(
         elif scenario_id == "amusement_snack_divide":
             equation = f"{contract.left:,}÷{contract.right}"
             assert equation in h2.body
-            assert "번갈아" in h2.body
+            assert "번갈아" not in h2.body
             assert h2.visual_data["symbol"] == "÷"
             assert "한 명" in h3.body
-            assert "번갈아" in h3.body
+            assert "번갈아" not in h3.body
         else:
             equation = f"{contract.left:,}÷{contract.right:,}=□"
-            assert f"{contract.right:,}원" in h2.body
-            assert "묶음" in h2.body
+            assert "묶음" not in h2.body
             assert equation in h2.body
             assert h2.visual_data["symbol"] == "÷"
             assert f"{contract.result}번이면 같" in h3.body

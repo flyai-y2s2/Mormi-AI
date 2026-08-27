@@ -20,6 +20,7 @@ from mormi_api.db import (
 from mormi_api.engine import ConversationEngine
 from mormi_api.repository import Repository
 from mormi_api.schemas import (
+    ArithmeticClaim,
     ChildResponse,
     DifficultyClass,
     EntryPhase,
@@ -28,8 +29,10 @@ from mormi_api.schemas import (
     InputKind,
     LearnerProfile,
     PracticeResult,
+    ReferenceResolution,
     ResponseCategory,
     ResponseType,
+    RetentionPolicy,
     SafetyCategory,
     SessionCreate,
     SessionEnvelope,
@@ -869,6 +872,9 @@ async def _start_money_count_conversation(
     tmp_path: object,
     analyses: list[UtteranceAnalysis],
     suffix: str,
+    *,
+    conversation_storage_consent: bool = True,
+    retention_policy: RetentionPolicy = RetentionPolicy.PERMANENT,
 ) -> tuple[Database, Repository, ConversationService, SessionEnvelope]:
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/entry-{suffix}.db")
     await database.create_schema()
@@ -884,6 +890,8 @@ async def _start_money_count_conversation(
             scenario_id="home_teach",
             learning_session_id=f"entry-session-{suffix}",
             practice_result_id=f"entry-practice-{suffix}",
+            conversation_storage_consent=conversation_storage_consent,
+            retention_policy=retention_policy,
             practice_summary={
                 "curriculum_session_id": "money-count",
                 "skill_id": "money-count",
@@ -981,6 +989,83 @@ async def test_persistence_uses_engine_accepted_claims_not_raw_classifier_claims
 
 
 @pytest.mark.asyncio
+async def test_no_raw_completion_keeps_only_structured_learning_state(
+    tmp_path: object,
+) -> None:
+    child_text = "600원이야. 500원과 100원을 더했어"
+    rule_span = "500원과 100원을 더했어"
+    analysis = UtteranceAnalysis(
+        safety_category=SafetyCategory.NORMAL,
+        response_category=ResponseCategory.CORRECT_FULL,
+        difficulty_class=DifficultyClass.UNKNOWN,
+        claims=[
+            SlotClaim(
+                slot_id="answer",
+                value="600원",
+                factual=True,
+                evidence_span="600원이야",
+            ),
+            SlotClaim(
+                slot_id="rule",
+                value=HOME_TEACHING_CATALOG["money-count"].learned_line,
+                factual=True,
+                evidence_span=rule_span,
+            ),
+        ],
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=500,
+                right=100,
+                operation="addition",
+                result=600,
+                evidence_span=rule_span,
+                related_slot_ids=["rule"],
+                interpretation_confidence=1,
+            )
+        ],
+        conversation_summary=f"민감한 자유문장: {child_text}",
+        confidence=1,
+    )
+    database, repository, service, started = await _start_money_count_conversation(
+        tmp_path,
+        [analysis],
+        "no-raw",
+        conversation_storage_consent=False,
+        retention_policy=RetentionPolicy.NO_RAW,
+    )
+
+    completed = await service.respond(
+        started.conversation_id,
+        ChildResponse(
+            turn_id=started.turn.turn_id,
+            response_id=uuid4(),
+            type="text",
+            text=child_text,
+        ),
+    )
+    state = await repository.get_state(started.conversation_id)
+    async with database.sessions() as db:
+        answered = (
+            await db.execute(
+                select(TurnRecord).where(TurnRecord.response_id.is_not(None))
+            )
+        ).scalar_one()
+        observation = (await db.execute(select(DialogueTurnObservationRecord))).scalar_one()
+        claims = list((await db.execute(select(DialogueClaimRecord))).scalars())
+
+    assert completed.turn.note_update is not None
+    assert completed.turn.note_update.attribution.value == "coauthored"
+    assert state.child_note_evidence == {}
+    assert answered.response_raw_encrypted is None
+    assert answered.response_structured is None
+    assert all(claim.evidence_span_encrypted is None for claim in claims)
+    assert child_text not in str(observation.analysis_json)
+    assert "conversation_summary" not in observation.analysis_json
+    assert "arithmetic_claims" not in observation.analysis_json
+    await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_genuine_l4_full_answer_can_complete_in_one_response(
     tmp_path: object,
 ) -> None:
@@ -1005,6 +1090,25 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
                 evidence_span=rule_span,
             ),
         ],
+        arithmetic_claims=[
+            ArithmeticClaim(
+                left=500,
+                right=100,
+                operation="addition",
+                result=600,
+                evidence_span=rule_span,
+                related_slot_ids=["rule"],
+                interpretation_confidence=1,
+            )
+        ],
+        reference_resolutions=[
+            ReferenceResolution(
+                source_span="600원이야",
+                resolved_to="아이 원문에 들어온 임의 이름",
+                confidence=1,
+            )
+        ],
+        conversation_summary=child_text,
         confidence=1,
     )
     database, _, service, started = await _start_money_count_conversation(
@@ -1046,6 +1150,9 @@ async def test_genuine_l4_full_answer_can_complete_in_one_response(
     assert observation.analysis_json.get("claims") is None
     assert observation.analysis_json.get("grounding_span") is None
     assert observation.analysis_json.get("social_grounding_span") is None
+    assert observation.analysis_json.get("conversation_summary") is None
+    assert observation.analysis_json.get("arithmetic_claims") is None
+    assert observation.analysis_json.get("reference_resolutions") is None
     assert {claim.slot_id for claim in claims} == {"answer", "rule"}
     assert all(claim.validation_status == "verified" for claim in claims)
     assert all(

@@ -3093,6 +3093,15 @@ class ConversationEngine:
             return
 
         if response.type is ResponseType.TEXT and response.text:
+            if not state.raw_storage_enabled:
+                # Completion may still use the verified canonical slot, but a
+                # no-raw conversation cannot retain exact child wording for a
+                # direct-attribution note. Preserve only the coauthored support
+                # category, which contains no child text.
+                supported = set(state.supported_note_slots)
+                supported.update(verified_note_slots)
+                state.supported_note_slots = sorted(supported)
+                return
             factual_claims = {
                 claim.slot_id: claim
                 for claim in analysis.claims

@@ -30,6 +30,22 @@
 - 안전성: `safety_category`, `speaker_source`, `verifier_status`, `fallback_reason`
 - 재현성: 대화 정책·콘텐츠·사전·분류기·화자 모델 버전
 
+카페·놀이동산의 life V3 관찰은 task 전환 전후를 섞지 않도록 다음 서버 소유 metadata를
+`runtime_json`에 추가한다. 아이 원문이나 evidence span은 이 metadata에 넣지 않는다.
+
+- schema discriminator `observation_runtime_schema=life-v3-observation-runtime-v1`
+- scenario pack ID/version/source hash
+- 응답을 받은 source task의 ID/index/variant/content identity
+- 결과 턴의 task ID/index/variant/content identity와 `task_transitioned`
+- reasoning-ledger schema, 검증된 fact/relation ID, auxiliary evidence 개수
+- 별노트 발행 여부와 source task/귀속/evidence/relation provenance
+
+`versions_json`에는 `dialogue_scenario_pack`, `dialogue_scenario_content_version`,
+`dialogue_scenario_source_hash`, `dialogue_task_variant`, `reasoning_ledger_schema`를 남긴다.
+같은 `observation_runtime_schema` discriminator도 함께 남긴다.
+저장소는 pinned scenario/task identity와 runtime 결과가 다르면 관찰을 추측해 저장하지 않고
+트랜잭션을 fail closed한다.
+
 `concept_result=not_assessed`는 도움 요청, 입력 오류, 장난 등 수학 개념을 평가할 수
 없는 응답이다. 리포트에서 이를 오답으로 합산하면 안 된다.
 
@@ -41,8 +57,9 @@
 외래키 부모는 `conversation → turn`, `observation → claim`, `note → evidence link`
 순서로 명시적으로 먼저 저장한다. 별노트가 답과 설명처럼 여러 턴에서 완성되면 마지막
 턴 하나만 가리키지 않고, `newly_verified`로 확인된 각 슬롯의 관찰을 모두 연결한다.
-과제 전환으로 다음 과제의 슬롯 상태가 초기화되더라도 마지막 응답의 검증 결과는
-사라지지 않는다.
+과제 전환으로 다음 과제의 슬롯 상태가 초기화되더라도 source task의 검증 결과는
+사라지지 않는다. V3 별노트의 `task_id`와 evidence link도 결과 턴의 새 task가 아니라 노트를
+실제로 만든 source task를 가리킨다.
 
 `dialogue_claims.validation_status`는 저장소가 분류기 원시 claim을 다시 판정해 만들지
 않는다. 상태 머신의 근거 검사·현재 질문 슬롯 제한까지 모두 통과한
@@ -170,15 +187,19 @@ Spring 수신 계약이 먼저 배포되지 않은 환경에서는
 
 ## 기존 데이터 보존과 마이그레이션
 
-스키마 변경은 기존 테이블을 수정·삭제하지 않고 새 테이블만 추가한다.
+관찰 스키마는 기존 행을 삭제하지 않는다. 대화 identity는 별도의 expand-contract revision으로
+전환하며, `20260826_05`에서는 old+new unique를 함께 두고 `20260826_06`에서 reader capability
+확인 뒤 old unique만 제거한다.
 
 ```bash
 python scripts/migrate_database.py
 python scripts/backfill_observations.py
 ```
 
-운영에서는 먼저 DB 백업을 확인하고 마이그레이션을 1회 실행한 뒤 애플리케이션을
-교체한다. 이 PR은 운영 배포 단계에서 자동 실행하지 않는다.
+운영에서는 먼저 DB 백업을 확인한다. `develop` 배포 workflow가 이전 live의 exact
+scenario-aware reader capability를 검사해 첫 배포는 transition revision까지만 적용하고
+canary/env를 0으로 고정한다. reader-capable 이미지가 live임을 확인한 다음 배포에서만 final
+revision을 적용한다. 운영자가 직접 실행할 때도 같은 두 단계와 gate를 지켜야 한다.
 
 기존 배포의 `Base.metadata.create_all()`이 새 테이블을 먼저 만든 경우에는, 다섯 관찰
 테이블이 모두 현재 스키마와 함께 존재할 때만 Alembic `head`를 기록한다. 일부만 존재하는
@@ -188,6 +209,11 @@ python scripts/backfill_observations.py
 `create_all()`은 이미 존재하는 불완전한 테이블을 고치지 못하므로, 계약 불일치를 발견하면
 아동의 실시간 응답을 받기 전에 서버 시작을 중단한다. 런타임 저장 오류는 중복 응답으로
 위장하지 않고 트랜잭션을 rollback한 뒤 재시도 가능한 `persistence_failed`로 반환한다.
+
+관찰 JSON에는 아이 원문을 복제하지 않는다. `analysis_json`은 닫힌 enum·검수 코드와
+confidence만 저장하고, 모델 자유문장·산술 evidence span·reference resolution은 제외한다.
+exact claim evidence는 consent-controlled column 하나에만 두며 기간 만료 시 turn raw,
+structured response, claim evidence와 legacy state evidence를 같은 transaction으로 정리한다.
 
 과거 턴 백필 원칙:
 

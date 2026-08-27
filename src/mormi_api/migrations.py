@@ -1,8 +1,9 @@
-"""Additive database migration helpers shared by operations and tests."""
+"""Expand-contract database migration helpers shared by operations and tests."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from alembic.config import Config
 from sqlalchemy import UniqueConstraint, create_engine, inspect
@@ -20,11 +21,33 @@ OBSERVATION_TABLES = {
     "ai_outbox_events",
 }
 
-APPLICATION_TABLES = OBSERVATION_TABLES | {"ladder_analysis_jobs"}
+UNVERSIONED_BASELINE_TABLES = OBSERVATION_TABLES | {"ladder_analysis_jobs"}
+CURRENT_HEAD_TABLES = UNVERSIONED_BASELINE_TABLES | {
+    # Revisions 20260825_03, 20260826_05 and 20260826_06 changed the core idempotency
+    # identity. A database stamped at head without the current column and
+    # scenario-scoped constraint must fail before a live conversation starts.
+    "conversations",
+    "dialogue_generated_copy_cache",
+}
+
+SCENARIO_IDENTITY_TRANSITION_REVISION = "20260826_05"
+SCENARIO_IDENTITY_FINAL_REVISION = "20260826_06"
+SCENARIO_IDENTITY_READER_CAPABILITY = "conversation-scenario-idempotency-reader-v1"
+OLD_CONVERSATION_IDENTITY = "uq_conversation_learning_session_round"
+NEW_CONVERSATION_IDENTITY = (
+    "uq_conversation_learning_session_scene_scenario_round"
+)
+ConversationIdentitySchemaPhase = Literal["transition", "final"]
+IdentityContract = Literal["compatible", "transition", "final"]
 
 
-def _observation_schema_issues(bind: Connection | Engine) -> list[str]:
-    """Return structural differences that make the observation schema unsafe.
+def _application_schema_issues(
+    bind: Connection | Engine,
+    *,
+    required_tables: set[str],
+    identity_contract: IdentityContract = "final",
+) -> list[str]:
+    """Return structural differences that make an application schema unsafe.
 
     Table names alone are not enough: an interrupted/manual deployment can
     leave a table present while a required column, FK, unique constraint or
@@ -35,7 +58,7 @@ def _observation_schema_issues(bind: Connection | Engine) -> list[str]:
     inspector = inspect(bind)
     existing = set(inspector.get_table_names())
     issues: list[str] = []
-    for table_name in sorted(APPLICATION_TABLES):
+    for table_name in sorted(required_tables):
         if table_name not in existing:
             issues.append(f"{table_name}:missing_table")
             continue
@@ -89,17 +112,98 @@ def _observation_schema_issues(bind: Connection | Engine) -> list[str]:
         expected_index_names = {str(index.name) for index in expected.indexes if index.name}
         for name in sorted(expected_index_names - actual_index_names):
             issues.append(f"{table_name}:missing_index:{name}")
+        if table_name == "conversations":
+            unique_index_names = {
+                str(index["name"])
+                for index in inspector.get_indexes(table_name)
+                if index.get("name") and index.get("unique")
+            }
+            actual_identity_names = actual_unique_names | unique_index_names
+            if (
+                identity_contract == "transition"
+                and OLD_CONVERSATION_IDENTITY not in actual_identity_names
+            ):
+                issues.append(
+                    f"{table_name}:missing_unique:{OLD_CONVERSATION_IDENTITY}"
+                )
+            elif (
+                identity_contract == "final"
+                and OLD_CONVERSATION_IDENTITY in actual_identity_names
+            ):
+                issues.append(
+                    f"{table_name}:obsolete_unique:{OLD_CONVERSATION_IDENTITY}"
+                )
     return issues
 
 
-def require_observation_schema(bind: Connection | Engine) -> None:
-    issues = _observation_schema_issues(bind)
+def _observation_schema_issues(
+    bind: Connection | Engine,
+    *,
+    identity_contract: IdentityContract = "compatible",
+) -> list[str]:
+    """Return application issues for a rolling-compatible identity phase."""
+
+    return _application_schema_issues(
+        bind,
+        required_tables=CURRENT_HEAD_TABLES,
+        identity_contract=identity_contract,
+    )
+
+
+def _unversioned_baseline_schema_issues(bind: Connection | Engine) -> list[str]:
+    return _application_schema_issues(
+        bind,
+        required_tables=UNVERSIONED_BASELINE_TABLES,
+    )
+
+
+def _raise_schema_issues(issues: list[str], *, contract: str) -> None:
     if issues:
         raise RuntimeError(
-            "Observation schema does not match the application contract; "
+            f"{contract} schema does not match the application contract; "
             "refusing to stamp or start from a silently partial migration. "
             f"issues={issues}"
         )
+
+
+def conversation_identity_schema_phase(
+    bind: Connection | Engine,
+) -> ConversationIdentitySchemaPhase:
+    inspector = inspect(bind)
+    unique_names = {
+        str(constraint["name"])
+        for constraint in inspector.get_unique_constraints("conversations")
+        if constraint.get("name")
+    }
+    unique_names.update(
+        str(index["name"])
+        for index in inspector.get_indexes("conversations")
+        if index.get("name") and index.get("unique")
+    )
+    return (
+        "transition"
+        if OLD_CONVERSATION_IDENTITY in unique_names
+        else "final"
+    )
+
+
+def require_observation_schema(
+    bind: Connection | Engine,
+    *,
+    identity_contract: IdentityContract = "compatible",
+) -> ConversationIdentitySchemaPhase:
+    _raise_schema_issues(
+        _observation_schema_issues(bind, identity_contract=identity_contract),
+        contract=f"Application ({identity_contract} identity)",
+    )
+    return conversation_identity_schema_phase(bind)
+
+
+def _require_unversioned_baseline_schema(bind: Connection | Engine) -> None:
+    _raise_schema_issues(
+        _unversioned_baseline_schema_issues(bind),
+        contract="Unversioned baseline",
+    )
 
 
 def synchronous_url(raw_url: str) -> str:
@@ -120,8 +224,25 @@ def synchronous_url(raw_url: str) -> str:
     return url.render_as_string(hide_password=False)
 
 
-def apply_database_migrations(raw_url: str, root: Path) -> None:
-    """Apply or safely reconcile additive application migrations."""
+def apply_database_migrations(
+    raw_url: str,
+    root: Path,
+    *,
+    target_revision: str = "head",
+) -> ConversationIdentitySchemaPhase:
+    """Apply one reviewed expand/contract migration target and verify it."""
+
+    if target_revision not in {
+        "head",
+        SCENARIO_IDENTITY_TRANSITION_REVISION,
+        SCENARIO_IDENTITY_FINAL_REVISION,
+    }:
+        raise ValueError(f"unsupported database migration target: {target_revision}")
+    expected_phase: ConversationIdentitySchemaPhase = (
+        "transition"
+        if target_revision == SCENARIO_IDENTITY_TRANSITION_REVISION
+        else "final"
+    )
 
     config = Config(root / "alembic.ini")
     sync_url = synchronous_url(raw_url)
@@ -133,22 +254,32 @@ def apply_database_migrations(raw_url: str, root: Path) -> None:
         if "conversations" not in existing:
             # A brand-new database has no legacy rows to preserve.
             Base.metadata.create_all(engine)
-            require_observation_schema(engine)
-            command.stamp(config, "head")
+            if expected_phase == "transition":
+                # ORM metadata describes the final schema. Re-enter the
+                # revision chain at 04 so transition revision 05 can add the
+                # rollback-compatible old key beside the new key.
+                command.stamp(config, "20260825_04")
+                command.upgrade(config, SCENARIO_IDENTITY_TRANSITION_REVISION)
+            else:
+                command.stamp(config, SCENARIO_IDENTITY_FINAL_REVISION)
+            require_observation_schema(engine, identity_contract=expected_phase)
         elif "alembic_version" in existing or not (existing & OBSERVATION_TABLES):
-            # Existing pilot databases keep every row. The revision adds only
-            # new tables and records the applied head in alembic_version.
-            command.upgrade(config, "head")
-            require_observation_schema(engine)
+            # Existing pilot databases keep every row. Revision 05 expands the
+            # key while revision 06 contracts it only after every live/rollback
+            # image advertises the scenario-aware reader.
+            command.upgrade(config, target_revision)
+            require_observation_schema(engine, identity_contract=expected_phase)
         elif OBSERVATION_TABLES.issubset(existing):
             # Older deployments call Base.metadata.create_all() during app
             # startup. If that happened before this operational command, the
-            # complete observation schema already exists but Alembic has no
-            # version row. Record the last table-only revision, then run later
-            # additive revisions such as conversation_round normally.
-            require_observation_schema(engine)
+            # complete baseline schema already exists but Alembic has no
+            # version row. Validate only the tables owned by that baseline;
+            # later additions (conversation_round and generated-copy cache)
+            # must not block the stamp that allows their revisions to run.
+            _require_unversioned_baseline_schema(engine)
             command.stamp(config, "20260823_02")
-            command.upgrade(config, "head")
+            command.upgrade(config, target_revision)
+            require_observation_schema(engine, identity_contract=expected_phase)
         else:
             partial = sorted(existing & OBSERVATION_TABLES)
             missing = sorted(OBSERVATION_TABLES - existing)
@@ -158,3 +289,4 @@ def apply_database_migrations(raw_url: str, root: Path) -> None:
             )
     finally:
         engine.dispose()
+    return expected_phase

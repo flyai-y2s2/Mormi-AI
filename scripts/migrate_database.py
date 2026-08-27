@@ -1,19 +1,30 @@
-"""Apply additive AI database migrations without discarding legacy rows."""
+"""Apply rollout-safe AI database migrations without discarding legacy rows."""
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
-from mormi_api.migrations import apply_database_migrations
-from mormi_api.settings import Settings
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from mormi_api.migrations import apply_database_migrations  # noqa: E402
+from mormi_api.settings import Settings  # noqa: E402
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parents[1]
     settings = Settings()
     raw_url = os.getenv("MORMI_DATABASE_URL", settings.database_url)
-    apply_database_migrations(raw_url, root)
+    target_revision = os.getenv("MORMI_DATABASE_MIGRATION_TARGET", "head")
+    phase = apply_database_migrations(
+        raw_url,
+        ROOT,
+        target_revision=target_revision,
+    )
+    print(f"conversation_identity_schema_phase={phase}")
 
 
 if __name__ == "__main__":

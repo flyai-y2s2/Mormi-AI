@@ -1,0 +1,65 @@
+{
+  "schema_version": "turn-contract-v1",
+  "turn_id": "turn_fixture_v2_completed_supported",
+  "scene": "home_teach",
+  "scenario_id": "home_teach",
+  "task_id": "home_teaching",
+  "stage_id": "home_teach",
+  "task_index": 0,
+  "mormi": {
+    "text": "고마워~ 네가 도와줘서 끝까지 이해할 수 있었어!",
+    "mood": "celebrating",
+    "max_lines": 2
+  },
+  "input": {
+    "kind": "none",
+    "placeholder": null,
+    "choices": [],
+    "target_slots": [],
+    "submit_label": null,
+    "config": {}
+  },
+  "visual": {
+    "type": "success",
+    "data": {
+      "task": "home_teaching"
+    }
+  },
+  "help_card": {
+    "visible": true,
+    "auto_open": true,
+    "level": "H3",
+    "title": "도움 카드",
+    "body": "2,500×2=5,000이고, 1,500×2=3,000이고, 3,000×1=3,000이야. 5,000+3,000+3,000=11,000이고, 11,000-10,000=1,000이라서 1,000원이 모자라.",
+    "visual_type": "joint_reading_card",
+    "visual_data": {
+      "text": "2,500×2=5,000이고, 1,500×2=3,000이고, 3,000×1=3,000이야. 5,000+3,000+3,000=11,000이고, 11,000-10,000=1,000이라서 1,000원이 모자라."
+    }
+  },
+  "note_update": null,
+  "status": "completed",
+  "state_version": 5,
+  "completion": {
+    "outcome": "supported",
+    "teach_reward_eligible": false,
+    "stage_completion_eligible": true,
+    "verified_facts": {
+      "shortage": 1000,
+      "calculate_shortage": "전체 물건값에서 예산을 빼 모자란 돈을 구하는 단계",
+      "answer": 1000,
+      "rule": "전체 물건값에서 예산을 빼 모자란 돈을 구하는 단계"
+    }
+  },
+  "pedagogy": {
+    "expression_level": "L0",
+    "hint_level": "H3",
+    "subgoal_id": "l0.joint",
+    "verified_slots": {
+      "answer": 1000,
+      "rule": "전체 물건값에서 예산을 빼 모자란 돈을 구하는 단계"
+    },
+    "bottleneck": null
+  },
+  "task_anchor": null,
+  "dictionary_ref": null
+}

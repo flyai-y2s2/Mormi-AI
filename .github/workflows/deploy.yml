@@ -5,7 +5,34 @@ on:
     branches: [develop]
   pull_request:
     branches: [develop]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      deployment_action:
+        description: >-
+          Deploy the selected revision, or immediately disable new V2
+          assignments on the currently running image without building,
+          migrating, or prewarming.
+        required: true
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - disable-v2
+      dialogue_v2_canary_percent:
+        description: >-
+          Manual deploy override for newly created V2 conversations. Use the
+          disable-v2 action for the emergency kill switch; only develop deploys.
+        required: true
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '5'
+          - '10'
+          - '25'
+          - '50'
+          - '100'
 
 concurrency:
   group: deploy-ai-develop
@@ -20,10 +47,150 @@ env:
   ECR_REPOSITORY: mormi-ai
 
 jobs:
+  emergency-disable-v2:
+    name: Immediately disable new V2 assignments
+    if: >-
+      github.ref == 'refs/heads/develop' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.deployment_action == 'disable-v2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Configure SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Set canary to zero on the current image
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+              "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+              "bash -s" <<'REMOTE'
+
+          set -euo pipefail
+
+          CURRENT_IMAGE="$(docker inspect --format '{{.Config.Image}}' mormi-ai 2>/dev/null || true)"
+          if [ -z "${CURRENT_IMAGE}" ]; then
+            echo "no running mormi-ai image is available for the V2 kill switch"
+            exit 1
+          fi
+
+          docker network create mormi-services 2>/dev/null || true
+          docker rm -f mormi-ai-canary-zero 2>/dev/null || true
+          docker run -d \
+            --name mormi-ai-canary-zero \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
+            -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=low \
+            -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
+            -e MORMI_SPEAKER_EFFORT=low \
+            -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_EFFORT=low \
+            -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+            -e MORMI_STAR_NOTE_MODEL=claude-haiku-4-5-20251001 \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+            -p 127.0.0.1:18000:8000 \
+            --log-opt max-size=10m \
+            --log-opt max-file=5 \
+            "${CURRENT_IMAGE}"
+
+          candidate_ready=""
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:18000/health 2>/dev/null; then
+              candidate_ready="yes"
+              break
+            fi
+            if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ai-canary-zero$'; then
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "${candidate_ready}" ]; then
+            echo "canary-zero candidate failed; the current live API was not replaced"
+            docker logs --tail=200 mormi-ai-canary-zero || true
+            docker rm -f mormi-ai-canary-zero 2>/dev/null || true
+            exit 1
+          fi
+
+          candidate_canary="$(docker exec mormi-ai-canary-zero \
+            python -c 'from mormi_api.settings import get_settings; print(get_settings().dialogue_v2_canary_percent)')"
+          if [ "${candidate_canary}" -ne 0 ]; then
+            echo "canary-zero candidate did not apply the emergency override"
+            docker rm -f mormi-ai-canary-zero
+            exit 1
+          fi
+
+          CANARY_ENV_FILE=/etc/mormi-ai/mormi.env
+          if grep -q '^MORMI_DIALOGUE_V2_CANARY_PERCENT=' "${CANARY_ENV_FILE}"; then
+            sed -i \
+              's/^MORMI_DIALOGUE_V2_CANARY_PERCENT=.*/MORMI_DIALOGUE_V2_CANARY_PERCENT=0/' \
+              "${CANARY_ENV_FILE}"
+          else
+            printf '\nMORMI_DIALOGUE_V2_CANARY_PERCENT=0\n' >> "${CANARY_ENV_FILE}"
+          fi
+
+          docker rm -f mormi-ai-canary-zero
+          docker rm -f mormi-ai
+          docker run -d \
+            --name mormi-ai \
+            --restart unless-stopped \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
+            -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=low \
+            -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
+            -e MORMI_SPEAKER_EFFORT=low \
+            -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_EFFORT=low \
+            -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+            -e MORMI_STAR_NOTE_MODEL=claude-haiku-4-5-20251001 \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+            -p 8000:8000 \
+            --log-opt max-size=10m \
+            --log-opt max-file=5 \
+            "${CURRENT_IMAGE}"
+
+          api_ready=""
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8000/health 2>/dev/null; then
+              api_ready="yes"
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "${api_ready}" ]; then
+            echo "current image failed to restart with canary zero"
+            docker logs --tail=200 mormi-ai || true
+            exit 1
+          fi
+          effective_canary="$(docker exec mormi-ai \
+            python -c 'from mormi_api.settings import get_settings; print(get_settings().dialogue_v2_canary_percent)')"
+          if [ "${effective_canary}" -ne 0 ]; then
+            echo "live API did not apply canary zero"
+            exit 1
+          fi
+          echo "new V2 assignments are disabled"
+
+          REMOTE
+
   test:
     name: Lint & Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      inputs.deployment_action == 'deploy'
 
     steps:
       - name: Checkout
@@ -58,9 +225,12 @@ jobs:
     name: Build image, push to ECR
     needs: test
 
-    # PR에서는 테스트만 수행하고,
-    # develop 브랜치에 실제 push 되었을 때만 배포 이미지 생성
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    # PR에서는 테스트만 수행합니다. develop push 또는 develop을 대상으로 한
+    # 수동 canary 조정일 때만 배포 이미지를 생성합니다.
+    if: >-
+      github.ref == 'refs/heads/develop' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.deployment_action == 'deploy'))
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -105,8 +275,11 @@ jobs:
     name: Deploy container on EC2
     needs: build-and-push
 
-    # develop push인 경우에만 실제 EC2 배포
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    # develop push 또는 develop 수동 canary 조정인 경우에만 실제 EC2 배포
+    if: >-
+      github.ref == 'refs/heads/develop' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.deployment_action == 'deploy'))
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -127,13 +300,30 @@ jobs:
           IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
           REGISTRY: ${{ needs.build-and-push.outputs.registry }}
           AWS_REGION: ${{ env.AWS_REGION }}
+          DIALOGUE_V2_CANARY_PERCENT_OVERRIDE: >-
+            ${{ github.event_name == 'workflow_dispatch' && inputs.dialogue_v2_canary_percent || '' }}
 
         run: |
           ssh -i ~/.ssh/id_deploy \
               "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
-              "IMAGE_URI='${IMAGE_URI}' REGISTRY='${REGISTRY}' AWS_REGION='${AWS_REGION}' bash -s" <<'REMOTE'
+              "IMAGE_URI='${IMAGE_URI}' REGISTRY='${REGISTRY}' AWS_REGION='${AWS_REGION}' DIALOGUE_V2_CANARY_PERCENT_OVERRIDE='${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}' bash -s" <<'REMOTE'
 
           set -euo pipefail
+
+          CANARY_ARGS=()
+          if [ -n "${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE:-}" ]; then
+            case "${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}" in
+              0|1|5|10|25|50|100) ;;
+              *)
+                echo "invalid manual dialogue V2 canary percent"
+                exit 1
+                ;;
+            esac
+            CANARY_ARGS=(
+              -e
+              "MORMI_DIALOGUE_V2_CANARY_PERCENT=${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}"
+            )
+          fi
 
           aws ecr get-login-password --region "${AWS_REGION}" \
             | docker login \
@@ -157,25 +347,92 @@ jobs:
           # 서비스용 Docker network 생성
           docker network create mormi-services 2>/dev/null || true
 
-          # 새 애플리케이션이 요구하는 additive DB 스키마를 먼저 적용합니다.
-          # 기존 API를 내리기 전에 실행하므로 실패하면 현재 서비스는 그대로 유지됩니다.
+          # Scenario-scoped idempotency is an expand-contract rollout. The
+          # first deploy keeps the old unique key and installs only the reader;
+          # a later deploy may contract it after the live rollback image
+          # explicitly advertises that reader capability.
+          PREVIOUS_IMAGE="$(docker inspect --format '{{.Config.Image}}' mormi-ai 2>/dev/null || true)"
+          previous_health="$(curl -fsS http://localhost:8000/health 2>/dev/null || true)"
+          previous_supports_scenario_identity=""
+          if printf '%s' "${previous_health}" \
+            | grep -q '"conversation-scenario-idempotency-reader-v1"'; then
+            previous_supports_scenario_identity="yes"
+          fi
+          previous_supports_v2=""
+          if printf '%s' "${previous_health}" | grep -q '"verdict-v1"' \
+            && printf '%s' "${previous_health}" \
+              | grep -q '"dialogue-v3-snapshot-reader-v1"'; then
+            previous_supports_v2="yes"
+          fi
+
+          MIGRATION_TARGET="20260826_05"
+          EXPECTED_IDENTITY_SCHEMA_PHASE="transition"
+          DEPLOY_CANARY_ARGS=(
+            -e
+            "MORMI_DIALOGUE_V2_CANARY_PERCENT=0"
+          )
+          if [ -z "${PREVIOUS_IMAGE}" ] \
+            || [ -n "${previous_supports_scenario_identity}" ]; then
+            MIGRATION_TARGET="head"
+            EXPECTED_IDENTITY_SCHEMA_PHASE="final"
+            DEPLOY_CANARY_ARGS=("${CANARY_ARGS[@]}")
+          fi
+
+          # Apply only the phase that the current rollback reader can tolerate.
+          # A migration failure leaves the current API in service.
           docker run --rm \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_RUNTIME_CONTRACT_VERSION=legacy-v1 \
+            -e MORMI_DATABASE_MIGRATION_TARGET="${MIGRATION_TARGET}" \
             "${IMAGE_URI}" \
             python scripts/migrate_database.py
 
+          # Stable copy is a deployment artifact, not a live child-request side
+          # effect.  Prewarm every reviewed V2 slot after the additive migration;
+          # any missing/invalid ready row blocks the candidate before traffic moves.
+          docker run --rm \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_EFFORT=low \
+            -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+            "${IMAGE_URI}" \
+            python scripts/prewarm_dialogue_v2_copy.py
+
+          # A warm copy cache does not exercise the live classifier or the
+          # child-facing Haiku schema. Verify both provider roles with a
+          # synthetic, PII-free contract before starting the candidate API.
+          docker run --rm \
+            --network mormi-services \
+            --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1 \
+            -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
+            -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=low \
+            -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
+            -e MORMI_SPEAKER_EFFORT=low \
+            -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
+            "${IMAGE_URI}" \
+            python scripts/smoke_dialogue_v2_models.py
+
           # 실제 API를 내리기 전에 동일한 환경의 후보 컨테이너를 먼저 확인합니다.
-          PREVIOUS_IMAGE="$(docker inspect --format '{{.Config.Image}}' mormi-ai 2>/dev/null || true)"
           docker rm -f mormi-ai-candidate 2>/dev/null || true
           docker run -d \
             --name mormi-ai-candidate \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
-            -e MORMI_CLASSIFIER_EFFORT=medium \
-            -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=low \
+            -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_SPEAKER_EFFORT=low \
+            -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_EFFORT=low \
+            -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+            -e MORMI_STAR_NOTE_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
             -e MORMI_OBSERVATION_INGEST_URL= \
             -e MORMI_OBSERVATION_INGEST_KEY= \
@@ -201,6 +458,93 @@ jobs:
             docker rm -f mormi-ai-candidate 2>/dev/null || true
             exit 1
           fi
+
+          candidate_health="$(curl -fsS http://localhost:18000/health)"
+          if ! printf '%s' "${candidate_health}" | grep -q '"verdict-v1"'; then
+            echo "candidate does not advertise the verdict-v1 reader/runtime capability"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf '%s' "${candidate_health}" \
+            | grep -q '"dialogue-v3-snapshot-reader-v1"'; then
+            echo "candidate cannot read the pinned home and life conversation snapshots"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf '%s' "${candidate_health}" \
+            | grep -q '"conversation-scenario-idempotency-reader-v1"'; then
+            echo "candidate cannot read the scenario-scoped conversation identity"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf '%s' "${candidate_health}" \
+            | grep -Eq "\"conversation_identity_schema_phase\"[[:space:]]*:[[:space:]]*\"${EXPECTED_IDENTITY_SCHEMA_PHASE}\""; then
+            echo "candidate identity schema phase does not match the selected migration phase"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf '%s' "${candidate_health}" \
+            | grep -Eq '"llm_configured"[[:space:]]*:[[:space:]]*true'; then
+            echo "candidate has no configured LLM provider"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf '%s' "${candidate_health}" \
+            | grep -Eq '"environment"[[:space:]]*:[[:space:]]*"production"'; then
+            echo "candidate is not using the production environment profile"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if ! printf '%s' "${candidate_health}" \
+            | grep -Eq '"runtime_contract_version"[[:space:]]*:[[:space:]]*"verdict-v1"'; then
+            echo "candidate effective runtime is not verdict-v1"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          candidate_canary_percent="$(docker exec mormi-ai-candidate \
+            python -c 'from mormi_api.settings import get_settings; print(get_settings().dialogue_v2_canary_percent)')"
+          if ! printf '%s' "${candidate_health}" \
+            | grep -Eq "\"dialogue_v2_canary_percent\"[[:space:]]*:[[:space:]]*${candidate_canary_percent}([,}])"; then
+            echo "candidate health does not match its effective V2 canary percent"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if [ "${EXPECTED_IDENTITY_SCHEMA_PHASE}" = "transition" ] \
+            && [ "${candidate_canary_percent}" -ne 0 ]; then
+            echo "transition schema must keep newly created V2 conversations at canary 0"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+          if [ "${candidate_canary_percent}" -gt 0 ] && [ -z "${previous_supports_v2}" ]; then
+            echo "V2 canary activation requires a snapshot-compatible verdict-v1 rollback image"
+            echo "deploy this image once with MORMI_DIALOGUE_V2_CANARY_PERCENT=0 first"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
+
+          # A manual canary override is an operational source-of-truth change,
+          # not a one-container flag. Persist it only after the candidate has
+          # passed every gate so the next automatic develop deployment cannot
+          # silently restore an older percentage from the env file.
+          PERSISTED_CANARY_PERCENT=""
+          if [ "${EXPECTED_IDENTITY_SCHEMA_PHASE}" = "transition" ]; then
+            # Keep host-owned configuration safe across container recreation;
+            # the second, contract-phase deploy must opt in again explicitly.
+            PERSISTED_CANARY_PERCENT="0"
+          elif [ -n "${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE:-}" ]; then
+            PERSISTED_CANARY_PERCENT="${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}"
+          fi
+          if [ -n "${PERSISTED_CANARY_PERCENT}" ]; then
+            CANARY_ENV_FILE=/etc/mormi-ai/mormi.env
+            if grep -q '^MORMI_DIALOGUE_V2_CANARY_PERCENT=' "${CANARY_ENV_FILE}"; then
+              sed -i \
+                "s/^MORMI_DIALOGUE_V2_CANARY_PERCENT=.*/MORMI_DIALOGUE_V2_CANARY_PERCENT=${PERSISTED_CANARY_PERCENT}/" \
+                "${CANARY_ENV_FILE}"
+            else
+              printf '\nMORMI_DIALOGUE_V2_CANARY_PERCENT=%s\n' \
+                "${PERSISTED_CANARY_PERCENT}" >> "${CANARY_ENV_FILE}"
+            fi
+          fi
           docker rm -f mormi-ai-candidate
 
           # 검증된 후보로 API를 교체합니다.
@@ -210,10 +554,16 @@ jobs:
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
-            -e MORMI_CLASSIFIER_EFFORT=medium \
-            -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=low \
+            -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_SPEAKER_EFFORT=low \
+            -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_EFFORT=low \
+            -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+            -e MORMI_STAR_NOTE_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
             -p 8000:8000 \
             --log-opt max-size=10m \
@@ -241,10 +591,16 @@ jobs:
                 --restart unless-stopped \
                 --network mormi-services \
                 --env-file /etc/mormi-ai/mormi.env \
+                "${DEPLOY_CANARY_ARGS[@]}" \
                 -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
-                -e MORMI_CLASSIFIER_EFFORT=medium \
-                -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+                -e MORMI_CLASSIFIER_EFFORT=low \
+                -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
                 -e MORMI_SPEAKER_EFFORT=low \
+                -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
+                -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+                -e MORMI_STABLE_COPY_EFFORT=low \
+                -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+                -e MORMI_STAR_NOTE_MODEL=claude-haiku-4-5-20251001 \
                 -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
                 -p 8000:8000 \
                 --log-opt max-size=10m \
@@ -278,9 +634,14 @@ jobs:
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
-            -e MORMI_CLASSIFIER_EFFORT=medium \
-            -e MORMI_SPEAKER_MODEL=claude-sonnet-4-6 \
+            -e MORMI_CLASSIFIER_EFFORT=low \
+            -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_SPEAKER_EFFORT=low \
+            -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
+            -e MORMI_STABLE_COPY_EFFORT=low \
+            -e MORMI_STABLE_COPY_VALIDATOR_VERSION=stable-copy-validator-v2 \
+            -e MORMI_STAR_NOTE_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_LADDER_MODEL_DIR=/opt/mormi/models/ladder-v2/model \
             -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=true \
             -e MORMI_LADDER_ANALYSIS_POLL_INTERVAL_SECONDS=2 \

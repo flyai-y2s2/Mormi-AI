@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .dictionary_models import DictionaryCard, DictionaryReference
 
@@ -106,6 +106,20 @@ class ResponseType(StrEnum):
     EQUATION = "equation"
     ACTION = "action"
     NO_RESPONSE = "no_response"
+
+
+class NoResponseKindV2(StrEnum):
+    """Server-visible meaning of a response with no child transcript.
+
+    Existing clients send only ``type=no_response`` for the explicit help
+    button.  That legacy shape is therefore interpreted as ``explicit_help``;
+    silence and ASR-empty events must opt in explicitly so they cannot
+    accidentally open the same help path.
+    """
+
+    EXPLICIT_HELP = "explicit_help"
+    SILENCE_TIMEOUT = "silence_timeout"
+    ASR_EMPTY = "asr_empty"
 
 
 class ResponseCategory(StrEnum):
@@ -245,6 +259,18 @@ class SpeakerVerificationPolicy(StrEnum):
 class SessionStatus(StrEnum):
     ACTIVE = "active"
     COMPLETED = "completed"
+
+
+class DialogueRuntimeContractVersion(StrEnum):
+    """Conversation-pinned dialogue implementation contract.
+
+    Existing snapshots predate this field and therefore load as ``LEGACY_V1``.
+    A service deployment may opt new conversations into ``VERDICT_V1``, but it
+    must never reinterpret a conversation that already has a pinned version.
+    """
+
+    LEGACY_V1 = "legacy-v1"
+    VERDICT_V1 = "verdict-v1"
 
 
 class CompletionOutcome(StrEnum):
@@ -525,6 +551,7 @@ class ChildResponse(BaseModel):
     text: str | None = Field(default=None, max_length=300)
     choice_ids: list[str] = Field(default_factory=list, max_length=20)
     values: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
+    no_response_kind: NoResponseKindV2 | None = None
     asr_confidence: float | None = Field(default=None, ge=0, le=1)
     latency_ms: int | None = Field(default=None, ge=0, le=600_000)
 
@@ -539,6 +566,13 @@ class ChildResponse(BaseModel):
             and not self.values
         ):
             raise ValueError(f"{self.type.value} response requires values")
+        if self.type is ResponseType.NO_RESPONSE:
+            # Backward compatibility: the only no-response event emitted by
+            # the current FE is the explicit "잘 모르겠어" button.
+            if self.no_response_kind is None:
+                self.no_response_kind = NoResponseKindV2.EXPLICIT_HELP
+        elif self.no_response_kind is not None:
+            raise ValueError("no_response_kind is valid only for no_response")
         return self
 
 
@@ -665,6 +699,437 @@ class UtteranceAnalysis(BaseModel):
     confidence: float = Field(default=0, ge=0, le=1)
 
 
+class UtteranceClassV2(StrEnum):
+    """Top-level routing class produced by the V2 understanding model."""
+
+    LEARNING_RESPONSE = "learning_response"
+    TASK_QUESTION = "task_question"
+    HELP_REQUEST = "help_request"
+    NON_LEARNING_SAFE = "non_learning_safe"
+    SYSTEM_MANIPULATION = "system_manipulation"
+    SAFETY_RISK = "safety_risk"
+
+
+class QuestionFocusV2(StrEnum):
+    """Minimal intent needed to answer a child question without changing pedagogy."""
+
+    REASON_OR_METHOD = "reason_or_method"
+    MEANING = "meaning"
+    CONFIRMATION_OR_CHALLENGE = "confirmation_or_challenge"
+
+
+class ConversationMoveV2(StrEnum):
+    """Conversation action carried independently from mathematical evidence.
+
+    ``utterance_class`` remains on the wire so conversations pinned before this
+    additive contract stay readable.  This axis preserves the child's social
+    or question move even when the same utterance also contains a valid claim.
+    """
+
+    NONE = "none"
+    TASK_QUESTION = "task_question"
+    META_QUESTION = "meta_question"
+    REQUEST_MORMI_ANSWER = "request_mormi_answer"
+    REFUSAL = "refusal"
+    SAFE_PLAY = "safe_play"
+
+
+class MoveSubjectV2(StrEnum):
+    """Small subject vocabulary needed to plan a natural conversational reply."""
+
+    TASK = "task"
+    MORMI_KNOWLEDGE = "mormi_knowledge"
+    MORMI_AI_IDENTITY = "mormi_ai_identity"
+    PARTICIPATION = "participation"
+    OTHER = "other"
+
+
+def _backfill_conversation_axes_v2(data: Any) -> Any:
+    """Derive additive axes when reading a legacy understanding JSON object."""
+
+    if not isinstance(data, dict):
+        return data
+    payload = dict(data)
+    utterance_class = payload.get("utterance_class")
+    non_learning_kind = payload.get("non_learning_kind")
+    move = payload.get("conversation_move")
+    utterance_value = getattr(utterance_class, "value", utterance_class)
+    non_learning_value = getattr(non_learning_kind, "value", non_learning_kind)
+    if move is None:
+        if utterance_value == UtteranceClassV2.TASK_QUESTION.value:
+            move = ConversationMoveV2.TASK_QUESTION.value
+        elif utterance_value == UtteranceClassV2.NON_LEARNING_SAFE.value:
+            if non_learning_value == NonLearningKindV2.META.value:
+                move = ConversationMoveV2.META_QUESTION.value
+            elif non_learning_value == NonLearningKindV2.REFUSAL.value:
+                move = ConversationMoveV2.REFUSAL.value
+            else:
+                move = ConversationMoveV2.SAFE_PLAY.value
+        else:
+            move = ConversationMoveV2.NONE.value
+        payload["conversation_move"] = move
+    if payload.get("move_subject") is None:
+        move_value = getattr(move, "value", move)
+        payload["move_subject"] = {
+            ConversationMoveV2.TASK_QUESTION.value: MoveSubjectV2.TASK.value,
+            ConversationMoveV2.META_QUESTION.value: MoveSubjectV2.MORMI_KNOWLEDGE.value,
+            ConversationMoveV2.REQUEST_MORMI_ANSWER.value: MoveSubjectV2.PARTICIPATION.value,
+            ConversationMoveV2.REFUSAL.value: MoveSubjectV2.PARTICIPATION.value,
+        }.get(move_value, MoveSubjectV2.OTHER.value)
+    return payload
+
+
+class NonLearningKindV2(StrEnum):
+    PLAYFUL = "playful"
+    META = "meta"
+    OFF_TOPIC = "off_topic"
+    REFUSAL = "refusal"
+    INSULT = "insult"
+
+
+class SupportNeed(StrEnum):
+    """Why the child needs support, independently of mathematical correctness."""
+
+    EXPRESSION = "expression"
+    CONCEPT = "concept"
+    BOTH = "both"
+    GENERAL_HELP = "general_help"
+    NONE = "none"
+
+
+class AnswerStatusV2(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    MISSING = "missing"
+    INCORRECT = "incorrect"
+    UNCERTAIN = "uncertain"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ReasoningStatusV2(StrEnum):
+    SUFFICIENT = "sufficient"
+    PARTIAL = "partial"
+    INSUFFICIENT = "insufficient"
+    MISSING = "missing"
+    INCORRECT = "incorrect"
+    UNCERTAIN = "uncertain"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class UnderstandingConfidenceV2(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ArithmeticValidityV2(StrEnum):
+    CORRECT = "correct"
+    INCORRECT = "incorrect"
+    UNCERTAIN = "uncertain"
+
+
+class DialogueV2Model(BaseModel):
+    """Strict base for contracts exchanged with the V2 model runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ArithmeticInterpretationV2(DialogueV2Model):
+    """N-ary arithmetic meaning extracted from one exact evidence span."""
+
+    operation: Literal["addition", "subtraction", "multiplication", "division"]
+    operands: list[int | float] = Field(min_length=2, max_length=16)
+    result: int | float
+    mathematical_validity: ArithmeticValidityV2
+
+
+class MoneyValueV2(DialogueV2Model):
+    type: Literal["money"] = "money"
+    amount: int | float
+    currency: str = Field(default="KRW", min_length=3, max_length=3)
+
+
+class NumberValueV2(DialogueV2Model):
+    type: Literal["number"] = "number"
+    value: int | float
+    unit: str | None = Field(default=None, max_length=30)
+
+
+class TextValueV2(DialogueV2Model):
+    type: Literal["text"] = "text"
+    text: str = Field(min_length=1, max_length=160)
+
+
+class BooleanValueV2(DialogueV2Model):
+    type: Literal["boolean"] = "boolean"
+    value: bool
+
+
+class ChoiceValueV2(DialogueV2Model):
+    type: Literal["choice"] = "choice"
+    choice_id: str = Field(min_length=1, max_length=160)
+
+
+CanonicalValueV2 = Annotated[
+    MoneyValueV2 | NumberValueV2 | TextValueV2 | BooleanValueV2 | ChoiceValueV2,
+    Field(discriminator="type"),
+]
+
+
+class FactUnderstandingClaimV2(DialogueV2Model):
+    claim_kind: Literal["fact"] = "fact"
+    claim_id: str = Field(min_length=1, max_length=100)
+    fact_id: str = Field(min_length=1, max_length=160)
+    claim_type: Literal["final_answer", "intermediate_result"]
+    evidence_span: str = Field(min_length=1, max_length=300)
+    interpreted_value: CanonicalValueV2
+    verdict: Literal["correct", "partial", "incorrect", "uncertain"]
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class RelationUnderstandingClaimV2(DialogueV2Model):
+    claim_kind: Literal["relation"] = "relation"
+    claim_id: str = Field(min_length=1, max_length=100)
+    relation_id: str = Field(min_length=1, max_length=160)
+    claim_type: Literal["procedure_step", "explanation"]
+    evidence_span: str = Field(min_length=1, max_length=300)
+    verdict: Literal["correct", "sufficient", "partial", "incorrect", "uncertain"]
+    arithmetic_interpretation: ArithmeticInterpretationV2 | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class AuxiliaryUnderstandingClaimV2(DialogueV2Model):
+    """Useful task-related evidence that has no reviewed canonical graph ID."""
+
+    claim_kind: Literal["auxiliary"] = "auxiliary"
+    claim_id: str = Field(min_length=1, max_length=100)
+    claim_type: Literal["auxiliary"] = "auxiliary"
+    evidence_span: str = Field(min_length=1, max_length=300)
+    summary: str = Field(min_length=1, max_length=160)
+    verdict: Literal["correct", "sufficient", "partial", "uncertain"]
+    interpreted_value: CanonicalValueV2 | None = None
+    arithmetic_interpretation: ArithmeticInterpretationV2 | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+UnderstandingClaimV2 = Annotated[
+    FactUnderstandingClaimV2
+    | RelationUnderstandingClaimV2
+    | AuxiliaryUnderstandingClaimV2,
+    Field(discriminator="claim_kind"),
+]
+
+
+class UnderstandingTargetV2(DialogueV2Model):
+    """One reviewed fact or relation the current question may ask for."""
+
+    target_kind: Literal["fact", "relation"]
+    target_id: str = Field(min_length=1, max_length=160)
+    ask_kind: Literal["answer", "reason_or_method"]
+    rubric: dict[str, str] = Field(default_factory=dict)
+    expected_truth: CanonicalValueV2 | None = None
+
+
+class ClaimableGraphContextV2(DialogueV2Model):
+    fact_ids: list[str] = Field(default_factory=list, max_length=100)
+    relation_ids: list[str] = Field(default_factory=list, max_length=100)
+    open_auxiliary_claims: bool = True
+
+    @model_validator(mode="after")
+    def ids_must_be_unique(self) -> ClaimableGraphContextV2:
+        if len(self.fact_ids) != len(set(self.fact_ids)):
+            raise ValueError("claimable fact_ids must be unique")
+        if len(self.relation_ids) != len(set(self.relation_ids)):
+            raise ValueError("claimable relation_ids must be unique")
+        return self
+
+
+class UnderstandingTurnContextV2(DialogueV2Model):
+    mormi_question: str = Field(min_length=1)
+    asks: list[Literal["answer", "reason_or_method"]] = Field(min_length=1, max_length=2)
+    expression_level: ExpressionLevel
+    hint_level: HintLevel
+    # Server-owned semantic scope of a visible H2/H3 scaffold.  This carries
+    # no card prose, equation, numeric truth, or child text.  It lets the
+    # understanding model interpret a later short confirmation such as
+    # "응" as coauthored support for one reviewed relation without exposing
+    # that help content to either Mormi speaker model.
+    help_scaffolded_relation_ids: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_help_scaffold_scope(self) -> UnderstandingTurnContextV2:
+        if len(self.help_scaffolded_relation_ids) != len(
+            set(self.help_scaffolded_relation_ids)
+        ):
+            raise ValueError("help scaffold relation ids must be unique")
+        if self.help_scaffolded_relation_ids and self.hint_level not in {
+            HintLevel.H2,
+            HintLevel.H3,
+        }:
+            raise ValueError("help scaffold relations require an H2 or H3 card")
+        return self
+
+
+class UnderstandingRequestV2(DialogueV2Model):
+    """Bounded, server-owned input for the V2 semantic understanding pass."""
+
+    task_id: str = Field(min_length=1, max_length=160)
+    visible_facts: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    targets: list[UnderstandingTargetV2] = Field(min_length=1, max_length=20)
+    claimable_graph: ClaimableGraphContextV2
+    current_turn: UnderstandingTurnContextV2
+    recent_history: list[DialogueHistoryTurn] = Field(default_factory=list, max_length=6)
+    child_utterance: str = Field(min_length=1, max_length=300)
+    # Populated only for the single contract-repair retry.  Codes contain no
+    # raw child text and ask the same understanding model to repair provenance
+    # without inviting a second semantic adjudication.
+    guard_feedback_codes: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def targets_must_reference_the_claimable_graph(self) -> UnderstandingRequestV2:
+        target_keys = [(target.target_kind, target.target_id) for target in self.targets]
+        if len(target_keys) != len(set(target_keys)):
+            raise ValueError("understanding targets must be unique")
+
+        fact_ids = set(self.claimable_graph.fact_ids)
+        relation_ids = set(self.claimable_graph.relation_ids)
+        for target in self.targets:
+            if target.target_kind == "fact" and target.target_id not in fact_ids:
+                raise ValueError("fact target must exist in claimable_graph.fact_ids")
+            if target.target_kind == "relation":
+                if target.target_id not in relation_ids:
+                    raise ValueError(
+                        "relation target must exist in claimable_graph.relation_ids"
+                    )
+                if target.expected_truth is not None:
+                    raise ValueError("relation target cannot declare expected_truth")
+
+        if set(self.current_turn.asks) != {target.ask_kind for target in self.targets}:
+            raise ValueError("current_turn asks must match target ask kinds")
+        target_relation_ids = {
+            target.target_id
+            for target in self.targets
+            if target.target_kind == "relation"
+        }
+        if not set(self.current_turn.help_scaffolded_relation_ids).issubset(
+            target_relation_ids
+        ):
+            raise ValueError(
+                "help scaffold relations must be unresolved relation targets"
+            )
+        return self
+
+
+class UnderstandingResponseV2(DialogueV2Model):
+    """Semantic result whose verdicts are not re-graded by deterministic code."""
+
+    utterance_class: UtteranceClassV2
+    # Additive conversational axes.  A before-validator derives them from the
+    # legacy fields when an already-pinned response JSON does not contain them.
+    conversation_move: ConversationMoveV2 = ConversationMoveV2.NONE
+    move_subject: MoveSubjectV2 = MoveSubjectV2.OTHER
+    question_focus: QuestionFocusV2 | None = None
+    support_need: SupportNeed = SupportNeed.NONE
+    non_learning_kind: NonLearningKindV2 | None = None
+    contains_learning_evidence: bool = False
+    answer_status: AnswerStatusV2 = AnswerStatusV2.NOT_APPLICABLE
+    reasoning_status: ReasoningStatusV2 = ReasoningStatusV2.NOT_APPLICABLE
+    claims: list[UnderstandingClaimV2] = Field(default_factory=list, max_length=30)
+    confidence: UnderstandingConfidenceV2 = UnderstandingConfidenceV2.MEDIUM
+
+    @model_validator(mode="before")
+    @classmethod
+    def backfill_additive_conversation_axes(cls, data: Any) -> Any:
+        return _backfill_conversation_axes_v2(data)
+
+    @model_validator(mode="after")
+    def validate_semantic_contract(self) -> UnderstandingResponseV2:
+        claim_ids = [claim.claim_id for claim in self.claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("understanding claim_ids must be unique")
+        if self.claims and not self.contains_learning_evidence:
+            raise ValueError("claims require contains_learning_evidence=true")
+        if (
+            self.utterance_class is UtteranceClassV2.HELP_REQUEST
+            and self.support_need is SupportNeed.NONE
+        ):
+            raise ValueError("help_request requires an explicit support_need")
+        if (
+            self.conversation_move is ConversationMoveV2.TASK_QUESTION
+            and self.question_focus is None
+        ):
+            raise ValueError("task_question requires question_focus")
+        if (
+            self.conversation_move is not ConversationMoveV2.TASK_QUESTION
+            and self.question_focus is not None
+        ):
+            raise ValueError("question_focus is only valid for task_question")
+        return self
+
+
+class ModelFactUnderstandingClaimV2(DialogueV2Model):
+    """Compact provider-facing fact claim with structurally valid role fields."""
+
+    claim_id: str
+    target_id: str
+    claim_type: Literal["final_answer", "intermediate_result"]
+    evidence_span: str
+    verdict: Literal["correct", "partial", "incorrect", "uncertain"]
+    value_type: Literal["money", "number", "text", "boolean", "choice"] | None
+    numeric_value: float | None
+    text_value: str | None
+    boolean_value: bool | None
+    unit: str | None
+    confidence: float | None
+
+
+class ModelRelationUnderstandingClaimV2(DialogueV2Model):
+    """Compact provider-facing relation claim with no fact-role alternatives."""
+
+    claim_id: str
+    target_id: str
+    claim_type: Literal["procedure_step", "explanation"]
+    evidence_span: str
+    verdict: Literal["correct", "sufficient", "partial", "incorrect", "uncertain"]
+    operation: Literal["addition", "subtraction", "multiplication", "division"] | None
+    operands: list[float]
+    result: float | None
+    mathematical_validity: ArithmeticValidityV2 | None
+    confidence: float | None
+
+
+class ModelAuxiliaryUnderstandingClaimV2(DialogueV2Model):
+    """Provider-facing progress that cannot claim a reviewed graph target."""
+
+    claim_id: str
+    evidence_span: str
+    verdict: Literal["correct", "sufficient", "partial", "uncertain"]
+    confidence: float | None
+
+
+class ModelUnderstandingResponseV2(DialogueV2Model):
+    """Small JSON grammar compiled by Anthropic, converted to the internal contract."""
+
+    utterance_class: UtteranceClassV2
+    conversation_move: ConversationMoveV2 = ConversationMoveV2.NONE
+    move_subject: MoveSubjectV2 = MoveSubjectV2.OTHER
+    question_focus: QuestionFocusV2 | None
+    support_need: SupportNeed
+    non_learning_kind: NonLearningKindV2 | None
+    contains_learning_evidence: bool
+    answer_status: AnswerStatusV2
+    reasoning_status: ReasoningStatusV2
+    fact_claims: list[ModelFactUnderstandingClaimV2]
+    relation_claims: list[ModelRelationUnderstandingClaimV2]
+    auxiliary_claims: list[ModelAuxiliaryUnderstandingClaimV2]
+    confidence: UnderstandingConfidenceV2
+
+    @model_validator(mode="before")
+    @classmethod
+    def backfill_additive_conversation_axes(cls, data: Any) -> Any:
+        return _backfill_conversation_axes_v2(data)
+
+
 class ChoiceOption(BaseModel):
     id: str
     label: str
@@ -765,6 +1230,10 @@ class TaskAnchorContract(BaseModel):
 
 
 class TurnContract(BaseModel):
+    # Persisted turn JSON predates this explicit reader version.  The default
+    # keeps those rows readable while every newly stored turn carries the
+    # version that the aggregate V2 snapshot capability promises to decode.
+    schema_version: Literal["turn-contract-v1"] = "turn-contract-v1"
     turn_id: str = Field(default_factory=lambda: new_id("turn"))
     scene: SceneType
     scenario_id: str
@@ -786,6 +1255,153 @@ class TurnContract(BaseModel):
     # The card itself is pinned in SessionState. Turns expose only its stable
     # identity so clients never derive dictionary copy from help-card text.
     dictionary_ref: DictionaryReference | None = None
+
+
+class PinnedDialogueRuntimeV2(BaseModel):
+    """Immutable content identity plus monotonic V2 dialogue state.
+
+    The full reviewed pack and generated-copy selections are pinned in the
+    conversation JSON so a deploy or cache refresh cannot change an in-flight
+    teaching round.  Dedicated V2 modules validate the nested pack and ledger
+    payloads before using them; legacy readers simply preserve this additive
+    field.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["pinned-dialogue-runtime-v2"] = (
+        "pinned-dialogue-runtime-v2"
+    )
+    pack_id: str = Field(min_length=1, max_length=160)
+    content_version: int = Field(ge=1)
+    source_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pack_snapshot: dict[str, Any]
+    reasoning_ledger: dict[str, Any]
+    # Stable-copy plans are compiled once from the pinned pack when the
+    # conversation is created.  Keeping the exact five payloads (rather than
+    # rebuilding them with the process's current compiler) makes an in-flight
+    # conversation independent from later compiler-rule deployments.
+    stable_copy_plan_schema_version: Literal["stable-copy-plan-set-v1"]
+    stable_copy_plan_compiler_version: Literal["stable-copy-plan-compiler-v1"]
+    stable_copy_plan_set_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    stable_copy_plans: dict[str, dict[str, Any]] = Field(
+        min_length=5,
+        max_length=5,
+    )
+    copy_snapshots: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    selector_reason: str = Field(min_length=1, max_length=100)
+    canary_bucket: int | None = Field(default=None, ge=0, le=99)
+
+
+ScenarioTaskIdV3 = Annotated[
+    str,
+    Field(pattern=r"^[a-z][a-z0-9_.-]*$", max_length=120),
+]
+ScenarioVariantIdV3 = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", max_length=100),
+]
+ScenarioEvidenceIdV3 = Annotated[
+    str,
+    Field(pattern=r"^[a-f0-9]{64}$"),
+]
+
+
+class PinnedDialogueTaskNoteStateV3(BaseModel):
+    """Task-scoped, raw-free provenance for one life-scene note policy.
+
+    Evidence IDs point at the task ledger; neither child text nor a model
+    paraphrase is persisted here.  Keeping support and joint-performance state
+    beside the task prevents a primary note from leaking into a transfer task.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["task-note-state-v3"] = "task-note-state-v3"
+    independent_relation_evidence: dict[
+        ScenarioTaskIdV3,
+        list[ScenarioEvidenceIdV3],
+    ] = Field(default_factory=dict, max_length=20)
+    supported_relation_ids: list[ScenarioTaskIdV3] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    joint_performance_used: bool = False
+    note_emitted: bool = False
+    emitted_note_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$",
+        max_length=100,
+    )
+
+    @model_validator(mode="after")
+    def validate_note_provenance(self) -> PinnedDialogueTaskNoteStateV3:
+        if len(self.supported_relation_ids) != len(set(self.supported_relation_ids)):
+            raise ValueError("task note supported relation IDs must be unique")
+        if set(self.independent_relation_evidence).intersection(
+            self.supported_relation_ids
+        ):
+            raise ValueError(
+                "task note relation cannot be both independent and supported"
+            )
+        if any(
+            not evidence_ids or len(evidence_ids) != len(set(evidence_ids))
+            for evidence_ids in self.independent_relation_evidence.values()
+        ):
+            raise ValueError(
+                "independent task note evidence IDs must be non-empty and unique"
+            )
+        if self.note_emitted != (self.emitted_note_id is not None):
+            raise ValueError("emitted task note state must include exactly one note ID")
+        return self
+
+
+class PinnedDialogueScenarioRuntimeV3(BaseModel):
+    """Immutable multi-task life-scene snapshot selected for one conversation.
+
+    This is deliberately separate from :class:`PinnedDialogueRuntimeV2`.
+    Existing home snapshots keep their exact schema, while a V3-capable reader
+    can pin a complete café or amusement scenario and isolate every task's
+    variant, reasoning ledger, and note provenance. Life copy is assembled from
+    reviewed templates, so generated stable-copy cache state does not belong in
+    this boundary.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["pinned-dialogue-scenario-runtime-v3"] = (
+        "pinned-dialogue-scenario-runtime-v3"
+    )
+    scenario_pack_id: str = Field(
+        pattern=r"^[a-z][a-z0-9_.-]*$",
+        max_length=160,
+    )
+    scenario_content_version: int = Field(ge=1)
+    scenario_source_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    scenario_pack_snapshot: dict[str, Any]
+    active_variant_ids: dict[ScenarioTaskIdV3, ScenarioVariantIdV3] = Field(
+        min_length=1,
+        max_length=4,
+    )
+    reasoning_ledgers: dict[ScenarioTaskIdV3, dict[str, Any]] = Field(
+        min_length=1,
+        max_length=4,
+    )
+    task_note_states: dict[
+        ScenarioTaskIdV3,
+        PinnedDialogueTaskNoteStateV3,
+    ] = Field(min_length=1, max_length=4)
+    selector_reason: str = Field(min_length=1, max_length=100)
+    canary_bucket: int | None = Field(default=None, ge=0, le=99)
+
+    @model_validator(mode="after")
+    def task_scopes_must_match(self) -> PinnedDialogueScenarioRuntimeV3:
+        task_ids = set(self.active_variant_ids)
+        if set(self.reasoning_ledgers) != task_ids or set(self.task_note_states) != task_ids:
+            raise ValueError(
+                "scenario variant, ledger, and note state task scopes must match"
+            )
+        return self
 
 
 class SessionState(BaseModel):
@@ -810,6 +1426,15 @@ class SessionState(BaseModel):
     # every new session from a genuine help request. Persisted values remain
     # readable so deployments do not break conversations already in progress.
     dialogue_policy_version: int = Field(default=1, ge=1)
+    # Runtime implementation is pinned once at conversation creation. Missing
+    # values in pre-V2 JSON snapshots deliberately resolve to the legacy path.
+    runtime_contract_version: DialogueRuntimeContractVersion = (
+        DialogueRuntimeContractVersion.LEGACY_V1
+    )
+    pinned_dialogue_v2: PinnedDialogueRuntimeV2 | None = None
+    # Life-scene conversations use a separate snapshot format. Keeping this
+    # additive field optional preserves every legacy and single-pack V2 state.
+    pinned_dialogue_scenario_v3: PinnedDialogueScenarioRuntimeV3 | None = None
     entry_phase: EntryPhase = EntryPhase.RESOLVED
     verified_slots: dict[str, str | int | float | bool] = Field(default_factory=dict)
     # Evidence must survive task changes. In particular, an amusement-park
@@ -1025,6 +1650,9 @@ class SpeakerRuntimeAudit(BaseModel):
         "reviewed_fallback",
         "llm",
         "bridge_llm",
+        "stable_copy_cache",
+        "stable_copy_fallback",
+        "v2_safety_fallback",
         "classifier_bridge",
         "generation_fallback",
         "deterministic_validation_fallback",
@@ -1042,6 +1670,49 @@ class SpeakerRuntimeAudit(BaseModel):
     adjudicator_used: bool = False
     speaker_latency_ms: int | None = Field(default=None, ge=0)
     verifier_latency_ms: int | None = Field(default=None, ge=0)
+    runtime_contract_version: DialogueRuntimeContractVersion = (
+        DialogueRuntimeContractVersion.LEGACY_V1
+    )
+    understanding_source: Literal[
+        "legacy",
+        "sonnet_medium",
+        "sonnet_low",
+        "deterministic_fallback",
+        "structured_choice",
+        "structured_joint",
+        "explicit_no_response",
+        "silence_timeout",
+        "asr_empty",
+    ] = "legacy"
+    understanding_attempts: int = Field(default=0, ge=0, le=2)
+    understanding_latency_ms: int | None = Field(default=None, ge=0)
+    evidence_guard_status: Literal[
+        "not_applicable",
+        "passed",
+        "retry_passed",
+        "failed",
+    ] = "not_applicable"
+    new_progress: bool = False
+    newly_verified_fact_ids: list[str] = Field(default_factory=list)
+    newly_verified_relation_ids: list[str] = Field(default_factory=list)
+    stable_copy_status: Literal[
+        "not_applicable",
+        "hit",
+        "generated",
+        "contended_fallback",
+        "generation_fallback",
+        "reviewed_fallback",
+    ] = "not_applicable"
+    stable_copy_key_digest: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{16}$",
+    )
+    content_pack_id: str | None = Field(default=None, max_length=160)
+    content_version: int | None = Field(default=None, ge=1)
+    content_source_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
 
 
 class SessionEnvelope(BaseModel):
@@ -1085,6 +1756,17 @@ class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     llm_configured: bool
     database: str
+    environment: str
+    runtime_contract_version: DialogueRuntimeContractVersion
+    dialogue_v2_canary_percent: int = Field(ge=0, le=100)
+    dialogue_runtime_capabilities: list[DialogueRuntimeContractVersion] = Field(
+        default_factory=lambda: [DialogueRuntimeContractVersion.LEGACY_V1]
+    )
+    dialogue_snapshot_reader_capabilities: list[str] = Field(default_factory=list)
+    conversation_identity_reader_capabilities: list[str] = Field(default_factory=list)
+    conversation_identity_schema_phase: Literal[
+        "transition", "final", "unchecked"
+    ] = "unchecked"
 
 
 class SkillProfilesResponse(BaseModel):

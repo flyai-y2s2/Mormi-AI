@@ -14,7 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
+from .copy_cache import GeneratedCopyCacheRepository
 from .db import Database
+from .dialogue_v2_content import load_required_home_content_catalog_v2
+from .dialogue_v2_copy import StableCopyResolverV2
+from .dialogue_v2_life_runtime import DialogueV2LifeEngine
+from .dialogue_v2_runtime import DialogueV2Engine
 from .dictionary_catalog import (
     DictionaryCardNotFoundError,
     DictionaryVersionMismatchError,
@@ -35,7 +40,10 @@ from .ladder_analysis_worker import DatabaseSpeechLoader, LadderAnalysisWorker
 from .ladder_model.dataset import canonical_level
 from .ladder_model.runtime import LadderModelRuntime
 from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
-from .migrations import require_observation_schema
+from .migrations import (
+    SCENARIO_IDENTITY_READER_CAPABILITY,
+    require_observation_schema,
+)
 from .outbox import OutboxDispatcher, OutboxStore
 from .reporting import validate_report_summary, validate_speech_change_summary
 from .repository import (
@@ -64,7 +72,7 @@ from .schemas import (
     StarNotesResponse,
 )
 from .security import StoredTextCodec
-from .service import ConversationService
+from .service import ConversationService, InvalidTurnResponseError
 from .settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -79,23 +87,63 @@ if not logging.getLogger().handlers:
     )
 logging.getLogger("mormi_api").setLevel(logging.INFO)
 
+RAW_RETENTION_PURGE_INTERVAL_SECONDS = 60 * 60
+
+
+def validate_conversation_identity_rollout(
+    identity_schema_phase: str | None,
+    *,
+    dialogue_v2_canary_percent: int,
+) -> None:
+    """Prevent life-V2 writes while the rollback-only old key still exists."""
+
+    if identity_schema_phase == "transition" and dialogue_v2_canary_percent > 0:
+        raise RuntimeError(
+            "dialogue V2 canary must remain 0 until the final scenario identity schema"
+        )
+
 
 async def run_startup_maintenance(
     database: Database,
     repository: Repository,
     *,
     skip: bool,
-) -> None:
+) -> str | None:
     if skip:
-        return
+        return None
     await database.create_schema()
     # ``create_all`` creates missing tables but cannot repair an existing
     # observation table with a missing FK, column, or index.
     async with database.engine.connect() as connection:
-        await connection.run_sync(require_observation_schema)
+        identity_schema_phase = await connection.run_sync(require_observation_schema)
     await repository.migrate_existing_storage_to_permanent()
     await repository.migrate_existing_storage_to_plaintext()
     await repository.purge_expired_raw_data()
+    return identity_schema_phase
+
+
+async def run_raw_retention_maintenance(
+    repository: Repository,
+    stop_event: asyncio.Event,
+    *,
+    interval_seconds: float = RAW_RETENTION_PURGE_INTERVAL_SECONDS,
+) -> None:
+    """Enforce time-limited raw retention while the API stays up for months."""
+
+    if interval_seconds <= 0:
+        raise ValueError("raw retention purge interval must be positive")
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            try:
+                await repository.purge_expired_raw_data()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # A transient database failure must not stop later retention
+                # attempts or take down child dialogue traffic.
+                logger.exception("raw_retention_purge_failed")
 
 
 @asynccontextmanager
@@ -103,6 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Trusted reference content is a startup contract, not a best-effort
     # runtime fallback. Invalid, stale or incomplete catalogs cannot be served.
     validate_dictionary_catalog()
+    load_required_home_content_catalog_v2()
     settings = get_settings()
     database = Database(settings.database_url)
     gateway = ClaudeGateway(settings)
@@ -113,23 +162,76 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         idempotency_retention_days=settings.idempotency_retention_days,
         classifier_model=settings.classifier_model,
         speaker_model=settings.speaker_model,
+        star_note_model=settings.star_note_model,
     )
-    await run_startup_maintenance(
+    identity_schema_phase = await run_startup_maintenance(
         database,
         repository,
         skip=settings.skip_startup_maintenance,
     )
+    validate_conversation_identity_rollout(
+        identity_schema_phase,
+        dialogue_v2_canary_percent=settings.dialogue_v2_canary_percent,
+    )
+    raw_retention_stop = asyncio.Event()
+    raw_retention_task: asyncio.Task[None] | None = None
+    if not settings.skip_startup_maintenance:
+        raw_retention_task = asyncio.create_task(
+            run_raw_retention_maintenance(repository, raw_retention_stop),
+            name="raw-retention-maintenance",
+        )
     engine = ConversationEngine(
         gateway,
         show_internal_pedagogy=settings.show_internal_pedagogy,
         speaker_timeout_seconds=settings.speaker_timeout_seconds,
         bridge_timeout_seconds=settings.bridge_timeout_seconds,
     )
+    copy_cache_repository = GeneratedCopyCacheRepository(
+        database,
+        lease_seconds=settings.stable_copy_cache_lease_seconds,
+        retry_base_seconds=settings.stable_copy_cache_retry_base_seconds,
+        retry_max_seconds=settings.stable_copy_cache_retry_max_seconds,
+    )
+    stable_copy_resolver = StableCopyResolverV2(
+        copy_cache_repository,
+        gateway,
+        settings,
+    )
+    v2_engine = DialogueV2Engine(
+        gateway,
+        copy_resolver=stable_copy_resolver,
+        show_internal_pedagogy=settings.show_internal_pedagogy,
+        classifier_timeout_seconds=settings.classifier_timeout_seconds,
+        speaker_timeout_seconds=settings.speaker_timeout_seconds,
+        bridge_timeout_seconds=settings.bridge_timeout_seconds,
+    )
+    life_v2_engine = DialogueV2LifeEngine(
+        gateway,
+        show_internal_pedagogy=settings.show_internal_pedagogy,
+        classifier_timeout_seconds=settings.classifier_timeout_seconds,
+        speaker_timeout_seconds=settings.speaker_timeout_seconds,
+        bridge_timeout_seconds=settings.bridge_timeout_seconds,
+    )
     app.state.settings = settings
+    app.state.conversation_identity_schema_phase = (
+        identity_schema_phase or "unchecked"
+    )
     app.state.database = database
     app.state.gateway = gateway
     app.state.repository = repository
-    app.state.service = ConversationService(repository, engine)
+    app.state.stable_copy_repository = copy_cache_repository
+    app.state.stable_copy_resolver = stable_copy_resolver
+    app.state.v2_engine = v2_engine
+    app.state.life_v2_engine = life_v2_engine
+    app.state.service = ConversationService(
+        repository,
+        engine,
+        v2_engine=v2_engine,
+        life_v2_engine=life_v2_engine,
+        runtime_contract_version=settings.runtime_contract_version,
+        dialogue_v2_canary_percent=settings.dialogue_v2_canary_percent,
+        dialogue_v2_canary_salt=settings.dialogue_v2_canary_salt,
+    )
     ladder_store = LadderAnalysisRepository(
         database, lease_seconds=settings.ladder_analysis_lease_seconds
     )
@@ -177,6 +279,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        raw_retention_stop.set()
+        if raw_retention_task is not None:
+            await raw_retention_task
         if ladder_worker is not None:
             await ladder_worker.stop()
         if ladder_worker_task is not None:
@@ -365,9 +470,27 @@ async def request_validation_error(
 async def health(request: Request) -> HealthResponse:
     current: Settings = request.app.state.settings
     gateway: ClaudeGateway = request.app.state.gateway
+    conversation: ConversationService = request.app.state.service
     return HealthResponse(
         llm_configured=gateway.configured,
         database="postgresql" if current.database_url.startswith("postgresql") else "sqlite",
+        environment=current.environment,
+        runtime_contract_version=current.runtime_contract_version,
+        dialogue_v2_canary_percent=current.dialogue_v2_canary_percent,
+        dialogue_runtime_capabilities=list(
+            conversation.dialogue_runtime_capabilities
+        ),
+        dialogue_snapshot_reader_capabilities=list(
+            conversation.dialogue_snapshot_reader_capabilities
+        ),
+        conversation_identity_reader_capabilities=[
+            SCENARIO_IDENTITY_READER_CAPABILITY
+        ],
+        conversation_identity_schema_phase=getattr(
+            request.app.state,
+            "conversation_identity_schema_phase",
+            "unchecked",
+        ),
     )
 
 
@@ -506,7 +629,7 @@ async def respond(
         return await conversation.respond(conversation_id, body)
     except ConversationNotFoundError as error:
         raise HTTPException(status_code=404, detail="Conversation not found") from error
-    except (StaleConversationError, ValueError) as error:
+    except (StaleConversationError, InvalidTurnResponseError) as error:
         try:
             latest = await conversation.snapshot(conversation_id)
         except ConversationNotFoundError:
@@ -627,7 +750,7 @@ async def respond_stream(
                 "error",
                 {"code": "conversation_not_found", "retryable": False},
             )
-        except (StaleConversationError, ValueError):
+        except (StaleConversationError, InvalidTurnResponseError):
             yield _sse(
                 "error",
                 {"code": "stale_or_invalid_response", "retryable": False},

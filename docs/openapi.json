@@ -910,6 +910,65 @@
         }
       }
     },
+    "/v1/internal/speech-change-summaries": {
+      "post": {
+        "tags": [
+          "internal reporting"
+        ],
+        "summary": "Create Speech Change Summary",
+        "operationId": "create_speech_change_summary_v1_internal_speech_change_summaries_post",
+        "parameters": [
+          {
+            "name": "X-Mormi-Service-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Mormi-Service-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeechChangeSummaryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechChangeSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/conversations/{conversation_id}/transcript": {
       "get": {
         "tags": [
@@ -1120,6 +1179,16 @@
             "type": "object",
             "title": "Values"
           },
+          "no_response_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NoResponseKindV2"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "asr_confidence": {
             "anyOf": [
               {
@@ -1291,6 +1360,15 @@
           "detail"
         ],
         "title": "ConflictResponse"
+      },
+      "DialogueRuntimeContractVersion": {
+        "type": "string",
+        "enum": [
+          "legacy-v1",
+          "verdict-v1"
+        ],
+        "title": "DialogueRuntimeContractVersion",
+        "description": "Conversation-pinned dialogue implementation contract.\n\nExisting snapshots predate this field and therefore load as ``LEGACY_V1``.\nA service deployment may opt new conversations into ``VERDICT_V1``, but it\nmust never reinterpret a conversation that already has a pinned version."
       },
       "DictionaryCard": {
         "properties": {
@@ -1700,12 +1778,59 @@
           "database": {
             "type": "string",
             "title": "Database"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "runtime_contract_version": {
+            "$ref": "#/components/schemas/DialogueRuntimeContractVersion"
+          },
+          "dialogue_v2_canary_percent": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Dialogue V2 Canary Percent"
+          },
+          "dialogue_runtime_capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/DialogueRuntimeContractVersion"
+            },
+            "type": "array",
+            "title": "Dialogue Runtime Capabilities"
+          },
+          "dialogue_snapshot_reader_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dialogue Snapshot Reader Capabilities"
+          },
+          "conversation_identity_reader_capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conversation Identity Reader Capabilities"
+          },
+          "conversation_identity_schema_phase": {
+            "type": "string",
+            "enum": [
+              "transition",
+              "final",
+              "unchecked"
+            ],
+            "title": "Conversation Identity Schema Phase",
+            "default": "unchecked"
           }
         },
         "type": "object",
         "required": [
           "llm_configured",
-          "database"
+          "database",
+          "environment",
+          "runtime_contract_version",
+          "dialogue_v2_canary_percent"
         ],
         "title": "HealthResponse"
       },
@@ -2114,6 +2239,16 @@
           "mood"
         ],
         "title": "MormiContract"
+      },
+      "NoResponseKindV2": {
+        "type": "string",
+        "enum": [
+          "explicit_help",
+          "silence_timeout",
+          "asr_empty"
+        ],
+        "title": "NoResponseKindV2",
+        "description": "Server-visible meaning of a response with no child transcript.\n\nExisting clients send only ``type=no_response`` for the explicit help\nbutton.  That legacy shape is therefore interpreted as ``explicit_help``;\nsilence and ASR-empty events must opt in explicitly so they cannot\naccidentally open the same help path."
       },
       "NoteAttribution": {
         "type": "string",
@@ -3021,6 +3156,12 @@
             ],
             "title": "Learning Session Id"
           },
+          "conversation_round": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Conversation Round",
+            "default": 1
+          },
           "practice_result_id": {
             "anyOf": [
               {
@@ -3191,6 +3332,93 @@
         ],
         "title": "SkillProfilesResponse"
       },
+      "SpeechChangeSample": {
+        "properties": {
+          "utterance": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Utterance"
+          },
+          "expression_level": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^L[0-4]$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expression Level"
+          },
+          "hint_level": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^H[0-4]$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint Level"
+          }
+        },
+        "type": "object",
+        "required": [
+          "utterance"
+        ],
+        "title": "SpeechChangeSample"
+      },
+      "SpeechChangeSummaryRequest": {
+        "properties": {
+          "domain_label": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Domain Label"
+          },
+          "past": {
+            "$ref": "#/components/schemas/SpeechChangeSample"
+          },
+          "recent": {
+            "$ref": "#/components/schemas/SpeechChangeSample"
+          }
+        },
+        "type": "object",
+        "required": [
+          "domain_label",
+          "past",
+          "recent"
+        ],
+        "title": "SpeechChangeSummaryRequest"
+      },
+      "SpeechChangeSummaryResponse": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 220,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "evidence_spans": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "minItems": 2,
+            "title": "Evidence Spans"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "evidence_spans"
+        ],
+        "title": "SpeechChangeSummaryResponse"
+      },
       "StarNotesResponse": {
         "properties": {
           "learner_id": {
@@ -3297,6 +3525,12 @@
       },
       "TurnContract": {
         "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "turn-contract-v1",
+            "title": "Schema Version",
+            "default": "turn-contract-v1"
+          },
           "turn_id": {
             "type": "string",
             "title": "Turn Id"

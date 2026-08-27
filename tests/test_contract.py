@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.exceptions import RequestValidationError
@@ -13,6 +15,8 @@ from mormi_api.main import (
     app,
 )
 from mormi_api.schemas import PracticeResult, PracticeSummary, SessionCreate
+
+OPENAPI_DOCUMENT = Path(__file__).parents[1] / "docs" / "openapi.json"
 
 
 def test_openapi_exposes_frontend_agreed_paths() -> None:
@@ -49,6 +53,10 @@ def test_openapi_exposes_frontend_agreed_paths() -> None:
     assert "dictionary_ref" in schema["components"]["schemas"]["TurnContract"]["properties"]
     conflict = paths["/v1/conversations/{conversation_id}/responses"]["post"]["responses"]["409"]
     assert conflict["content"]["application/json"]["schema"]["$ref"].endswith("/ConflictResponse")
+
+
+def test_committed_openapi_document_matches_the_running_app() -> None:
+    assert json.loads(OPENAPI_DOCUMENT.read_text(encoding="utf-8")) == app.openapi()
 
 
 def test_storage_consent_defaults_to_permanent_retention() -> None:

@@ -16,8 +16,11 @@ from mormi_api.content import (
     simple_calculation_task,
 )
 from mormi_api.llm import (
+    BRIDGE_SPEAKER_V2_SYSTEM,
     NOTE_CONTEXTUALIZER_SYSTEM,
     SPEAKER_SYSTEM,
+    SPEAKER_V2_SYSTEM,
+    UNDERSTANDING_V2_SYSTEM,
     ClaudeGateway,
     structured_output_schema,
     validate_speaker_output,
@@ -29,6 +32,8 @@ from mormi_api.schemas import (
     DifficultyClass,
     ExpressionLevel,
     InteractionIntent,
+    NoteContextualizationContext,
+    NoteContextualizationOutput,
     ReportFact,
     ReportNarrative,
     ReportSummaryRequest,
@@ -60,6 +65,79 @@ def object_schemas(node: object) -> list[dict[str, Any]]:
         for value in node:
             found.extend(object_schemas(value))
     return found
+
+
+def test_v2_speaker_prompt_keeps_mormi_in_the_learner_role() -> None:
+    assert "교사, 채점자, 평가자, 정답 확인자가 아니다" in SPEAKER_V2_SYSTEM
+    assert '"맞아, 잘 알려줬어!"' in SPEAKER_V2_SYSTEM
+    assert '"아, 전체 값은 16,000원이구나~"' in SPEAKER_V2_SYSTEM
+    assert "active turn의 질문과 도움 요청은 서버가 current_question으로 붙인다" in (
+        SPEAKER_V2_SYSTEM
+    )
+    assert "text 안에서 질문을 만들 권한이" in SPEAKER_V2_SYSTEM
+
+
+def test_v2_understanding_prompt_keeps_conversation_and_learning_axes_independent() -> None:
+    assert "conversation_move와 move_subject를 판정한다" in UNDERSTANDING_V2_SYSTEM
+    assert "system_manipulation 또는 safety_risk일 때만 모든 claim 배열을 비우고" in (
+        UNDERSTANDING_V2_SYSTEM
+    )
+    assert "안전한 meta_question, refusal, safe_play" in UNDERSTANDING_V2_SYSTEM
+    assert '"너는 왜 몰라?"' in UNDERSTANDING_V2_SYSTEM
+    assert "move_subject=mormi_knowledge" in UNDERSTANDING_V2_SYSTEM
+    assert '"너는 AI인데 그것도 몰라?"' in UNDERSTANDING_V2_SYSTEM
+    assert "move_subject=mormi_ai_identity" in UNDERSTANDING_V2_SYSTEM
+    assert '"너 AI인데 16,000원이잖아"' in UNDERSTANDING_V2_SYSTEM
+    assert '"못 알려주겠는데?"' in UNDERSTANDING_V2_SYSTEM
+    assert '"네가 해"' in UNDERSTANDING_V2_SYSTEM
+
+
+def test_v2_understanding_prompt_does_not_turn_help_card_text_into_learning() -> None:
+    assert "도움 카드에 보인 식이나 수를 질문하거나 그대로 인용한 것은" in (
+        UNDERSTANDING_V2_SYSTEM
+    )
+    assert "모르미가 스스로 답이나 방법을 깨달았다고 판정하지" in (
+        UNDERSTANDING_V2_SYSTEM
+    )
+    assert "conversation_move=request_mormi_answer" in UNDERSTANDING_V2_SYSTEM
+    assert "지원 단계와 다음 질문은 서버가 결정한다" in UNDERSTANDING_V2_SYSTEM
+
+
+def test_v2_speaker_prompts_obey_conversation_plan_and_fact_provenance() -> None:
+    for rule in (
+        "response_plan이 있으면 그 계획이 사회적 반응과 학습 복귀 방식의 최우선 계약이다",
+        "explain_mormi_limit이면 왜 모르냐는 질문을 무시하지 말고",
+        "explain_ai_role이면 AI라는 말을 피하지 말고",
+        "decline_answer_and_ask이면 모르미가 대신 풀지 못한다는 사실만",
+        "respond_refusal이면 아이의 거절을 복창·해석하거나",
+        '"나 꼭 알고 싶은데..."처럼 모르미 자신의 궁금한 마음만',
+        '"도움 카드가 나왔어" 또는 "어? 도움 카드가 나왔어"',
+        '"나왔구나", "나왔네", "나왔군"처럼 관찰을 평가하는 말투는 쓰지 않는다',
+        "response_mode와 관계없이 서버가 검수된 current_question을 뒤에 결정적으로 붙인다",
+        "reask_targets·current_question을 반복하거나 도움을 다시 청하지 않는다",
+        "allowed_facts.source=screen은 화면에서 볼 수 있는 사실일 뿐",
+        "allowed_facts.source=child_verified만 아이가 알려 준 사실",
+        "allowed_facts.source=jointly_derived는 함께 확인한 사실",
+        "도움 카드는 allowed_facts의 source가 될 수 없다",
+    ):
+        assert rule in SPEAKER_V2_SYSTEM
+
+    for rule in (
+        "서버가 검수된 current_question을",
+        "질문, 요청, 학습 복귀는 서버 몫이다",
+        "explain_ai_role: AI라는 사실을 인정하되",
+        "decline_answer_and_ask:",
+        "respond_refusal:",
+        '"나 꼭 알고 싶은데..."처럼 자신의 궁금함만 말한다',
+        '"도움 카드가 나왔어" 또는',
+        "본문·식·수·방법을 설명하거나 요약하지 않는다",
+        "screen, child_verified, jointly_derived 출처를 섞지 않는다",
+    ):
+        assert rule in BRIDGE_SPEAKER_V2_SYSTEM
+
+    assert "쉽고 따뜻한 반말만 사용한다" in SPEAKER_V2_SYSTEM
+    assert '"-요", "-습니다"' in SPEAKER_V2_SYSTEM
+    assert "쉽고 따뜻한 반말만 사용한다" in BRIDGE_SPEAKER_V2_SYSTEM
 
 
 def report_summary_request() -> ReportSummaryRequest:
@@ -108,7 +186,7 @@ async def test_summarize_report_uses_strict_speaker_structured_output() -> None:
 
     assert result == expected
     request = messages.requests[0]
-    assert request["model"] == gateway.settings.speaker_model
+    assert request["model"] == gateway.settings.report_model
     assert request["temperature"] == 0
     assert request["max_tokens"] == 700
     assert "문구를 그대로" in request["system"]
@@ -188,7 +266,7 @@ async def test_classifier_uses_configured_medium_effort() -> None:
 
 
 @pytest.mark.asyncio
-async def test_main_speaker_uses_configured_low_effort() -> None:
+async def test_main_haiku_speaker_omits_sonnet_effort() -> None:
     context = speaker_context()
     expected = speaker_output(context.fallback_text, context)
 
@@ -210,7 +288,117 @@ async def test_main_speaker_uses_configured_low_effort() -> None:
     result = await gateway.speak(context)
 
     assert result == expected
+    assert messages.requests[0]["model"] == "claude-haiku-4-5-20251001"
+    assert messages.requests[0]["temperature"] == 0.7
+    assert "effort" not in messages.requests[0]["output_config"]
+
+
+@pytest.mark.asyncio
+async def test_overridden_sonnet_speaker_uses_configured_low_effort() -> None:
+    context = speaker_context()
+    expected = speaker_output(context.fallback_text, context)
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=expected.model_dump_json())],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(
+        Settings(
+            anthropic_api_key=None,
+            speaker_model="claude-sonnet-4-6",
+            speaker_effort="low",
+        )
+    )
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+
+    result = await gateway.speak(context)
+
+    assert result == expected
+    assert messages.requests[0]["temperature"] == 0.7
     assert messages.requests[0]["output_config"]["effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_legacy_bridge_speaker_uses_conversational_temperature() -> None:
+    context = speaker_context()
+    expected = speaker_output(context.fallback_text, context)
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=expected.model_dump_json())],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(Settings(anthropic_api_key=None))
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+
+    result = await gateway.bridge_speak(context)
+
+    assert result == expected
+    assert messages.requests[0]["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_star_note_contextualizer_uses_dedicated_haiku_model() -> None:
+    context = NoteContextualizationContext(
+        skill_id="basic_addition",
+        note_context="두 물건의 전체 값을 구하는 방법",
+        source_fragments={"method": "2000원하고 900원을 더했어"},
+        reviewed_facts={"total": "2900원"},
+        allowed_numbers=["2000", "900", "2900"],
+        fallback_text="2000원하고 900원을 더해서 2900원을 구했어.",
+    )
+    expected = NoteContextualizationOutput(
+        text=context.fallback_text,
+        source_slots_used=["method"],
+        source_spans_used=[context.source_fragments["method"]],
+        fact_refs_used=["total"],
+        meaning_preserved=True,
+        self_contained=True,
+        introduced_math_content=False,
+    )
+
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.requests: list[dict[str, Any]] = []
+
+        async def create(self, **kwargs: Any) -> object:
+            self.requests.append(kwargs)
+            return SimpleNamespace(
+                stop_reason="end_turn",
+                content=[SimpleNamespace(type="text", text=expected.model_dump_json())],
+            )
+
+    messages = FakeMessages()
+    gateway = ClaudeGateway(
+        Settings(
+            anthropic_api_key=None,
+            speaker_model="dialogue-haiku",
+            star_note_model="note-haiku",
+        )
+    )
+    gateway.client = SimpleNamespace(messages=messages)  # type: ignore[assignment]
+
+    result = await gateway.contextualize_note(context)
+
+    assert result == expected
+    assert messages.requests[0]["model"] == gateway.settings.star_note_model
+    assert messages.requests[0]["model"] == "note-haiku"
+    assert messages.requests[0]["model"] != gateway.settings.speaker_model
 
 def speaker_context() -> SpeakerContext:
     return SpeakerContext(

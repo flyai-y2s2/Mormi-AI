@@ -52,8 +52,10 @@ class ConversationRecord(Base):
         UniqueConstraint(
             "learner_id",
             "learning_session_id",
+            "scene",
+            "scenario_id",
             "conversation_round",
-            name="uq_conversation_learning_session_round",
+            name="uq_conversation_learning_session_scene_scenario_round",
         ),
     )
 
@@ -304,6 +306,35 @@ class OutboxEventRecord(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DialogueGeneratedCopyCacheRecord(Base):
+    """PII-free, immutable artifacts generated from reviewed stable-copy plans."""
+
+    __tablename__ = "dialogue_generated_copy_cache"
+    __table_args__ = (
+        Index(
+            "ix_dialogue_generated_copy_cache_available",
+            "status",
+            "available_at",
+        ),
+    )
+
+    # Only the SHA-256 of canonical, content-owned key material is persisted.
+    # Learner, conversation, turn, response and child-utterance data have no
+    # columns in this table and are rejected by the key builder.
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key_version: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(30), default="generating")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    lease_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_json: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class LadderAnalysisRecord(Base):

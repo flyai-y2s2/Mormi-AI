@@ -1,0 +1,747 @@
+{
+  "schema_version": "required-home-content-catalog-v2",
+  "catalog_version": 1,
+  "packs": [
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.number-count.v2",
+      "content_version": 1,
+      "migration_source_content_version": 8,
+      "curriculum_session_id": "number-count",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "수를 빠뜨리지 않고 세어요",
+      "journey": {
+        "role": "cafe_required",
+        "direct_transfer_scenario_ids": []
+      },
+      "source_problem": {
+        "prompt": "지금 점이 몇 개야?",
+        "answers": ["3", "4", "5"],
+        "correct": "3",
+        "visual": {"type": "ten-frame", "count": 3},
+        "rendered_facts": [
+          {"fact_id": "dots_to_count", "source_path": "visual.type"},
+          {"fact_id": "dot_count", "exposure": "perceptual_target", "source_path": "visual.count"}
+        ]
+      },
+      "reasoning_graph": {
+        "facts": [
+          {
+            "fact_id": "dots_to_count",
+            "role": "visible_condition",
+            "value": {"type": "text", "text": "십 칸 틀에 색칠된 점"},
+            "speaker_label": "세어야 할 색칠된 점",
+            "initially_visible": true,
+            "required_for_completion": false,
+            "accepted_surface_forms": []
+          },
+          {
+            "fact_id": "dot_count",
+            "role": "final_answer",
+            "value": {"type": "number", "value": 3, "unit": "개"},
+            "speaker_label": "색칠된 점의 개수",
+            "initially_visible": false,
+            "required_for_completion": true,
+            "accepted_surface_forms": ["3", "3개", "세 개"]
+          }
+        ],
+        "relations": [
+          {
+            "relation_id": "count_each_once",
+            "role": "explanation",
+            "operation": "counting",
+            "input_fact_ids": ["dots_to_count"],
+            "output_fact_id": "dot_count",
+            "evaluation_mode": "open_semantic_support",
+            "speaker_label": "점을 빠뜨리거나 두 번 세지 않는 방법",
+            "rubric": {
+              "sufficient": [
+                "각 점을 정확히 한 번씩 세는 구체 행동을 말한다",
+                "한쪽부터 차례로 세기, 가리키기, 센 점과 남은 점을 구분하기처럼 중복과 누락을 막는 방법을 말한다"
+              ],
+              "partial": ["센다고만 말하고 중복과 누락을 막는 행동은 말하지 않는다"],
+              "incorrect": ["같은 점을 다시 세거나 점을 건너뛰는 방법을 말한다"]
+            },
+            "required_for_completion": true
+          }
+        ],
+        "completion": {
+          "required_fact_ids": ["dot_count"],
+          "required_relation_ids": ["count_each_once"]
+        },
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {
+        "plan_id": "initial",
+        "targets": [
+          {"target_kind": "fact", "target_id": "dot_count", "ask_kind": "answer"},
+          {"target_kind": "relation", "target_id": "count_each_once", "ask_kind": "reason_or_method"}
+        ],
+        "reviewed_fallback": "나 점을 세다가 빠뜨릴까 봐 헷갈려... 점이 몇 개인지랑 빠뜨리지 않고 세는 방법을 알려줄 수 있어?"
+      },
+      "l3_plans": [
+        {
+          "plan_id": "l3.answer",
+          "targets": [{"target_kind": "fact", "target_id": "dot_count", "ask_kind": "answer"}],
+          "reviewed_fallback": "나 점이 몇 개인지 아직 헷갈려... 개수만 먼저 알려줄 수 있어?"
+        },
+        {
+          "plan_id": "l3.method",
+          "targets": [{"target_kind": "relation", "target_id": "count_each_once", "ask_kind": "reason_or_method"}],
+          "reviewed_fallback": "나 점을 빠뜨리지 않고 세는 방법이 궁금해... 어떻게 세면 되는지 알려줄 수 있어?"
+        }
+      ],
+      "copy_slots": [
+        {
+          "copy_slot": "number-count.initial-help",
+          "purpose": "initial_help",
+          "targets": [
+            {"target_kind": "fact", "target_id": "dot_count", "ask_kind": "answer"}
+          ],
+          "generation_brief": "질문 부담을 모르미가 맡고 점의 개수부터 한 가지만 부탁한다",
+          "reviewed_fallback": "내가 한꺼번에 물어봤네... 점이 몇 개인지만 먼저 알려줄 수 있어?"
+        },
+        {
+          "copy_slot": "number-count.l2.answer",
+          "purpose": "l2_question",
+          "targets": [{"target_kind": "fact", "target_id": "dot_count", "ask_kind": "answer"}],
+          "generation_brief": "점의 개수를 선택해서 모르미에게 알려 달라고 부탁한다",
+          "reviewed_fallback": "나 점이 몇 개인지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"
+        },
+        {
+          "copy_slot": "number-count.l2.method",
+          "purpose": "l2_question",
+          "targets": [{"target_kind": "relation", "target_id": "count_each_once", "ask_kind": "reason_or_method"}],
+          "generation_brief": "빠뜨리지 않는 세기 방법을 선택해서 알려 달라고 부탁한다",
+          "reviewed_fallback": "나 점을 빠뜨리지 않고 세는 방법이 궁금해... 여기에서 골라서 알려줄 수 있어?"
+        },
+        {
+          "copy_slot": "number-count.l0.intro",
+          "purpose": "l0_intro",
+          "targets": [
+            {"target_kind": "fact", "target_id": "dot_count", "ask_kind": "answer"},
+            {"target_kind": "relation", "target_id": "count_each_once", "ask_kind": "reason_or_method"}
+          ],
+          "generation_brief": "도움 카드를 보며 공동 수행을 시작해 달라고 부탁한다",
+          "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 해 줄 수 있어?"
+        },
+        {
+          "copy_slot": "number-count.l0.action",
+          "purpose": "l0_action",
+          "targets": [
+            {"target_kind": "fact", "target_id": "dot_count", "ask_kind": "answer"},
+            {"target_kind": "relation", "target_id": "count_each_once", "ask_kind": "reason_or_method"}
+          ],
+          "generation_brief": "색칠된 점을 하나씩 세는 공동 행동을 짧게 부탁한다",
+          "reviewed_fallback": "색칠된 점을 한쪽부터 하나씩 같이 세어 줄 수 있어?"
+        }
+      ],
+      "l2_plans": [
+        {
+          "plan_id": "l2.answer",
+          "target": {"target_kind": "fact", "target_id": "dot_count", "ask_kind": "answer"},
+          "copy_slot": "number-count.l2.answer",
+          "choices": [
+            {"choice_id": "answer_0", "label": "3", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "dot_count", "interpreted_value": {"type": "number", "value": 3, "unit": "개"}}},
+            {"choice_id": "answer_1", "label": "4", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "dot_count", "misconception_code": "count_duplicate"}},
+            {"choice_id": "answer_2", "label": "5", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "dot_count", "misconception_code": "count_duplicate_more"}}
+          ]
+        },
+        {
+          "plan_id": "l2.method",
+          "target": {"target_kind": "relation", "target_id": "count_each_once", "ask_kind": "reason_or_method"},
+          "copy_slot": "number-count.l2.method",
+          "choices": [
+            {"choice_id": "short_0", "label": "점을 한쪽부터 하나씩 차례로 세기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "count_each_once"}},
+            {"choice_id": "short_1", "label": "같은 점을 두 번 세기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "count_each_once", "misconception_code": "count_same_twice"}},
+            {"choice_id": "short_2", "label": "점을 건너뛰며 세기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "count_each_once", "misconception_code": "count_skip"}}
+          ]
+        }
+      ],
+      "l0_joint_plan": {
+        "action_id": "count_dots_together",
+        "intro_copy_slot": "number-count.l0.intro",
+        "action_copy_slot": "number-count.l0.action",
+        "completion_values": [
+          {"target_kind": "fact", "target_id": "dot_count", "value": {"type": "number", "value": 3, "unit": "개"}},
+          {"target_kind": "relation", "target_id": "count_each_once", "satisfied": true}
+        ],
+        "button_label": "같이 세기"
+      },
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "색칠된 점을 한쪽부터 차례로 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "센 점을 표시하며 한 점씩 차례로 세어 보자.", "action": "한쪽부터 센 점을 표시하며 세기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "색칠된 점을 한쪽부터 하나씩 세면 모두 3개야.", "action": "색칠된 점 3개를 함께 세기", "revealed_fact_ids": ["dot_count"], "revealed_relation_ids": ["count_each_once"]}
+      },
+      "policies": {
+        "ladder_policy_version": "existing",
+        "entry_expression_level": "L4",
+        "entry_hint_level": "H0",
+        "completion_policy": "all_required_graph_targets",
+        "note_policy": "verified_child_or_coauthored",
+        "note_relation_ids": ["count_each_once"],
+        "dictionary_card_id": "dictionary.home.number-count",
+        "taught_reward_requires_independent_evidence": true,
+        "l0_completion_outcome": "supported"
+      }
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.number-compare.v2",
+      "content_version": 1,
+      "migration_source_content_version": 8,
+      "curriculum_session_id": "number-compare",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "수의 크기를 비교해요",
+      "journey": {"role": "cafe_required", "direct_transfer_scenario_ids": []},
+      "source_problem": {
+        "prompt": "어느 쪽이 더 많을까?",
+        "answers": ["왼쪽", "오른쪽", "같아"],
+        "correct": "오른쪽",
+        "visual": {"type": "ten-frame", "count": 3, "secondCount": 5},
+        "rendered_facts": [
+          {"fact_id": "left_count", "source_path": "visual.count"},
+          {"fact_id": "right_count", "source_path": "visual.secondCount"}
+        ]
+      },
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "left_count", "role": "visible_value", "value": {"type": "number", "value": 3, "unit": "개"}, "speaker_label": "왼쪽 점의 개수", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["왼쪽 3개"]},
+          {"fact_id": "right_count", "role": "visible_value", "value": {"type": "number", "value": 5, "unit": "개"}, "speaker_label": "오른쪽 점의 개수", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["오른쪽 5개"]},
+          {"fact_id": "more_side", "role": "final_answer", "value": {"type": "choice", "choice_id": "right"}, "speaker_label": "점이 더 많은 쪽", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["오른쪽", "오른쪽이 더 많아"]}
+        ],
+        "relations": [
+          {
+            "relation_id": "compare_quantities",
+            "role": "explanation",
+            "operation": "comparison",
+            "input_fact_ids": ["left_count", "right_count"],
+            "output_fact_id": "more_side",
+            "evaluation_mode": "open_semantic_support",
+            "speaker_label": "두 점의 개수를 비교하는 방법",
+            "rubric": {
+              "sufficient": ["3보다 5가 크다는 수 비교를 말한다", "두 쪽을 하나씩 짝지었을 때 오른쪽 점이 남는다고 말한다"],
+              "partial": ["오른쪽 결론만 반복하고 비교 근거는 말하지 않는다"],
+              "incorrect": ["점의 간격이나 크기로 개수를 판단하거나 두 수의 크기를 반대로 말한다"]
+            },
+            "required_for_completion": true
+          }
+        ],
+        "completion": {"required_fact_ids": ["more_side"], "required_relation_ids": ["compare_quantities"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {
+        "plan_id": "initial",
+        "targets": [
+          {"target_kind": "fact", "target_id": "more_side", "ask_kind": "answer"},
+          {"target_kind": "relation", "target_id": "compare_quantities", "ask_kind": "reason_or_method"}
+        ],
+        "reviewed_fallback": "나 두 쪽 중 점이 더 많은 곳을 고르려는데 헷갈려... 어느 쪽인지랑 비교한 방법을 알려줄 수 있어?"
+      },
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "more_side", "ask_kind": "answer"}], "reviewed_fallback": "나 어느 쪽에 점이 더 많은지 헷갈려... 더 많은 쪽만 먼저 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "compare_quantities", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 한쪽의 점 3개와 다른 쪽의 점 5개를 어떻게 비교하는지 궁금해... 비교한 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "number-compare.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "more_side", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 더 많은 쪽부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 더 많은 쪽만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "number-compare.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "more_side", "ask_kind": "answer"}], "generation_brief": "점이 더 많은 쪽을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 점이 더 많은 쪽이 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "number-compare.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "compare_quantities", "ask_kind": "reason_or_method"}], "generation_brief": "두 점의 개수를 비교한 근거를 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 두 쪽의 점을 어떻게 비교하는지 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "number-compare.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "more_side", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "compare_quantities", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 두 쪽을 공동 비교해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 비교해 줄 수 있어?"},
+        {"copy_slot": "number-compare.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "more_side", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "compare_quantities", "ask_kind": "reason_or_method"}], "generation_brief": "두 쪽의 점을 짝지어 공동 비교하는 행동을 부탁한다", "reviewed_fallback": "왼쪽과 오른쪽의 점을 하나씩 짝지어 같이 비교해 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {
+          "plan_id": "l2.answer",
+          "target": {"target_kind": "fact", "target_id": "more_side", "ask_kind": "answer"},
+          "copy_slot": "number-compare.l2.answer",
+          "choices": [
+            {"choice_id": "answer_0", "label": "왼쪽", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "more_side", "misconception_code": "compare_reversed"}},
+            {"choice_id": "answer_1", "label": "오른쪽", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "more_side", "interpreted_value": {"type": "choice", "choice_id": "right"}}},
+            {"choice_id": "answer_2", "label": "같아", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "more_side", "misconception_code": "compare_equal"}}
+          ]
+        },
+        {
+          "plan_id": "l2.method",
+          "target": {"target_kind": "relation", "target_id": "compare_quantities", "ask_kind": "reason_or_method"},
+          "copy_slot": "number-compare.l2.method",
+          "choices": [
+            {"choice_id": "short_0", "label": "왼쪽은 3개, 오른쪽은 5개라서", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "compare_quantities"}},
+            {"choice_id": "short_1", "label": "왼쪽은 5개, 오른쪽은 3개라서", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "compare_quantities", "misconception_code": "compare_counts_swapped"}},
+            {"choice_id": "short_2", "label": "두 쪽 모두 5개라서", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "compare_quantities", "misconception_code": "compare_counts_equal"}}
+          ]
+        }
+      ],
+      "l0_joint_plan": {
+        "action_id": "compare_dots_together",
+        "intro_copy_slot": "number-compare.l0.intro",
+        "action_copy_slot": "number-compare.l0.action",
+        "completion_values": [
+          {"target_kind": "fact", "target_id": "more_side", "value": {"type": "choice", "choice_id": "right"}},
+          {"target_kind": "relation", "target_id": "compare_quantities", "satisfied": true}
+        ],
+        "button_label": "같이 비교하기"
+      },
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "왼쪽과 오른쪽의 점 개수를 각각 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "왼쪽 3개와 오른쪽 5개를 하나씩 짝지어 남는 쪽을 찾아보자.", "action": "두 쪽의 점을 하나씩 짝짓기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "왼쪽은 3개, 오른쪽은 5개라서 오른쪽이 더 많아.", "action": "두 점의 개수와 더 많은 쪽을 함께 확인하기", "revealed_fact_ids": ["more_side"], "revealed_relation_ids": ["compare_quantities"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["compare_quantities"], "dictionary_card_id": "dictionary.home.number-compare", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.money-count.v2",
+      "content_version": 1,
+      "migration_source_content_version": 8,
+      "curriculum_session_id": "money-count",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "돈을 세어요",
+      "journey": {"role": "cafe_required", "direct_transfer_scenario_ids": []},
+      "source_problem": {"prompt": "모두 얼마일까?", "answers": ["600원", "500원", "700원"], "correct": "600원", "visual": {"type": "money", "amounts": [500, 100]}, "rendered_facts": [{"fact_id": "money_500", "source_path": "visual.amounts.0"}, {"fact_id": "money_100", "source_path": "visual.amounts.1"}]},
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "money_500", "role": "visible_value", "value": {"type": "money", "amount": 500, "currency": "KRW"}, "speaker_label": "500원짜리 돈", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["500원"]},
+          {"fact_id": "money_100", "role": "visible_value", "value": {"type": "money", "amount": 100, "currency": "KRW"}, "speaker_label": "100원짜리 돈", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["100원"]},
+          {"fact_id": "total_amount", "role": "final_answer", "value": {"type": "money", "amount": 600, "currency": "KRW"}, "speaker_label": "두 돈의 전체 금액", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["600원", "600"]}
+        ],
+        "relations": [
+          {"relation_id": "add_money_values", "role": "procedure_step", "operation": "addition", "input_fact_ids": ["money_500", "money_100"], "output_fact_id": "total_amount", "evaluation_mode": "open_semantic_support", "speaker_label": "돈마다 적힌 금액을 더하는 방법", "rubric": {"sufficient": ["500원과 100원을 더한다고 말한다", "500에서 100만큼 더 세어 600을 구하는 동치 방법을 말한다"], "partial": ["돈을 센다고만 말하고 금액을 합치는 행동은 말하지 않는다"], "incorrect": ["돈의 개수만 세거나 한 금액만 전체 금액으로 말한다"]}, "required_for_completion": true}
+        ],
+        "completion": {"required_fact_ids": ["total_amount"], "required_relation_ids": ["add_money_values"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {"plan_id": "initial", "targets": [{"target_kind": "fact", "target_id": "total_amount", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "add_money_values", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 이 돈이 모두 얼마인지 헷갈려... 전체 금액이랑 세는 방법을 알려줄 수 있어?"},
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "total_amount", "ask_kind": "answer"}], "reviewed_fallback": "나 이 돈이 모두 얼마인지 아직 헷갈려... 전체 금액만 먼저 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "add_money_values", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 500원과 100원을 어떻게 세는지 궁금해... 전체 금액을 구하는 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "money-count.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "total_amount", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 전체 금액부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 이 돈이 모두 얼마인지만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "money-count.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "total_amount", "ask_kind": "answer"}], "generation_brief": "전체 금액을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 이 돈이 모두 얼마인지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "money-count.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "add_money_values", "ask_kind": "reason_or_method"}], "generation_brief": "돈을 세는 방법을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 돈에 적힌 금액을 어떻게 세는지 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "money-count.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "total_amount", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "add_money_values", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 두 금액을 공동 계산해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"},
+        {"copy_slot": "money-count.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "total_amount", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "add_money_values", "ask_kind": "reason_or_method"}], "generation_brief": "500원과 100원을 더하는 공동 행동을 부탁한다", "reviewed_fallback": "500원과 100원을 카드에 나온 식처럼 같이 더해 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {"plan_id": "l2.answer", "target": {"target_kind": "fact", "target_id": "total_amount", "ask_kind": "answer"}, "copy_slot": "money-count.l2.answer", "choices": [
+          {"choice_id": "answer_0", "label": "600원", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "total_amount", "interpreted_value": {"type": "money", "amount": 600, "currency": "KRW"}}},
+          {"choice_id": "answer_1", "label": "500원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "total_amount", "misconception_code": "money_ignore_second"}},
+          {"choice_id": "answer_2", "label": "700원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "total_amount", "misconception_code": "money_overcount"}}
+        ]},
+        {"plan_id": "l2.method", "target": {"target_kind": "relation", "target_id": "add_money_values", "ask_kind": "reason_or_method"}, "copy_slot": "money-count.l2.method", "choices": [
+          {"choice_id": "short_0", "label": "각 돈에 적힌 금액을 더하기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "add_money_values"}},
+          {"choice_id": "short_1", "label": "돈이 두 개라고만 세기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "add_money_values", "misconception_code": "money_count_objects"}},
+          {"choice_id": "short_2", "label": "500원만 금액으로 세기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "add_money_values", "misconception_code": "money_ignore_second"}}
+        ]}
+      ],
+      "l0_joint_plan": {"action_id": "add_money_together", "intro_copy_slot": "money-count.l0.intro", "action_copy_slot": "money-count.l0.action", "completion_values": [{"target_kind": "fact", "target_id": "total_amount", "value": {"type": "money", "amount": 600, "currency": "KRW"}}, {"target_kind": "relation", "target_id": "add_money_values", "satisfied": true}], "button_label": "같이 더하기"},
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "돈마다 적힌 금액을 하나씩 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "500+100=□ 식의 빈칸을 구해 보자.", "action": "500+100 식의 빈칸 구하기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "500원에 100원을 더하면 모두 600원이야.", "action": "500+100=600을 함께 확인하기", "revealed_fact_ids": ["total_amount"], "revealed_relation_ids": ["add_money_values"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["add_money_values"], "dictionary_card_id": "dictionary.home.money-count", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.money-price.v2",
+      "content_version": 1,
+      "migration_source_content_version": 8,
+      "curriculum_session_id": "money-price",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "물건값을 더해요",
+      "journey": {"role": "cafe_required", "direct_transfer_scenario_ids": []},
+      "source_problem": {"prompt": "모두 얼마일까?", "answers": ["1,200원", "1,100원", "1,300원"], "correct": "1,200원", "visual": {"type": "money", "amounts": [700, 500], "labels": ["주스", "빵"]}, "rendered_facts": [{"fact_id": "juice_price", "source_path": "visual.amounts.0", "label_path": "visual.labels.0", "rendered_label": "주스"}, {"fact_id": "bread_price", "source_path": "visual.amounts.1", "label_path": "visual.labels.1", "rendered_label": "빵"}]},
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "juice_price", "role": "visible_value", "value": {"type": "money", "amount": 700, "currency": "KRW"}, "speaker_label": "주스 가격", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["700원"]},
+          {"fact_id": "bread_price", "role": "visible_value", "value": {"type": "money", "amount": 500, "currency": "KRW"}, "speaker_label": "빵 가격", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["500원"]},
+          {"fact_id": "purchase_total", "role": "final_answer", "value": {"type": "money", "amount": 1200, "currency": "KRW"}, "speaker_label": "주스와 빵의 전체 값", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["1,200원", "1200원", "1200"]}
+        ],
+        "relations": [
+          {"relation_id": "add_item_prices", "role": "procedure_step", "operation": "addition", "input_fact_ids": ["juice_price", "bread_price"], "output_fact_id": "purchase_total", "evaluation_mode": "open_semantic_support", "speaker_label": "두 물건값을 더하는 방법", "rubric": {"sufficient": ["700원과 500원을 더한다고 말한다", "두 물건값을 합쳐 전체 값을 구한다는 동치 방법을 말한다"], "partial": ["두 값을 계산한다고만 말하고 더하는 관계는 말하지 않는다"], "incorrect": ["두 값을 빼거나 한 물건값만 전체 값으로 말한다"]}, "required_for_completion": true}
+        ],
+        "completion": {"required_fact_ids": ["purchase_total"], "required_relation_ids": ["add_item_prices"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {"plan_id": "initial", "targets": [{"target_kind": "fact", "target_id": "purchase_total", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "add_item_prices", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 주스랑 빵을 함께 사려는데 헷갈려... 낼 돈과 계산 방법을 알려줄 수 있어?"},
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "purchase_total", "ask_kind": "answer"}], "reviewed_fallback": "나 주스랑 빵을 함께 사면 얼마인지 헷갈려... 낼 돈만 먼저 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "add_item_prices", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 700원짜리 주스와 500원짜리 빵을 어떻게 계산하는지 궁금해... 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "money-price.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "purchase_total", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 전체 물건값부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 주스와 빵이 모두 얼마인지만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "money-price.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "purchase_total", "ask_kind": "answer"}], "generation_brief": "두 물건의 전체 값을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 주스와 빵이 모두 얼마인지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "money-price.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "add_item_prices", "ask_kind": "reason_or_method"}], "generation_brief": "두 물건값 계산 방법을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 주스와 빵의 값을 어떻게 계산하는지 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "money-price.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "purchase_total", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "add_item_prices", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 물건값을 공동 계산해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"},
+        {"copy_slot": "money-price.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "purchase_total", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "add_item_prices", "ask_kind": "reason_or_method"}], "generation_brief": "700원과 500원을 더하는 공동 행동을 부탁한다", "reviewed_fallback": "700원과 500원을 카드에 나온 식처럼 같이 더해 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {"plan_id": "l2.answer", "target": {"target_kind": "fact", "target_id": "purchase_total", "ask_kind": "answer"}, "copy_slot": "money-price.l2.answer", "choices": [
+          {"choice_id": "answer_0", "label": "1,200원", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "purchase_total", "interpreted_value": {"type": "money", "amount": 1200, "currency": "KRW"}}},
+          {"choice_id": "answer_1", "label": "1,100원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "purchase_total", "misconception_code": "price_under_add"}},
+          {"choice_id": "answer_2", "label": "1,300원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "purchase_total", "misconception_code": "price_over_add"}}
+        ]},
+        {"plan_id": "l2.method", "target": {"target_kind": "relation", "target_id": "add_item_prices", "ask_kind": "reason_or_method"}, "copy_slot": "money-price.l2.method", "choices": [
+          {"choice_id": "short_0", "label": "700원과 500원을 더하기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "add_item_prices"}},
+          {"choice_id": "short_1", "label": "700원에서 500원을 빼기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "add_item_prices", "misconception_code": "price_subtract"}},
+          {"choice_id": "short_2", "label": "700원만 계산하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "add_item_prices", "misconception_code": "price_ignore_item"}}
+        ]}
+      ],
+      "l0_joint_plan": {"action_id": "add_item_prices_together", "intro_copy_slot": "money-price.l0.intro", "action_copy_slot": "money-price.l0.action", "completion_values": [{"target_kind": "fact", "target_id": "purchase_total", "value": {"type": "money", "amount": 1200, "currency": "KRW"}}, {"target_kind": "relation", "target_id": "add_item_prices", "satisfied": true}], "button_label": "같이 계산하기"},
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "주스값 700원과 빵값 500원을 각각 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "700+500=□ 식의 빈칸을 구해 보자.", "action": "700+500 식의 빈칸 구하기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "700원에 500원을 더하면 모두 1,200원이야.", "action": "700+500=1,200을 함께 확인하기", "revealed_fact_ids": ["purchase_total"], "revealed_relation_ids": ["add_item_prices"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["add_item_prices"], "dictionary_card_id": "dictionary.home.money-price", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.money-budget.v2",
+      "content_version": 1,
+      "migration_source_content_version": 7,
+      "curriculum_session_id": "money-budget",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "내 돈으로 살 수 있어요",
+      "journey": {"role": "cafe_required", "direct_transfer_scenario_ids": []},
+      "source_problem": {"prompt": "2,000원을 냈어. 얼마를 돌려받을까?", "answers": ["200원", "100원", "300원"], "correct": "200원", "visual": {"type": "money", "amounts": [1800], "paid": 2000, "labels": ["간식"]}, "rendered_facts": [{"fact_id": "paid_amount", "source_path": "visual.paid"}, {"fact_id": "item_price", "source_path": "visual.amounts.0", "label_path": "visual.labels.0", "rendered_label": "간식"}]},
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "paid_amount", "role": "visible_value", "value": {"type": "money", "amount": 2000, "currency": "KRW"}, "speaker_label": "낸 돈", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["2,000원", "2000원"]},
+          {"fact_id": "item_price", "role": "visible_value", "value": {"type": "money", "amount": 1800, "currency": "KRW"}, "speaker_label": "간식값", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["1,800원", "1800원"]},
+          {"fact_id": "change_amount", "role": "final_answer", "value": {"type": "money", "amount": 200, "currency": "KRW"}, "speaker_label": "돌려받는 돈", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["200원", "200"]}
+        ],
+        "relations": [
+          {"relation_id": "subtract_price_from_paid", "role": "procedure_step", "operation": "subtraction", "input_fact_ids": ["paid_amount", "item_price"], "output_fact_id": "change_amount", "evaluation_mode": "open_semantic_support", "speaker_label": "낸 돈에서 간식값을 빼는 방법", "rubric": {"sufficient": ["2,000원에서 1,800원을 뺀다고 말한다", "낸 돈에서 물건값을 덜어 거스름돈을 구한다는 동치 방법을 말한다"], "partial": ["두 금액의 차이를 구한다고만 말하고 빼는 순서를 분명히 하지 않는다"], "incorrect": ["두 금액을 더하거나 1,800원에서 2,000원을 뺀다고 말한다"]}, "required_for_completion": true}
+        ],
+        "completion": {"required_fact_ids": ["change_amount"], "required_relation_ids": ["subtract_price_from_paid"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {"plan_id": "initial", "targets": [{"target_kind": "fact", "target_id": "change_amount", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "subtract_price_from_paid", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 2,000원으로 간식을 사고 얼마를 돌려받는지 헷갈려... 돌려받는 돈과 계산 방법을 알려줄 수 있어?"},
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "change_amount", "ask_kind": "answer"}], "reviewed_fallback": "나 간식을 사고 얼마를 돌려받는지 헷갈려... 돌려받는 돈만 먼저 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "subtract_price_from_paid", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 2,000원으로 1,800원짜리 간식을 산 뒤 어떻게 계산하는지 궁금해... 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "money-budget.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "change_amount", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 돌려받는 돈부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 얼마를 돌려받는지만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "money-budget.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "change_amount", "ask_kind": "answer"}], "generation_brief": "돌려받는 돈을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 얼마를 돌려받는지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "money-budget.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "subtract_price_from_paid", "ask_kind": "reason_or_method"}], "generation_brief": "거스름돈 계산 방법을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 돌려받는 돈을 어떻게 계산하는지 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "money-budget.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "change_amount", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "subtract_price_from_paid", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 거스름돈을 공동 계산해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"},
+        {"copy_slot": "money-budget.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "change_amount", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "subtract_price_from_paid", "ask_kind": "reason_or_method"}], "generation_brief": "2,000원에서 1,800원을 빼는 공동 행동을 부탁한다", "reviewed_fallback": "2,000원에서 1,800원을 카드에 나온 식처럼 같이 빼 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {"plan_id": "l2.answer", "target": {"target_kind": "fact", "target_id": "change_amount", "ask_kind": "answer"}, "copy_slot": "money-budget.l2.answer", "choices": [
+          {"choice_id": "answer_0", "label": "200원", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "change_amount", "interpreted_value": {"type": "money", "amount": 200, "currency": "KRW"}}},
+          {"choice_id": "answer_1", "label": "100원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "change_amount", "misconception_code": "change_under_subtract"}},
+          {"choice_id": "answer_2", "label": "300원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "change_amount", "misconception_code": "change_over_subtract"}}
+        ]},
+        {"plan_id": "l2.method", "target": {"target_kind": "relation", "target_id": "subtract_price_from_paid", "ask_kind": "reason_or_method"}, "copy_slot": "money-budget.l2.method", "choices": [
+          {"choice_id": "short_0", "label": "2,000원에서 1,800원 빼기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "subtract_price_from_paid"}},
+          {"choice_id": "short_1", "label": "2,000원과 1,800원 더하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "subtract_price_from_paid", "misconception_code": "change_add"}},
+          {"choice_id": "short_2", "label": "1,800원에서 2,000원 빼기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "subtract_price_from_paid", "misconception_code": "change_reverse_subtract"}}
+        ]}
+      ],
+      "l0_joint_plan": {"action_id": "calculate_change_together", "intro_copy_slot": "money-budget.l0.intro", "action_copy_slot": "money-budget.l0.action", "completion_values": [{"target_kind": "fact", "target_id": "change_amount", "value": {"type": "money", "amount": 200, "currency": "KRW"}}, {"target_kind": "relation", "target_id": "subtract_price_from_paid", "satisfied": true}], "button_label": "같이 계산하기"},
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "낸 돈 2,000원과 간식값 1,800원을 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "2,000-1,800=□ 식의 빈칸을 구해 보자.", "action": "2,000-1,800 식의 빈칸 구하기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "2,000원에서 1,800원을 빼면 200원을 돌려받아.", "action": "2,000-1,800=200을 함께 확인하기", "revealed_fact_ids": ["change_amount"], "revealed_relation_ids": ["subtract_price_from_paid"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["subtract_price_from_paid"], "dictionary_card_id": "dictionary.home.money-budget", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.multiply-groups.v2",
+      "content_version": 1,
+      "migration_source_content_version": 8,
+      "curriculum_session_id": "multiply-groups",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "가격과 개수를 곱해요",
+      "journey": {"role": "amusement_preparation", "direct_transfer_scenario_ids": ["amusement_ticket_multiply"]},
+      "source_problem": {
+        "prompt": "4,000원짜리 장난감 4개는 모두 얼마일까?",
+        "answers": ["16,000원", "4,000원", "4,004원", "12,000원"],
+        "correct": "16,000원",
+        "visual": {
+          "type": "money-practice",
+          "image": "/life-missions/products/toy.jpg",
+          "imageAlt": "장난감 네 개",
+          "badge": "선물 가게",
+          "facts": [{"label": "한 개", "value": "4,000원"}, {"label": "장난감", "value": "4개"}],
+          "items": [{"image": "/life-missions/products/toy.jpg", "label": "장난감", "count": 4}]
+        },
+        "rendered_facts": [
+          {"fact_id": "unit_price", "source_path": "visual.facts.0.value", "label_path": "visual.facts.0.label", "rendered_label": "한 개"},
+          {"fact_id": "quantity", "source_path": "visual.facts.1.value", "label_path": "visual.facts.1.label", "rendered_label": "장난감"},
+          {"fact_id": "quantity", "source_path": "visual.items.0.count", "label_path": "visual.items.0.label", "rendered_label": "장난감"}
+        ]
+      },
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "unit_price", "role": "visible_value", "value": {"type": "money", "amount": 4000, "currency": "KRW"}, "speaker_label": "장난감 단가", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["4,000원", "4000원"]},
+          {"fact_id": "quantity", "role": "visible_value", "value": {"type": "number", "value": 4, "unit": "개"}, "speaker_label": "필요한 장난감 수", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["4개", "네 개"]},
+          {"fact_id": "total_price", "role": "final_answer", "value": {"type": "money", "amount": 16000, "currency": "KRW"}, "speaker_label": "장난감 전체 값", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["16,000원", "16000원", "16000"]}
+        ],
+        "relations": [
+          {"relation_id": "scale_unit_price", "role": "procedure_step", "operation": "multiplication", "input_fact_ids": ["unit_price", "quantity"], "output_fact_id": "total_price", "evaluation_mode": "open_semantic_support", "speaker_label": "한 개 가격을 필요한 개수만큼 계산하는 방법", "rubric": {"sufficient": ["4,000과 4를 곱한다고 말한다", "4,000원을 네 번 더한다고 말한다"], "partial": ["한 개 가격을 여러 번 계산한다고만 말하고 횟수나 연산을 분명히 하지 않는다"], "incorrect": ["4,000과 4를 더하거나 한 개 가격만 전체 값으로 말한다"]}, "required_for_completion": true}
+        ],
+        "completion": {"required_fact_ids": ["total_price"], "required_relation_ids": ["scale_unit_price"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {"plan_id": "initial", "targets": [{"target_kind": "fact", "target_id": "total_price", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "scale_unit_price", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 4,000원짜리 장난감 4개를 사려는데 헷갈려... 전체 값과 구하는 방법을 알려줄 수 있어?"},
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "total_price", "ask_kind": "answer"}], "reviewed_fallback": "나 장난감 4개가 모두 얼마인지 헷갈려... 전체 값만 먼저 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "scale_unit_price", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 4,000원짜리 장난감 4개의 값을 어떻게 구하는지 궁금해... 계산 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "multiply-groups.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "total_price", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 장난감 전체 값부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 장난감 4개가 모두 얼마인지만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "multiply-groups.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "total_price", "ask_kind": "answer"}], "generation_brief": "장난감 네 개의 전체 값을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 장난감 4개의 전체 값이 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "multiply-groups.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "scale_unit_price", "ask_kind": "reason_or_method"}], "generation_brief": "한 개 가격과 개수를 계산하는 방법을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 4,000원짜리 장난감 4개의 값을 어떻게 구하는지 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "multiply-groups.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "total_price", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "scale_unit_price", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 장난감 전체 값을 공동 계산해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"},
+        {"copy_slot": "multiply-groups.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "total_price", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "scale_unit_price", "ask_kind": "reason_or_method"}], "generation_brief": "4,000원과 4개를 곱하는 공동 행동을 부탁한다", "reviewed_fallback": "4,000원짜리 장난감 4개의 값을 카드에 나온 식처럼 같이 구해 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {"plan_id": "l2.answer", "target": {"target_kind": "fact", "target_id": "total_price", "ask_kind": "answer"}, "copy_slot": "multiply-groups.l2.answer", "choices": [
+          {"choice_id": "answer_0", "label": "16,000원", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "total_price", "interpreted_value": {"type": "money", "amount": 16000, "currency": "KRW"}}},
+          {"choice_id": "answer_1", "label": "4,000원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "total_price", "misconception_code": "multiply_one_unit_only"}},
+          {"choice_id": "answer_2", "label": "4,004원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "total_price", "misconception_code": "multiply_add_count"}},
+          {"choice_id": "answer_3", "label": "12,000원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "total_price", "misconception_code": "multiply_one_group_missing"}}
+        ]},
+        {"plan_id": "l2.method", "target": {"target_kind": "relation", "target_id": "scale_unit_price", "ask_kind": "reason_or_method"}, "copy_slot": "multiply-groups.l2.method", "choices": [
+          {"choice_id": "short_0", "label": "4,000×4로 구하기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "scale_unit_price"}},
+          {"choice_id": "short_1", "label": "4,000+4로 구하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "scale_unit_price", "misconception_code": "multiply_add_count"}},
+          {"choice_id": "short_2", "label": "4,000원만 계산하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "scale_unit_price", "misconception_code": "multiply_one_unit_only"}}
+        ]}
+      ],
+      "l0_joint_plan": {"action_id": "multiply_price_together", "intro_copy_slot": "multiply-groups.l0.intro", "action_copy_slot": "multiply-groups.l0.action", "completion_values": [{"target_kind": "fact", "target_id": "total_price", "value": {"type": "money", "amount": 16000, "currency": "KRW"}}, {"target_kind": "relation", "target_id": "scale_unit_price", "satisfied": true}], "button_label": "같이 계산하기"},
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "장난감 한 개 값 4,000원과 필요한 장난감 4개를 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "4,000×4=□ 식의 빈칸을 구해 보자.", "action": "4,000×4 식의 빈칸 구하기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "4,000×4=16,000이라서 장난감 4개는 모두 16,000원이야.", "action": "4,000×4=16,000을 함께 확인하기", "revealed_fact_ids": ["total_price"], "revealed_relation_ids": ["scale_unit_price"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["scale_unit_price"], "dictionary_card_id": "dictionary.home.multiply-groups", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.divide-share.v2",
+      "content_version": 1,
+      "migration_source_content_version": 8,
+      "curriculum_session_id": "divide-share",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "물건값을 똑같이 나눠요",
+      "journey": {"role": "amusement_preparation", "direct_transfer_scenario_ids": ["amusement_snack_divide"]},
+      "source_problem": {
+        "prompt": "선물 세트 10,500원을 3명이 똑같이 내면 한 명당 얼마일까?",
+        "answers": ["3,500원", "5,250원", "2,500원"],
+        "correct": "3,500원",
+        "visual": {"type": "money-practice", "image": "/life-missions/products/gift.jpg", "imageAlt": "친구에게 줄 선물 세트", "badge": "선물 가게", "facts": [{"label": "전체 값", "value": "10,500원"}, {"label": "함께 낼 사람", "value": "3명"}], "items": [{"image": "/life-missions/products/gift.jpg", "label": "선물 세트", "count": 1}]},
+        "rendered_facts": [{"fact_id": "total_price", "source_path": "visual.facts.0.value", "label_path": "visual.facts.0.label", "rendered_label": "전체 값"}, {"fact_id": "payer_count", "source_path": "visual.facts.1.value", "label_path": "visual.facts.1.label", "rendered_label": "함께 낼 사람"}]
+      },
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "total_price", "role": "visible_value", "value": {"type": "money", "amount": 10500, "currency": "KRW"}, "speaker_label": "선물 세트 전체 값", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["10,500원", "10500원"]},
+          {"fact_id": "payer_count", "role": "visible_value", "value": {"type": "number", "value": 3, "unit": "명"}, "speaker_label": "함께 낼 사람 수", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["3명", "세 명"]},
+          {"fact_id": "per_person", "role": "final_answer", "value": {"type": "money", "amount": 3500, "currency": "KRW"}, "speaker_label": "각자 낼 돈", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["3,500원", "3500원", "3500"]}
+        ],
+        "relations": [
+          {"relation_id": "equal_share_total", "role": "procedure_step", "operation": "division", "input_fact_ids": ["total_price", "payer_count"], "output_fact_id": "per_person", "evaluation_mode": "open_semantic_support", "speaker_label": "전체 값을 세 사람에게 똑같이 나누는 방법", "rubric": {"sufficient": ["10,500원을 3으로 나눈다고 말한다", "세 사람이 같은 돈을 내도록 나누거나 3,500을 세 번 모아 10,500인지 확인하는 동치 방법을 말한다"], "partial": ["똑같이 나눈다고만 말하고 사람 수나 계산 관계는 말하지 않는다"], "incorrect": ["두 사람으로 나누거나 전체 값을 한 사람이 내는 돈으로 말한다"]}, "required_for_completion": true}
+        ],
+        "completion": {"required_fact_ids": ["per_person"], "required_relation_ids": ["equal_share_total"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {"plan_id": "initial", "targets": [{"target_kind": "fact", "target_id": "per_person", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "equal_share_total", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 10,500원짜리 선물 세트를 세 명이 똑같이 내려는데 헷갈려... 한 명이 낼 돈과 계산 방법을 알려줄 수 있어?"},
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "per_person", "ask_kind": "answer"}], "reviewed_fallback": "나 세 명이 똑같이 내면 한 명이 얼마를 내는지 헷갈려... 한 명이 낼 돈만 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "equal_share_total", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 10,500원을 세 명에게 똑같이 나누는 방법이 궁금해... 계산 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "divide-share.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "per_person", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 한 사람이 낼 돈부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 한 명이 얼마를 내는지만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "divide-share.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "per_person", "ask_kind": "answer"}], "generation_brief": "한 사람이 낼 돈을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 한 명이 얼마를 내는지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "divide-share.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "equal_share_total", "ask_kind": "reason_or_method"}], "generation_brief": "세 명이 똑같이 나누는 방법을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 세 명이 똑같이 내는 방법이 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "divide-share.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "per_person", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "equal_share_total", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 한 사람 몫을 공동 계산해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"},
+        {"copy_slot": "divide-share.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "per_person", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "equal_share_total", "ask_kind": "reason_or_method"}], "generation_brief": "10,500원을 세 명에게 나누는 공동 행동을 부탁한다", "reviewed_fallback": "10,500원을 세 명에게 똑같이 나누는 식을 같이 구해 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {"plan_id": "l2.answer", "target": {"target_kind": "fact", "target_id": "per_person", "ask_kind": "answer"}, "copy_slot": "divide-share.l2.answer", "choices": [
+          {"choice_id": "answer_0", "label": "3,500원", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "per_person", "interpreted_value": {"type": "money", "amount": 3500, "currency": "KRW"}}},
+          {"choice_id": "answer_1", "label": "5,250원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "per_person", "misconception_code": "share_divide_by_two"}},
+          {"choice_id": "answer_2", "label": "2,500원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "per_person", "misconception_code": "share_wrong_quotient"}}
+        ]},
+        {"plan_id": "l2.method", "target": {"target_kind": "relation", "target_id": "equal_share_total", "ask_kind": "reason_or_method"}, "copy_slot": "divide-share.l2.method", "choices": [
+          {"choice_id": "short_0", "label": "10,500원을 3으로 나누기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "equal_share_total"}},
+          {"choice_id": "short_1", "label": "10,500원을 2로 나누기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "equal_share_total", "misconception_code": "share_divide_by_two"}},
+          {"choice_id": "short_2", "label": "10,500원을 나누지 않기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "equal_share_total", "misconception_code": "share_no_division"}}
+        ]}
+      ],
+      "l0_joint_plan": {"action_id": "divide_total_together", "intro_copy_slot": "divide-share.l0.intro", "action_copy_slot": "divide-share.l0.action", "completion_values": [{"target_kind": "fact", "target_id": "per_person", "value": {"type": "money", "amount": 3500, "currency": "KRW"}}, {"target_kind": "relation", "target_id": "equal_share_total", "satisfied": true}], "button_label": "같이 나누기"},
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "전체 값 10,500원과 함께 낼 사람 3명을 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "10,500÷3=□ 식의 빈칸을 구해 보자.", "action": "10,500÷3 식의 빈칸 구하기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "10,500÷3=3,500이라서 한 명은 3,500원씩 내면 돼.", "action": "10,500÷3=3,500을 함께 확인하기", "revealed_fact_ids": ["per_person"], "revealed_relation_ids": ["equal_share_total"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["equal_share_total"], "dictionary_card_id": "dictionary.home.divide-share", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.divide-group.v2",
+      "content_version": 1,
+      "migration_source_content_version": 9,
+      "curriculum_session_id": "divide-group",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "예산으로 살 수 있는 개수를 찾아요",
+      "journey": {"role": "amusement_preparation", "direct_transfer_scenario_ids": ["amusement_pass_compare"]},
+      "source_problem": {
+        "prompt": "예산 14,000원으로 2,000원짜리 책을 몇 권 살 수 있을까?",
+        "answers": ["7권", "2권", "6권", "14권"],
+        "correct": "7권",
+        "visual": {"type": "money-practice", "image": "/life-missions/products/book.jpg", "imageAlt": "읽고 싶은 책", "badge": "서점", "facts": [{"label": "한 권 가격", "value": "2,000원"}, {"label": "예산", "value": "14,000원"}], "items": [{"image": "/life-missions/products/book.jpg", "label": "책", "count": 1}]},
+        "rendered_facts": [{"fact_id": "unit_price", "source_path": "visual.facts.0.value", "label_path": "visual.facts.0.label", "rendered_label": "한 권 가격"}, {"fact_id": "budget", "source_path": "visual.facts.1.value", "label_path": "visual.facts.1.label", "rendered_label": "예산"}]
+      },
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "budget", "role": "visible_condition", "value": {"type": "money", "amount": 14000, "currency": "KRW"}, "speaker_label": "책을 살 예산", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["14,000원", "14000원"]},
+          {"fact_id": "unit_price", "role": "visible_value", "value": {"type": "money", "amount": 2000, "currency": "KRW"}, "speaker_label": "책 단가", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["2,000원", "2000원"]},
+          {"fact_id": "affordable_count", "role": "final_answer", "value": {"type": "number", "value": 7, "unit": "권"}, "speaker_label": "예산으로 살 수 있는 책 수", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["7권", "7", "일곱 권"]}
+        ],
+        "relations": [
+          {"relation_id": "count_price_groups", "role": "procedure_step", "operation": "division", "input_fact_ids": ["budget", "unit_price"], "output_fact_id": "affordable_count", "evaluation_mode": "open_semantic_support", "speaker_label": "예산 안에 한 권 가격이 몇 번 들어가는지 구하는 방법", "rubric": {"sufficient": ["14,000을 2,000으로 나눈다고 말한다", "2,000원을 일곱 번 모으거나 반복해서 빼는 동치 방법을 말한다"], "partial": ["2,000원씩 센다고만 말하고 예산과의 관계를 분명히 하지 않는다"], "incorrect": ["예산과 가격을 더하거나 한 권 산 뒤 남은 돈만 답한다"]}, "required_for_completion": true}
+        ],
+        "completion": {"required_fact_ids": ["affordable_count"], "required_relation_ids": ["count_price_groups"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {"plan_id": "initial", "targets": [{"target_kind": "fact", "target_id": "affordable_count", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "count_price_groups", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 14,000원으로 2,000원짜리 책을 사려는데 헷갈려... 몇 권 살 수 있는지랑 구하는 방법을 알려줄 수 있어?"},
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "affordable_count", "ask_kind": "answer"}], "reviewed_fallback": "나 14,000원으로 책을 몇 권 살 수 있는지 헷갈려... 책 수만 먼저 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "count_price_groups", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 14,000원으로 2,000원짜리 책을 몇 권 사는지 어떻게 구하는지 궁금해... 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "divide-group.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "affordable_count", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 살 수 있는 책 수부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 책을 몇 권 살 수 있는지만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "divide-group.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "affordable_count", "ask_kind": "answer"}], "generation_brief": "살 수 있는 책 수를 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 책을 몇 권 살 수 있는지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "divide-group.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "count_price_groups", "ask_kind": "reason_or_method"}], "generation_brief": "예산으로 살 수 있는 개수를 구하는 방법을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 예산으로 살 수 있는 책 수를 어떻게 구하는지 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "divide-group.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "affordable_count", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "count_price_groups", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 살 수 있는 책 수를 공동 계산해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"},
+        {"copy_slot": "divide-group.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "affordable_count", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "count_price_groups", "ask_kind": "reason_or_method"}], "generation_brief": "14,000원 안의 2,000원 묶음 수를 공동 계산해 달라고 부탁한다", "reviewed_fallback": "14,000원 안에 2,000원이 몇 번 들어가는지 같이 구해 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {"plan_id": "l2.answer", "target": {"target_kind": "fact", "target_id": "affordable_count", "ask_kind": "answer"}, "copy_slot": "divide-group.l2.answer", "choices": [
+          {"choice_id": "answer_0", "label": "7권", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "affordable_count", "interpreted_value": {"type": "number", "value": 7, "unit": "권"}}},
+          {"choice_id": "answer_1", "label": "2권", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "affordable_count", "misconception_code": "group_use_price_as_count"}},
+          {"choice_id": "answer_2", "label": "6권", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "affordable_count", "misconception_code": "group_one_short"}},
+          {"choice_id": "answer_3", "label": "14권", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "affordable_count", "misconception_code": "group_ignore_unit_price"}}
+        ]},
+        {"plan_id": "l2.method", "target": {"target_kind": "relation", "target_id": "count_price_groups", "ask_kind": "reason_or_method"}, "copy_slot": "divide-group.l2.method", "choices": [
+          {"choice_id": "short_0", "label": "14,000÷2,000으로 구하기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "count_price_groups"}},
+          {"choice_id": "short_1", "label": "14,000-2,000으로 한 번만 구하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "count_price_groups", "misconception_code": "group_subtract_once"}},
+          {"choice_id": "short_2", "label": "14,000+2,000으로 구하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "count_price_groups", "misconception_code": "group_add_budget"}}
+        ]}
+      ],
+      "l0_joint_plan": {"action_id": "count_price_groups_together", "intro_copy_slot": "divide-group.l0.intro", "action_copy_slot": "divide-group.l0.action", "completion_values": [{"target_kind": "fact", "target_id": "affordable_count", "value": {"type": "number", "value": 7, "unit": "권"}}, {"target_kind": "relation", "target_id": "count_price_groups", "satisfied": true}], "button_label": "같이 계산하기"},
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "예산 14,000원과 책 한 권 값 2,000원을 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "14,000÷2,000=□ 식의 빈칸을 구해 보자.", "action": "14,000÷2,000 식의 빈칸 구하기", "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "14,000÷2,000=7이라서 책은 7권 살 수 있어.", "action": "14,000÷2,000=7을 함께 확인하기", "revealed_fact_ids": ["affordable_count"], "revealed_relation_ids": ["count_price_groups"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["count_price_groups"], "dictionary_card_id": "dictionary.home.divide-group", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    },
+    {
+      "schema_version": "content-pack-v2",
+      "pack_id": "home.multiply-easy-tables.v2",
+      "content_version": 1,
+      "migration_source_content_version": 9,
+      "curriculum_session_id": "multiply-easy-tables",
+      "task_id": "home_teaching",
+      "stage_id": "home_teach",
+      "title": "여러 물건값과 예산을 비교해요",
+      "journey": {"role": "amusement_preparation", "direct_transfer_scenario_ids": []},
+      "source_problem": {
+        "prompt": "예산 10,000원으로 표 2장, 주스 2잔, 스티커 1장을 사려면 얼마가 모자랄까?",
+        "answers": ["1,000원", "2,000원", "3,000원"],
+        "correct": "1,000원",
+        "visual": {
+          "type": "money-practice",
+          "image": "/amusement-park/pass-elements-v2.png",
+          "imageAlt": "표와 주스와 스티커",
+          "badge": "예산 확인",
+          "facts": [{"label": "표 한 장", "value": "2,500원"}, {"label": "표", "value": "2장"}, {"label": "주스 한 잔", "value": "1,500원"}, {"label": "주스", "value": "2잔"}, {"label": "스티커 한 장", "value": "3,000원"}, {"label": "스티커", "value": "1장"}, {"label": "예산", "value": "10,000원"}],
+          "items": [{"image": "/amusement-park/pass-elements-v2.png", "label": "표", "count": 2}, {"image": "/life-missions/juice.webp", "label": "주스", "count": 2}, {"image": "/life-missions/products/stickers.jpg", "label": "스티커", "count": 1}]
+        },
+        "rendered_facts": [
+          {"fact_id": "ticket_unit_price", "source_path": "visual.facts.0.value", "label_path": "visual.facts.0.label", "rendered_label": "표 한 장"},
+          {"fact_id": "ticket_count", "source_path": "visual.facts.1.value", "label_path": "visual.facts.1.label", "rendered_label": "표"},
+          {"fact_id": "ticket_count", "source_path": "visual.items.0.count", "label_path": "visual.items.0.label", "rendered_label": "표"},
+          {"fact_id": "drink_unit_price", "source_path": "visual.facts.2.value", "label_path": "visual.facts.2.label", "rendered_label": "주스 한 잔"},
+          {"fact_id": "drink_count", "source_path": "visual.facts.3.value", "label_path": "visual.facts.3.label", "rendered_label": "주스"},
+          {"fact_id": "drink_count", "source_path": "visual.items.1.count", "label_path": "visual.items.1.label", "rendered_label": "주스"},
+          {"fact_id": "sticker_unit_price", "source_path": "visual.facts.4.value", "label_path": "visual.facts.4.label", "rendered_label": "스티커 한 장"},
+          {"fact_id": "sticker_count", "source_path": "visual.facts.5.value", "label_path": "visual.facts.5.label", "rendered_label": "스티커"},
+          {"fact_id": "sticker_count", "source_path": "visual.items.2.count", "label_path": "visual.items.2.label", "rendered_label": "스티커"},
+          {"fact_id": "budget", "source_path": "visual.facts.6.value", "label_path": "visual.facts.6.label", "rendered_label": "예산"}
+        ]
+      },
+      "reasoning_graph": {
+        "facts": [
+          {"fact_id": "ticket_unit_price", "role": "visible_value", "value": {"type": "money", "amount": 2500, "currency": "KRW"}, "speaker_label": "표 단가", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["2,500원", "2500원"]},
+          {"fact_id": "ticket_count", "role": "visible_value", "value": {"type": "number", "value": 2, "unit": "장"}, "speaker_label": "살 표의 수", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["2장", "두 장"]},
+          {"fact_id": "drink_unit_price", "role": "visible_value", "value": {"type": "money", "amount": 1500, "currency": "KRW"}, "speaker_label": "주스 단가", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["1,500원", "1500원"]},
+          {"fact_id": "drink_count", "role": "visible_value", "value": {"type": "number", "value": 2, "unit": "잔"}, "speaker_label": "살 주스의 수", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["2잔", "두 잔"]},
+          {"fact_id": "sticker_unit_price", "role": "visible_value", "value": {"type": "money", "amount": 3000, "currency": "KRW"}, "speaker_label": "스티커 단가", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["3,000원", "3000원"]},
+          {"fact_id": "sticker_count", "role": "visible_value", "value": {"type": "number", "value": 1, "unit": "장"}, "speaker_label": "살 스티커의 수", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["1장", "한 장"]},
+          {"fact_id": "budget", "role": "visible_condition", "value": {"type": "money", "amount": 10000, "currency": "KRW"}, "speaker_label": "가지고 있는 예산", "initially_visible": true, "required_for_completion": false, "accepted_surface_forms": ["10,000원", "10000원"]},
+          {"fact_id": "ticket_total", "role": "intermediate_result", "value": {"type": "money", "amount": 5000, "currency": "KRW"}, "speaker_label": "표 묶음 값", "initially_visible": false, "required_for_completion": false, "accepted_surface_forms": ["5,000원", "5000원"]},
+          {"fact_id": "drink_total", "role": "intermediate_result", "value": {"type": "money", "amount": 3000, "currency": "KRW"}, "speaker_label": "주스 묶음 값", "initially_visible": false, "required_for_completion": false, "accepted_surface_forms": ["3,000원", "3000원"]},
+          {"fact_id": "sticker_total", "role": "intermediate_result", "value": {"type": "money", "amount": 3000, "currency": "KRW"}, "speaker_label": "스티커 값", "initially_visible": false, "required_for_completion": false, "accepted_surface_forms": ["3,000원", "3000원"]},
+          {"fact_id": "purchase_total", "role": "intermediate_result", "value": {"type": "money", "amount": 11000, "currency": "KRW"}, "speaker_label": "표와 주스와 스티커의 전체 값", "initially_visible": false, "required_for_completion": false, "accepted_surface_forms": ["11,000원", "11000원", "11000"]},
+          {"fact_id": "shortage", "role": "final_answer", "value": {"type": "money", "amount": 1000, "currency": "KRW"}, "speaker_label": "모자란 돈", "initially_visible": false, "required_for_completion": true, "accepted_surface_forms": ["1,000원", "1000원", "1000"]}
+        ],
+        "relations": [
+          {"relation_id": "calculate_ticket_total", "role": "procedure_step", "operation": "multiplication", "input_fact_ids": ["ticket_unit_price", "ticket_count"], "output_fact_id": "ticket_total", "evaluation_mode": "open_semantic_support", "speaker_label": "표 두 장의 값을 구하는 단계", "rubric": {"sufficient": ["2,500원과 2장을 곱하거나 2,500원을 두 번 더한다고 말한다"], "partial": ["표값을 먼저 구한다고만 말한다"], "incorrect": ["표 한 장 값만 쓰거나 가격과 장 수를 더한다"]}, "required_for_completion": false},
+          {"relation_id": "calculate_drink_total", "role": "procedure_step", "operation": "multiplication", "input_fact_ids": ["drink_unit_price", "drink_count"], "output_fact_id": "drink_total", "evaluation_mode": "open_semantic_support", "speaker_label": "주스 두 잔의 값을 구하는 단계", "rubric": {"sufficient": ["1,500원과 2잔을 곱하거나 1,500원을 두 번 더한다고 말한다"], "partial": ["주스값을 먼저 구한다고만 말한다"], "incorrect": ["주스 한 잔 값만 쓰거나 가격과 잔 수를 더한다"]}, "required_for_completion": false},
+          {"relation_id": "calculate_sticker_total", "role": "procedure_step", "operation": "multiplication", "input_fact_ids": ["sticker_unit_price", "sticker_count"], "output_fact_id": "sticker_total", "evaluation_mode": "open_semantic_support", "speaker_label": "스티커 한 장의 값을 구하는 단계", "rubric": {"sufficient": ["3,000원과 1장을 곱하거나 한 장 값 3,000원을 그대로 쓴다고 말한다"], "partial": ["스티커값을 구한다고만 말한다"], "incorrect": ["스티커 가격 대신 물건 개수만 쓴다"]}, "required_for_completion": false},
+          {"relation_id": "sum_item_costs", "role": "procedure_step", "operation": "addition", "input_fact_ids": ["ticket_total", "drink_total", "sticker_total"], "output_fact_id": "purchase_total", "evaluation_mode": "open_semantic_support", "speaker_label": "표와 주스와 스티커 값을 모두 더하는 단계", "rubric": {"sufficient": ["5,000원, 3,000원, 3,000원을 더해 11,000원을 구한다고 말한다", "각 물건값을 모두 합친다는 동치 방법을 말한다"], "partial": ["물건값을 더한다고만 말하고 어떤 값을 합치는지 불분명하다"], "incorrect": ["가장 비싼 값 하나만 보거나 물건 개수만 더한다"]}, "required_for_completion": false},
+          {"relation_id": "calculate_shortage", "role": "procedure_step", "operation": "subtraction", "input_fact_ids": ["purchase_total", "budget"], "output_fact_id": "shortage", "evaluation_mode": "open_semantic_support", "speaker_label": "전체 물건값에서 예산을 빼 모자란 돈을 구하는 단계", "rubric": {"sufficient": ["11,000원에서 10,000원을 뺀다고 말한다", "전체 물건값과 예산의 차이가 모자란 돈이라는 동치 방법을 말한다"], "partial": ["11,000원과 10,000원을 비교한다고만 말하고 차이를 구하는 관계는 말하지 않는다"], "incorrect": ["예산에서 전체 물건값을 빼거나 11,000원을 최종 모자란 돈으로 말한다"]}, "required_for_completion": true}
+        ],
+        "completion": {"required_fact_ids": ["shortage"], "required_relation_ids": ["calculate_shortage"]},
+        "open_auxiliary_claims": true
+      },
+      "initial_question": {"plan_id": "initial", "targets": [{"target_kind": "fact", "target_id": "shortage", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "calculate_shortage", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 표랑 주스랑 스티커를 다 사려는데 10,000원으로 되는지 헷갈려... 얼마가 모자라고 어떻게 구하는지 알려줄 수 있어?"},
+      "l3_plans": [
+        {"plan_id": "l3.answer", "targets": [{"target_kind": "fact", "target_id": "shortage", "ask_kind": "answer"}], "reviewed_fallback": "나 10,000원으로 다 사려면 얼마가 모자라는지 헷갈려... 모자란 돈만 먼저 알려줄 수 있어?"},
+        {"plan_id": "l3.method", "targets": [{"target_kind": "relation", "target_id": "calculate_shortage", "ask_kind": "reason_or_method"}], "reviewed_fallback": "나 표랑 주스랑 스티커 값을 모두 구한 뒤 10,000원과 어떻게 비교하는지 궁금해... 모자란 돈을 구하는 방법을 알려줄 수 있어?"}
+      ],
+      "copy_slots": [
+        {"copy_slot": "multiply-easy-tables.initial-help", "purpose": "initial_help", "targets": [{"target_kind": "fact", "target_id": "shortage", "ask_kind": "answer"}], "generation_brief": "질문 부담을 모르미가 맡고 모자란 돈부터 부탁한다", "reviewed_fallback": "내가 한꺼번에 물어봤네... 10,000원에서 얼마가 모자라는지만 먼저 알려줄 수 있어?"},
+        {"copy_slot": "multiply-easy-tables.l2.answer", "purpose": "l2_question", "targets": [{"target_kind": "fact", "target_id": "shortage", "ask_kind": "answer"}], "generation_brief": "모자란 돈을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 10,000원에서 얼마가 모자라는지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "multiply-easy-tables.l2.method", "purpose": "l2_question", "targets": [{"target_kind": "relation", "target_id": "calculate_shortage", "ask_kind": "reason_or_method"}], "generation_brief": "전체 물건값과 예산으로 모자란 돈을 구하는 방법을 선택해서 알려 달라고 부탁한다", "reviewed_fallback": "나 전체 물건값과 10,000원을 어떻게 계산하는지 궁금해... 여기에서 골라서 알려줄 수 있어?"},
+        {"copy_slot": "multiply-easy-tables.l0.intro", "purpose": "l0_intro", "targets": [{"target_kind": "fact", "target_id": "shortage", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "calculate_shortage", "ask_kind": "reason_or_method"}], "generation_brief": "도움 카드를 보며 모자란 돈을 공동 계산해 달라고 부탁한다", "reviewed_fallback": "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"},
+        {"copy_slot": "multiply-easy-tables.l0.action", "purpose": "l0_action", "targets": [{"target_kind": "fact", "target_id": "shortage", "ask_kind": "answer"}, {"target_kind": "relation", "target_id": "calculate_shortage", "ask_kind": "reason_or_method"}], "generation_brief": "11,000원과 10,000원의 차이를 공동 계산해 달라고 부탁한다", "reviewed_fallback": "11,000원과 10,000원의 차이를 카드에 나온 식처럼 같이 구해 줄 수 있어?"}
+      ],
+      "l2_plans": [
+        {"plan_id": "l2.answer", "target": {"target_kind": "fact", "target_id": "shortage", "ask_kind": "answer"}, "copy_slot": "multiply-easy-tables.l2.answer", "choices": [
+          {"choice_id": "answer_0", "label": "1,000원", "effect": {"verdict": "correct", "target_kind": "fact", "target_id": "shortage", "interpreted_value": {"type": "money", "amount": 1000, "currency": "KRW"}}},
+          {"choice_id": "answer_1", "label": "2,000원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "shortage", "misconception_code": "budget_difference_over"}},
+          {"choice_id": "answer_2", "label": "3,000원", "effect": {"verdict": "incorrect", "target_kind": "fact", "target_id": "shortage", "misconception_code": "budget_use_sticker_only"}}
+        ]},
+        {"plan_id": "l2.method", "target": {"target_kind": "relation", "target_id": "calculate_shortage", "ask_kind": "reason_or_method"}, "copy_slot": "multiply-easy-tables.l2.method", "choices": [
+          {"choice_id": "short_0", "label": "각 값을 더한 뒤 전체 값에서 10,000원 빼기", "effect": {"verdict": "correct", "target_kind": "relation", "target_id": "calculate_shortage"}},
+          {"choice_id": "short_1", "label": "가장 비싼 값만 10,000원과 비교하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "calculate_shortage", "misconception_code": "budget_compare_one_item"}},
+          {"choice_id": "short_2", "label": "물건 개수만 더해 10,000원과 비교하기", "effect": {"verdict": "incorrect", "target_kind": "relation", "target_id": "calculate_shortage", "misconception_code": "budget_add_counts"}}
+        ]}
+      ],
+      "l0_joint_plan": {"action_id": "calculate_shortage_together", "intro_copy_slot": "multiply-easy-tables.l0.intro", "action_copy_slot": "multiply-easy-tables.l0.action", "completion_values": [{"target_kind": "fact", "target_id": "shortage", "value": {"type": "money", "amount": 1000, "currency": "KRW"}}, {"target_kind": "relation", "target_id": "calculate_shortage", "satisfied": true}], "button_label": "같이 계산하기"},
+      "help_plan": {
+        "H1": {"level": "H1", "support_type": "attention", "answer_policy": "hidden", "body": "각 물건의 가격과 개수, 예산 10,000원을 차례로 살펴보자.", "action": null, "revealed_fact_ids": [], "revealed_relation_ids": []},
+        "H2": {"level": "H2", "support_type": "guided_action", "answer_policy": "partial", "body": "5,000+3,000+3,000=□로 전체 값을 구한 뒤 10,000원과 비교해 보자.", "action": "각 물건값을 더해 전체 값 구하기", "revealed_fact_ids": ["ticket_total", "drink_total", "sticker_total"], "revealed_relation_ids": []},
+        "H3": {"level": "H3", "support_type": "joint_model", "answer_policy": "revealed", "body": "2,500×2=5,000이고, 1,500×2=3,000이고, 3,000×1=3,000이야. 5,000+3,000+3,000=11,000이고, 11,000-10,000=1,000이라서 1,000원이 모자라.", "action": "전체 값 11,000원과 예산 10,000원의 차이를 함께 확인하기", "revealed_fact_ids": ["ticket_total", "drink_total", "sticker_total", "purchase_total", "shortage"], "revealed_relation_ids": ["calculate_ticket_total", "calculate_drink_total", "calculate_sticker_total", "sum_item_costs", "calculate_shortage"]}
+      },
+      "policies": {"ladder_policy_version": "existing", "entry_expression_level": "L4", "entry_hint_level": "H0", "completion_policy": "all_required_graph_targets", "note_policy": "verified_child_or_coauthored", "note_relation_ids": ["sum_item_costs", "calculate_shortage"], "dictionary_card_id": "dictionary.home.multiply-easy-tables", "taught_reward_requires_independent_evidence": true, "l0_completion_outcome": "supported"}
+    }
+  ]
+}

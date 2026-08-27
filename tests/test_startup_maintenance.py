@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -27,8 +28,9 @@ class RecordingConnection:
     async def __aexit__(self, *_: object) -> None:
         return None
 
-    async def run_sync(self, _: object) -> None:
+    async def run_sync(self, _: object) -> str:
         self.calls.append("require_observation_schema")
+        return "final"
 
 
 class RecordingEngine:
@@ -85,12 +87,53 @@ async def test_read_only_startup_skips_all_startup_write_routines() -> None:
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_raw_retention_maintenance_repeats_purge_after_startup() -> None:
+    stop_event = asyncio.Event()
+    calls = 0
+
+    class RetentionRepository:
+        async def purge_expired_raw_data(self) -> None:
+            nonlocal calls
+            calls += 1
+            stop_event.set()
+
+    await asyncio.wait_for(
+        main.run_raw_retention_maintenance(
+            RetentionRepository(),  # type: ignore[arg-type]
+            stop_event,
+            interval_seconds=0.001,
+        ),
+        timeout=1,
+    )
+
+    assert calls == 1
+
+
+def test_transition_identity_schema_forces_v2_canary_to_zero() -> None:
+    with pytest.raises(RuntimeError, match="canary must remain 0"):
+        main.validate_conversation_identity_rollout(
+            "transition",
+            dialogue_v2_canary_percent=1,
+        )
+
+    main.validate_conversation_identity_rollout(
+        "transition",
+        dialogue_v2_canary_percent=0,
+    )
+    main.validate_conversation_identity_rollout(
+        "final",
+        dialogue_v2_canary_percent=100,
+    )
+
+
 @pytest.mark.parametrize(
     ("skip_startup_maintenance", "expected_calls"),
     [
         (
             None,
             [
+                "v2_catalog",
                 "database",
                 "gateway",
                 "repository",
@@ -104,7 +147,10 @@ async def test_read_only_startup_skips_all_startup_write_routines() -> None:
                 "dispose",
             ],
         ),
-        (True, ["database", "gateway", "repository", "engine", "service", "dispose"]),
+        (
+            True,
+            ["v2_catalog", "database", "gateway", "repository", "engine", "service", "dispose"],
+        ),
     ],
 )
 async def test_lifespan_respects_the_startup_maintenance_setting(
@@ -147,7 +193,7 @@ async def test_lifespan_respects_the_startup_maintenance_setting(
             calls.append("engine")
 
     class LifespanService:
-        def __init__(self, *_: object) -> None:
+        def __init__(self, *_: object, **__: object) -> None:
             calls.append("service")
 
     monkeypatch.setattr(main, "Database", LifespanDatabase)
@@ -155,6 +201,11 @@ async def test_lifespan_respects_the_startup_maintenance_setting(
     monkeypatch.setattr(main, "ClaudeGateway", LifespanGateway)
     monkeypatch.setattr(main, "ConversationEngine", LifespanEngine)
     monkeypatch.setattr(main, "ConversationService", LifespanService)
+    monkeypatch.setattr(
+        main,
+        "load_required_home_content_catalog_v2",
+        lambda: calls.append("v2_catalog"),
+    )
     settings_kwargs = (
         {"skip_startup_maintenance": skip_startup_maintenance}
         if skip_startup_maintenance is not None
@@ -196,6 +247,12 @@ def test_startup_maintenance_defaults_to_false_when_the_flag_is_unset(
     settings = Settings(_env_file=None)
 
     assert settings.skip_startup_maintenance is False
+
+
+def test_stable_copy_validator_default_invalidates_pre_firewall_artifacts() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.stable_copy_validator_version == "stable-copy-validator-v2"
 
 
 def test_production_rejects_skip_startup_maintenance() -> None:
