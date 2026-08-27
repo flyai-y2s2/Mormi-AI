@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from mormi_api.dialogue_v2_model_smoke import (
+    DialogueV2ModelSmokeStageError,
     build_speaker_smoke_plan_v2,
     build_understanding_smoke_request_v2,
     run_dialogue_v2_model_smoke,
@@ -98,3 +99,9 @@ def test_model_smoke_failure_diagnostics_are_bounded_codes() -> None:
         "model_output_invalid"
     )
     assert safe_model_smoke_error_code(TimeoutError()) == "model_smoke_timeout"
+    assert (
+        safe_model_smoke_error_code(
+            DialogueV2ModelSmokeStageError("understanding", "model_bad_request")
+        )
+        == "understanding_model_bad_request"
+    )

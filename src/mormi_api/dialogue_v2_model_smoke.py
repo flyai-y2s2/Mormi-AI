@@ -27,10 +27,25 @@ _SAFE_PROVIDER_ERROR_CODES = frozenset(
     }
 )
 
+_MODEL_SMOKE_STAGES = frozenset({"understanding", "speaker"})
+
+
+class DialogueV2ModelSmokeStageError(RuntimeError):
+    """Bound one provider failure to its PII-free deployment-smoke stage."""
+
+    def __init__(self, stage: str, error_code: str) -> None:
+        if stage not in _MODEL_SMOKE_STAGES:
+            raise ValueError("unknown dialogue V2 model smoke stage")
+        self.stage = stage
+        self.error_code = error_code
+        super().__init__(f"{stage}_{error_code}")
+
 
 def safe_model_smoke_error_code(error: Exception) -> str:
     """Return a bounded diagnostic code without provider bodies or model text."""
 
+    if isinstance(error, DialogueV2ModelSmokeStageError):
+        return f"{error.stage}_{error.error_code}"
     if isinstance(error, ModelUnavailableError):
         code = str(error)
         if code in _SAFE_PROVIDER_ERROR_CODES:
@@ -163,9 +178,21 @@ async def run_dialogue_v2_model_smoke(
 ) -> DialogueV2ModelSmokeReport:
     """Exercise Sonnet understanding and Haiku speaking without logging model text."""
 
-    await gateway.understand_v2(build_understanding_smoke_request_v2())
+    try:
+        await gateway.understand_v2(build_understanding_smoke_request_v2())
+    except Exception as error:
+        raise DialogueV2ModelSmokeStageError(
+            "understanding",
+            safe_model_smoke_error_code(error),
+        ) from error
     plan = build_speaker_smoke_plan_v2()
-    output = await gateway.speak_v2(plan)
+    try:
+        output = await gateway.speak_v2(plan)
+    except Exception as error:
+        raise DialogueV2ModelSmokeStageError(
+            "speaker",
+            safe_model_smoke_error_code(error),
+        ) from error
     validated = validate_speaker_output_v2(
         output,
         plan,
