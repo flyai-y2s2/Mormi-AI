@@ -75,6 +75,42 @@ jobs:
 
           set -euo pipefail
 
+          persist_mormi_env() {
+            local image="$1"
+            local key="$2"
+            local value="$3"
+
+            docker run --rm \
+              --user 0:0 \
+              --entrypoint python \
+              -v /etc/mormi-ai:/mormi-config \
+              -e MORMI_PERSIST_KEY="${key}" \
+              -e MORMI_PERSIST_VALUE="${value}" \
+              "${image}" \
+              -c '
+          from pathlib import Path
+          import os
+
+          path = Path("/mormi-config/mormi.env")
+          key = os.environ["MORMI_PERSIST_KEY"]
+          value = os.environ["MORMI_PERSIST_VALUE"]
+          prefix = f"{key}="
+          lines = path.read_text(encoding="utf-8").splitlines()
+          updated = []
+          replaced = False
+          for line in lines:
+              if line.startswith(prefix):
+                  if not replaced:
+                      updated.append(prefix + value)
+                      replaced = True
+                  continue
+              updated.append(line)
+          if not replaced:
+              updated.append(prefix + value)
+          path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+          '
+          }
+
           CURRENT_IMAGE="$(docker inspect --format '{{.Config.Image}}' mormi-ai 2>/dev/null || true)"
           if [ -z "${CURRENT_IMAGE}" ]; then
             echo "no running mormi-ai image is available for the V2 kill switch"
@@ -136,14 +172,10 @@ jobs:
             exit 1
           fi
 
-          CANARY_ENV_FILE=/etc/mormi-ai/mormi.env
-          if grep -q '^MORMI_DIALOGUE_V2_CANARY_PERCENT=' "${CANARY_ENV_FILE}"; then
-            sed -i \
-              's/^MORMI_DIALOGUE_V2_CANARY_PERCENT=.*/MORMI_DIALOGUE_V2_CANARY_PERCENT=0/' \
-              "${CANARY_ENV_FILE}"
-          else
-            printf '\nMORMI_DIALOGUE_V2_CANARY_PERCENT=0\n' >> "${CANARY_ENV_FILE}"
-          fi
+          persist_mormi_env \
+            "${CURRENT_IMAGE}" \
+            MORMI_DIALOGUE_V2_CANARY_PERCENT \
+            0
 
           docker rm -f mormi-ai-canary-zero
           docker rm -f mormi-ai
@@ -318,6 +350,42 @@ jobs:
               "IMAGE_URI='${IMAGE_URI}' REGISTRY='${REGISTRY}' AWS_REGION='${AWS_REGION}' DIALOGUE_V2_CANARY_PERCENT_OVERRIDE='${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}' bash -s" <<'REMOTE'
 
           set -euo pipefail
+
+          persist_mormi_env() {
+            local image="$1"
+            local key="$2"
+            local value="$3"
+
+            docker run --rm \
+              --user 0:0 \
+              --entrypoint python \
+              -v /etc/mormi-ai:/mormi-config \
+              -e MORMI_PERSIST_KEY="${key}" \
+              -e MORMI_PERSIST_VALUE="${value}" \
+              "${image}" \
+              -c '
+          from pathlib import Path
+          import os
+
+          path = Path("/mormi-config/mormi.env")
+          key = os.environ["MORMI_PERSIST_KEY"]
+          value = os.environ["MORMI_PERSIST_VALUE"]
+          prefix = f"{key}="
+          lines = path.read_text(encoding="utf-8").splitlines()
+          updated = []
+          replaced = False
+          for line in lines:
+              if line.startswith(prefix):
+                  if not replaced:
+                      updated.append(prefix + value)
+                      replaced = True
+                  continue
+              updated.append(line)
+          if not replaced:
+              updated.append(prefix + value)
+          path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+          '
+          }
 
           CANARY_ARGS=()
           if [ -n "${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE:-}" ]; then
@@ -570,25 +638,15 @@ jobs:
             PERSISTED_CANARY_PERCENT="${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}"
           fi
           if [ -n "${PERSISTED_CANARY_PERCENT}" ]; then
-            CANARY_ENV_FILE=/etc/mormi-ai/mormi.env
-            if grep -q '^MORMI_DIALOGUE_V2_CANARY_PERCENT=' "${CANARY_ENV_FILE}"; then
-              sed -i \
-                "s/^MORMI_DIALOGUE_V2_CANARY_PERCENT=.*/MORMI_DIALOGUE_V2_CANARY_PERCENT=${PERSISTED_CANARY_PERCENT}/" \
-                "${CANARY_ENV_FILE}"
-            else
-              printf '\nMORMI_DIALOGUE_V2_CANARY_PERCENT=%s\n' \
-                "${PERSISTED_CANARY_PERCENT}" >> "${CANARY_ENV_FILE}"
-            fi
+            persist_mormi_env \
+              "${IMAGE_URI}" \
+              MORMI_DIALOGUE_V2_CANARY_PERCENT \
+              "${PERSISTED_CANARY_PERCENT}"
           fi
-          RUNTIME_ENV_FILE=/etc/mormi-ai/mormi.env
-          if grep -q '^MORMI_RUNTIME_CONTRACT_VERSION=' "${RUNTIME_ENV_FILE}"; then
-            sed -i \
-              's/^MORMI_RUNTIME_CONTRACT_VERSION=.*/MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1/' \
-              "${RUNTIME_ENV_FILE}"
-          else
-            printf '\nMORMI_RUNTIME_CONTRACT_VERSION=verdict-v1\n' \
-              >> "${RUNTIME_ENV_FILE}"
-          fi
+          persist_mormi_env \
+            "${IMAGE_URI}" \
+            MORMI_RUNTIME_CONTRACT_VERSION \
+            verdict-v1
           docker rm -f mormi-ai-candidate
 
           # 검증된 후보로 API를 교체합니다.

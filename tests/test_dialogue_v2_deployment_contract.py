@@ -108,6 +108,15 @@ def test_emergency_canary_zero_path_skips_build_migration_and_prewarm() -> None:
     assert "scripts/prewarm_dialogue_v2_copy.py" not in emergency
     assert "scripts/smoke_dialogue_v2_models.py" not in emergency
     assert "effective_canary" in emergency
+    assert "persist_mormi_env" in emergency
+    assert "-v /etc/mormi-ai:/mormi-config" in emergency
+    assert (
+        "persist_mormi_env \\\n"
+        "            \"${CURRENT_IMAGE}\" \\\n"
+        "            MORMI_DIALOGUE_V2_CANARY_PERCENT \\\n"
+        "            0"
+    ) in emergency
+    assert '>> "${CANARY_ENV_FILE}"' not in emergency
 
 
 def test_manual_develop_deploy_can_pin_new_assignments_to_zero_percent() -> None:
@@ -163,11 +172,25 @@ def test_live_api_persists_verdict_runtime_and_rollback_matches_previous_reader(
     # an older rollback image is explicitly given the runtime it can read.
     assert candidate_and_live.count(
         "MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1"
-    ) >= 3
+    ) >= 2
     assert 'ROLLBACK_RUNTIME_CONTRACT_VERSION="legacy-v1"' in workflow
     assert 'ROLLBACK_RUNTIME_CONTRACT_VERSION="verdict-v1"' in workflow
     assert (
         'MORMI_RUNTIME_CONTRACT_VERSION="${ROLLBACK_RUNTIME_CONTRACT_VERSION}"'
         in workflow
     )
-    assert "^MORMI_RUNTIME_CONTRACT_VERSION=" in workflow
+    assert workflow.count("persist_mormi_env()") == 2
+    assert workflow.count("-v /etc/mormi-ai:/mormi-config") == 2
+    assert (
+        "persist_mormi_env \\\n"
+        "              \"${IMAGE_URI}\" \\\n"
+        "              MORMI_DIALOGUE_V2_CANARY_PERCENT \\\n"
+        "              \"${PERSISTED_CANARY_PERCENT}\""
+    ) in candidate_and_live
+    assert (
+        "persist_mormi_env \\\n"
+        "            \"${IMAGE_URI}\" \\\n"
+        "            MORMI_RUNTIME_CONTRACT_VERSION \\\n"
+        "            verdict-v1"
+    ) in candidate_and_live
+    assert '>> "${RUNTIME_ENV_FILE}"' not in candidate_and_live
