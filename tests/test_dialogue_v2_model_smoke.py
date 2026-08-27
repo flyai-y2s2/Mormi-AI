@@ -4,8 +4,10 @@ from mormi_api.dialogue_v2_model_smoke import (
     build_speaker_smoke_plan_v2,
     build_understanding_smoke_request_v2,
     run_dialogue_v2_model_smoke,
+    safe_model_smoke_error_code,
 )
 from mormi_api.dialogue_v2_speaker import SpeakerOutputV2, SpeakerPlanV2
+from mormi_api.llm import ModelOutputError, ModelUnavailableError
 from mormi_api.schemas import UnderstandingRequestV2, UnderstandingResponseV2
 
 
@@ -81,3 +83,18 @@ async def test_model_smoke_rejects_a_speaker_that_guesses_hidden_truth() -> None
         assert str(error) == "speaker_v2_smoke_output_invalid"
     else:  # pragma: no cover - protects the deployment safety contract
         raise AssertionError("hidden truth must fail the provider smoke")
+
+
+def test_model_smoke_failure_diagnostics_are_bounded_codes() -> None:
+    assert (
+        safe_model_smoke_error_code(ModelUnavailableError("model_connection_failed"))
+        == "model_connection_failed"
+    )
+    assert (
+        safe_model_smoke_error_code(ModelUnavailableError("secret provider body"))
+        == "model_unavailable"
+    )
+    assert safe_model_smoke_error_code(ModelOutputError("provider output")) == (
+        "model_output_invalid"
+    )
+    assert safe_model_smoke_error_code(TimeoutError()) == "model_smoke_timeout"

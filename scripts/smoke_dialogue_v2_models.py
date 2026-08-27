@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
 
 from mormi_api.dialogue_v2_model_smoke import (  # noqa: E402
     run_dialogue_v2_model_smoke,
+    safe_model_smoke_error_code,
 )
 from mormi_api.llm import ClaudeGateway  # noqa: E402
 from mormi_api.settings import Settings  # noqa: E402
@@ -40,6 +41,7 @@ async def _run() -> int:
                 {
                     "succeeded": False,
                     "error_type": type(error).__name__,
+                    "error_code": safe_model_smoke_error_code(error),
                 },
                 sort_keys=True,
             )

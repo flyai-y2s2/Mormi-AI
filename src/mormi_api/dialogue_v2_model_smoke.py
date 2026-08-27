@@ -9,7 +9,42 @@ from .dialogue_v2_speaker import (
     SpeakerPlanV2,
     validate_speaker_output_v2,
 )
+from .llm import ModelOutputError, ModelUnavailableError
 from .schemas import MoneyValueV2, UnderstandingRequestV2, UnderstandingResponseV2
+
+_SAFE_PROVIDER_ERROR_CODES = frozenset(
+    {
+        "model_connection_failed",
+        "structured_schema_not_strict",
+        "structured_schema_too_complex",
+        "structured_schema_invalid",
+        "model_bad_request",
+        "model_auth_failed",
+        "model_forbidden",
+        "model_not_found",
+        "model_rate_limited",
+        "model_provider_unavailable",
+    }
+)
+
+
+def safe_model_smoke_error_code(error: Exception) -> str:
+    """Return a bounded diagnostic code without provider bodies or model text."""
+
+    if isinstance(error, ModelUnavailableError):
+        code = str(error)
+        if code in _SAFE_PROVIDER_ERROR_CODES:
+            return code
+        if code == "ANTHROPIC_API_KEY is not configured":
+            return "model_not_configured"
+        return "model_unavailable"
+    if isinstance(error, ModelOutputError):
+        return "model_output_invalid"
+    if isinstance(error, TimeoutError):
+        return "model_smoke_timeout"
+    if isinstance(error, RuntimeError) and str(error) == "speaker_v2_smoke_output_invalid":
+        return "speaker_output_guard_failed"
+    return "model_smoke_failed"
 
 
 class DialogueV2ModelSmokeGateway(Protocol):
