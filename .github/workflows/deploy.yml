@@ -87,6 +87,7 @@ jobs:
             --name mormi-ai-canary-zero \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_ENVIRONMENT=production \
             -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -145,6 +146,7 @@ jobs:
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_ENVIRONMENT=production \
             -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -383,6 +385,7 @@ jobs:
           docker run --rm \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_ENVIRONMENT=production \
             -e MORMI_RUNTIME_CONTRACT_VERSION=legacy-v1 \
             -e MORMI_DATABASE_MIGRATION_TARGET="${MIGRATION_TARGET}" \
             "${IMAGE_URI}" \
@@ -399,6 +402,7 @@ jobs:
             if docker run --rm \
               --network mormi-services \
               --env-file /etc/mormi-ai/mormi.env \
+              -e MORMI_ENVIRONMENT=production \
               -e MORMI_STABLE_COPY_MODEL=claude-sonnet-4-6 \
               -e MORMI_STABLE_COPY_EFFORT=low \
               -e MORMI_STABLE_COPY_TIMEOUT_SECONDS=20 \
@@ -424,6 +428,7 @@ jobs:
           docker run --rm \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_ENVIRONMENT=production \
             -e MORMI_RUNTIME_CONTRACT_VERSION=verdict-v1 \
             -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
@@ -440,6 +445,7 @@ jobs:
             --name mormi-ai-candidate \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_ENVIRONMENT=production \
             "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -571,6 +577,7 @@ jobs:
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_ENVIRONMENT=production \
             "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
@@ -608,6 +615,7 @@ jobs:
                 --restart unless-stopped \
                 --network mormi-services \
                 --env-file /etc/mormi-ai/mormi.env \
+                -e MORMI_ENVIRONMENT=production \
                 "${DEPLOY_CANARY_ARGS[@]}" \
                 -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
                 -e MORMI_CLASSIFIER_EFFORT=low \
@@ -650,6 +658,7 @@ jobs:
             --restart unless-stopped \
             --network mormi-services \
             --env-file /etc/mormi-ai/mormi.env \
+            -e MORMI_ENVIRONMENT=production \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
             -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \

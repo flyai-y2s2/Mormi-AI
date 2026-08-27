@@ -83,6 +83,10 @@ def test_candidate_health_exposes_and_gates_effective_rollout_configuration() ->
         in workflow
     )
     assert "dialogue_v2_canary_percent" in workflow
+    # Host-owned env files may predate the production profile setting. Every
+    # database/model/runtime container must receive the explicit production
+    # boundary; only the model-file preflight runs without application settings.
+    assert workflow.count("MORMI_ENVIRONMENT=production") == 9
 
 
 def test_emergency_canary_zero_path_skips_build_migration_and_prewarm() -> None:
