@@ -3238,7 +3238,15 @@ def _park_primary_task(context: ParkSessionContext) -> TaskDefinition:
             "1회 이용권 값을 자유이용권 값으로 나눠",
             "두 이용권 값의 차이를 구해",
         ]
-        alternative_methods = ["자유이용권 가격을 1회 가격으로 나누어 횟수를 구해"]
+        alternative_methods = [
+            "자유이용권 가격을 1회 가격으로 나누어 횟수를 구해",
+            "1회 이용권 값에 횟수를 곱해서 자유이용권 값과 같아지는 횟수를 찾아",
+            "1회 이용권 값을 같은 횟수만큼 반복해서 더해 자유이용권 값과 비교해",
+            (
+                f"{values[right_key]:,}원에 {values[answer_key]}을 곱하면 "
+                f"{values[left_key]:,}원이 되는지 확인해"
+            ),
+        ]
         answer_distractors = [values[answer_key] - 1, values[answer_key] + 1]
         short_answer_prompt = "1회 이용권 값이 몇 묶음이면 자유이용권 값과 같은지 알려줄래?"
         answer_choice_prompt = "값이 같은 횟수를 여기서 골라서 알려줄래?"
@@ -3659,7 +3667,12 @@ def _park_transfer_task(context: ParkSessionContext) -> TaskDefinition:
             "1회 이용권 값을 자유이용권 값으로 나눠",
             "두 이용권 값의 차이를 구해",
         ]
-        alternative_methods = ["자유이용권 가격을 1회 가격으로 나누어 횟수를 구해"]
+        alternative_methods = [
+            "자유이용권 가격을 1회 가격으로 나누어 횟수를 구해",
+            "1회 이용권 값에 횟수를 곱해서 자유이용권 값과 같아지는 횟수를 찾아",
+            "1회 이용권 값을 같은 횟수만큼 반복해서 더해 자유이용권 값과 비교해",
+            f"{right:,}원에 {result}을 곱하면 {left:,}원이 되는지 확인해",
+        ]
         answer_distractors = [result - 1, result + 1]
         short_answer_prompt = "몇 번 타면 자유이용권 값과 같은지 알려줄래?"
         answer_choice_prompt = "값이 같은 횟수를 여기서 골라서 알려줄래?"

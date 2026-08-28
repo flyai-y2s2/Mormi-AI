@@ -1232,6 +1232,12 @@ numeric_value, text/choice는 text_value, boolean은 boolean_value다. relation�
 operation/result/mathematical_validity는 null, operands는 빈 배열로 둔다. 사용하지 않는
 값 필드는 null로 둔다. value_type=money의 unit은 통화 코드 "KRW" 또는 null만 사용한다.
 아이 원문의 "원", "원화", "₩"은 evidence_span에 그대로 둘 수 있지만 unit에 복사하지 않는다.
+relation rubric의 sufficient에는 canonical 식 외의 동치 풀이가 함께 들어갈 수 있다. 아이가
+나눗셈 대신 역산 곱셈이나 반복 덧셈처럼 rubric에 허용된 다른 방법으로 같은 관계를 정당하게
+설명하면 operation 이름이 canonical graph와 다르다는 이유로 partial/incorrect로 낮추지 말고
+sufficient로 판정한다. 예를 들어 1회 이용권 2,000원과 자유이용권 12,000원을 비교할 때
+"2000곱하기 6이 12000이니까 6번 탈 때 같고, 7번부터 저렴해"는 값이 같아지는 횟수와
+이득 시작 횟수, 역산 곱셈 방법을 모두 올바르게 설명한 것이다.
 """.strip()
 
 

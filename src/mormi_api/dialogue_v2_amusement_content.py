@@ -61,7 +61,7 @@ from .schemas import (
 AMUSEMENT_NATIVE_V2_SCENARIO_IDS = frozenset(PARK_SCENARIO_IDS)
 # Short alias retained for callers that adopted the first materializer draft.
 AMUSEMENT_V2_SCENARIO_IDS = AMUSEMENT_NATIVE_V2_SCENARIO_IDS
-AMUSEMENT_CONTENT_VERSION_V2 = 2
+AMUSEMENT_CONTENT_VERSION_V2 = 3
 
 
 @dataclass(frozen=True)

@@ -189,6 +189,26 @@ def test_preserves_reviewed_visual_help_and_dictionary_contracts(
     assert transfer.help_plan.H3.visual_type == "amusement_transfer_solution"
 
 
+def test_pass_break_even_accepts_division_and_equivalent_inverse_methods() -> None:
+    context = _context("amusement_pass_compare")
+    scenario_pack = materialize_amusement_scenario_v2(
+        "amusement_pass_compare",
+        {"park_context": context.model_dump(mode="json")},
+    )
+
+    for task_pack in (
+        _pack_for_stage(scenario_pack, 0),
+        _pack_for_stage(scenario_pack, 1),
+    ):
+        relation = task_pack.reasoning_graph.relations[0]
+        sufficient = "\n".join(relation.rubric.sufficient)
+        assert relation.operation == "division"
+        assert "자유이용권 가격을 1회 가격으로 나누어" in sufficient
+        assert "1회 이용권 값에 횟수를 곱해서" in sufficient
+        assert "반복해서 더해" in sufficient
+        assert "곱하면" in sufficient
+
+
 @pytest.mark.parametrize("scenario_id", SCENARIOS)
 def test_entry_l3_l2_l0_and_help_cover_every_required_target(
     scenario_id: str,

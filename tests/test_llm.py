@@ -94,6 +94,12 @@ def test_v2_understanding_prompt_keeps_conversation_and_learning_axes_independen
     assert '"네가 해"' in UNDERSTANDING_V2_SYSTEM
     assert '"6000나누기 2는 3000이니까"' in UNDERSTANDING_V2_SYSTEM
     assert '"500+100=600"' in UNDERSTANDING_V2_SYSTEM
+    assert '"2000곱하기 6이 12000이니까 6번 탈 때 같고, 7번부터 저렴해"' in (
+        UNDERSTANDING_V2_SYSTEM
+    )
+    assert "operation 이름이 canonical graph와 다르다는 이유로" in (
+        UNDERSTANDING_V2_SYSTEM
+    )
     assert 'value_type=money의 unit은 통화 코드 "KRW" 또는 null만' in (
         UNDERSTANDING_V2_SYSTEM
     )
