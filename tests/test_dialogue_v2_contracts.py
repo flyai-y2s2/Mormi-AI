@@ -452,6 +452,47 @@ def test_provider_canonicalization_gives_safety_precedence() -> None:
     assert canonical.claims == []
 
 
+def test_provider_diagnostic_formatting_cannot_discard_correct_verdicts() -> None:
+    response = _provider_understanding_response(
+        contains_learning_evidence=True,
+        answer_status="complete",
+        reasoning_status="sufficient",
+        fact_claims=[
+            {
+                **_provider_fact_claim(),
+                "unit": "대한민국 원",
+            }
+        ],
+        relation_claims=[
+            {
+                "claim_id": "claim_division",
+                "target_id": "divide_equally",
+                "claim_type": "procedure_step",
+                "evidence_span": "6000나누기 2는 3000이니까",
+                "verdict": "sufficient",
+                "operation": "division",
+                # Incomplete diagnostic arithmetic must not invalidate the
+                # classifier's semantic verdict or literal evidence claim.
+                "operands": [6_000],
+                "result": 3_000,
+                "mathematical_validity": "correct",
+                "confidence": 0.99,
+            }
+        ],
+    )
+
+    canonical = _internal_understanding_response(response)
+
+    fact = canonical.claims[0]
+    relation = canonical.claims[1]
+    assert isinstance(fact, FactUnderstandingClaimV2)
+    assert fact.verdict == "correct"
+    assert fact.interpreted_value is None
+    assert isinstance(relation, RelationUnderstandingClaimV2)
+    assert relation.verdict == "sufficient"
+    assert relation.arithmetic_interpretation is None
+
+
 def test_provider_canonicalization_resolves_legacy_and_additive_axis_conflicts() -> None:
     task_question = _internal_understanding_response(
         _provider_understanding_response(

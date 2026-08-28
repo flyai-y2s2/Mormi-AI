@@ -882,7 +882,10 @@ class FactUnderstandingClaimV2(DialogueV2Model):
     fact_id: str = Field(min_length=1, max_length=160)
     claim_type: Literal["final_answer", "intermediate_result"]
     evidence_span: str = Field(min_length=1, max_length=300)
-    interpreted_value: CanonicalValueV2
+    # Provider interpretation is turn-local diagnostic metadata only. The
+    # classifier verdict and literal evidence own progression, so a missing or
+    # differently formatted value must never invalidate or regrade the claim.
+    interpreted_value: CanonicalValueV2 | None = None
     verdict: Literal["correct", "partial", "incorrect", "uncertain"]
     confidence: float | None = Field(default=None, ge=0, le=1)
 

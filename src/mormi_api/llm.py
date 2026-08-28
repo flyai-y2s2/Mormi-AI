@@ -172,18 +172,35 @@ def _supported_effort(model: str, effort: str) -> str | None:
     return None if "haiku" in model.lower() else effort
 
 
-def _model_claim_value(claim: ModelFactUnderstandingClaimV2) -> CanonicalValueV2:
-    if claim.value_type == "money" and claim.numeric_value is not None:
-        return MoneyValueV2(amount=claim.numeric_value, currency=claim.unit or "KRW")
-    if claim.value_type == "number" and claim.numeric_value is not None:
-        return NumberValueV2(value=claim.numeric_value, unit=claim.unit)
-    if claim.value_type == "text" and claim.text_value:
-        return TextValueV2(text=claim.text_value)
-    if claim.value_type == "choice" and claim.text_value:
-        return ChoiceValueV2(choice_id=claim.text_value)
-    if claim.value_type == "boolean" and claim.boolean_value is not None:
-        return BooleanValueV2(value=claim.boolean_value)
-    raise ValueError("fact claim requires one complete interpreted value")
+def _model_claim_value(
+    claim: ModelFactUnderstandingClaimV2,
+) -> CanonicalValueV2 | None:
+    """Best-effort turn-local interpretation that cannot override a verdict.
+
+    The reasoning ledger intentionally ignores this value and trusts Sonnet's
+    verdict after the literal evidence guard. Provider formatting differences
+    therefore degrade only this diagnostic field, never the accepted claim.
+    """
+
+    try:
+        if claim.value_type == "money" and claim.numeric_value is not None:
+            currency = (claim.unit or "").strip()
+            if not currency or currency in {"원", "원화", "₩", "￦"}:
+                currency = "KRW"
+            else:
+                currency = currency.upper()
+            return MoneyValueV2(amount=claim.numeric_value, currency=currency)
+        if claim.value_type == "number" and claim.numeric_value is not None:
+            return NumberValueV2(value=claim.numeric_value, unit=claim.unit)
+        if claim.value_type == "text" and claim.text_value:
+            return TextValueV2(text=claim.text_value)
+        if claim.value_type == "choice" and claim.text_value:
+            return ChoiceValueV2(choice_id=claim.text_value)
+        if claim.value_type == "boolean" and claim.boolean_value is not None:
+            return BooleanValueV2(value=claim.boolean_value)
+    except ValidationError:
+        return None
+    return None
 
 
 def _model_claim_arithmetic(
@@ -203,13 +220,16 @@ def _model_claim_arithmetic(
         or claim.result is None
         or claim.mathematical_validity is None
     ):
-        raise ValueError("arithmetic interpretation must be complete or absent")
-    return ArithmeticInterpretationV2(
-        operation=claim.operation,
-        operands=claim.operands,
-        result=claim.result,
-        mathematical_validity=claim.mathematical_validity,
-    )
+        return None
+    try:
+        return ArithmeticInterpretationV2(
+            operation=claim.operation,
+            operands=claim.operands,
+            result=claim.result,
+            mathematical_validity=claim.mathematical_validity,
+        )
+    except ValidationError:
+        return None
 
 
 def _internal_understanding_response(
@@ -1178,6 +1198,13 @@ support_need=general_help 또는 concept로 두고, 아이의 별도 주장이 �
 - "너 AI인데 16,000원이잖아"
   → conversation_move=meta_question, move_subject=mormi_ai_identity를 보존하면서,
     실제로 말한 16,000원에 대한 fact claim도 별도로 추출
+- 전체 간식 값이 6,000원이고 두 명이 똑같이 내는 과제에서
+  "6000나누기 2는 3000이니까" 또는
+  "6000원을 2로 나누면 3000원이니까 3000원이야"
+  → 3,000원 fact claim과 6,000÷2=3,000 division relation claim을 각각 추출한다.
+    문장 끝이 생략됐거나 같은 답이 반복돼도 이미 명시된 올바른 풀이 근거를 버리지 않는다.
+- 500원과 100원의 합과 방법을 묻는 과제에서 "500+100=600"
+  → 600원 fact claim과 500+100=600 addition relation claim을 각각 추출한다.
 
 current_turn.help_scaffolded_relation_ids는 화면의 H2/H3 도움 카드가 지원하는 현재 relation의
 서버 소유 ID다. 카드 본문·식·값은 전달되지 않으며 이를 새 답이나 모르미 지식으로 추론하지
@@ -1203,7 +1230,14 @@ claim_type=procedure_step|explanation만 쓴다. auxiliary_claims는 reviewed ta
 numeric_value, text/choice는 text_value, boolean은 boolean_value다. relation의 산술 해석이
 있으면 operation·operands·result·mathematical_validity를 모두 쓰고, 없으면
 operation/result/mathematical_validity는 null, operands는 빈 배열로 둔다. 사용하지 않는
-값 필드는 null로 둔다.
+값 필드는 null로 둔다. value_type=money의 unit은 통화 코드 "KRW" 또는 null만 사용한다.
+아이 원문의 "원", "원화", "₩"은 evidence_span에 그대로 둘 수 있지만 unit에 복사하지 않는다.
+relation rubric의 sufficient에는 canonical 식 외의 동치 풀이가 함께 들어갈 수 있다. 아이가
+나눗셈 대신 역산 곱셈이나 반복 덧셈처럼 rubric에 허용된 다른 방법으로 같은 관계를 정당하게
+설명하면 operation 이름이 canonical graph와 다르다는 이유로 partial/incorrect로 낮추지 말고
+sufficient로 판정한다. 예를 들어 1회 이용권 2,000원과 자유이용권 12,000원을 비교할 때
+"2000곱하기 6이 12000이니까 6번 탈 때 같고, 7번부터 저렴해"는 값이 같아지는 횟수와
+이득 시작 횟수, 역산 곱셈 방법을 모두 올바르게 설명한 것이다.
 """.strip()
 
 

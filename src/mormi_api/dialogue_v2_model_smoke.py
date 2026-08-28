@@ -4,13 +4,23 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
+from .dialogue_v2_evidence import (
+    UnderstandingEvidenceGuardError,
+    guard_understanding_response_v2,
+)
 from .dialogue_v2_speaker import (
     SpeakerOutputV2,
     SpeakerPlanV2,
     validate_speaker_output_v2,
 )
 from .llm import ModelOutputError, ModelUnavailableError
-from .schemas import MoneyValueV2, UnderstandingRequestV2, UnderstandingResponseV2
+from .schemas import (
+    FactUnderstandingClaimV2,
+    MoneyValueV2,
+    RelationUnderstandingClaimV2,
+    UnderstandingRequestV2,
+    UnderstandingResponseV2,
+)
 
 _SAFE_PROVIDER_ERROR_CODES = frozenset(
     {
@@ -65,8 +75,14 @@ def safe_model_smoke_error_code(error: Exception) -> str:
         return "model_unavailable"
     if isinstance(error, ModelOutputError):
         return "model_output_invalid"
+    if isinstance(error, UnderstandingEvidenceGuardError):
+        return "output_guard_failed"
     if isinstance(error, TimeoutError):
         return "model_smoke_timeout"
+    if isinstance(error, RuntimeError) and str(error) == (
+        "understanding_v2_smoke_output_invalid"
+    ):
+        return "output_guard_failed"
     if isinstance(error, RuntimeError) and str(error) == "speaker_v2_smoke_output_invalid":
         return "speaker_output_guard_failed"
     return "model_smoke_failed"
@@ -125,7 +141,7 @@ def build_understanding_smoke_request_v2() -> UnderstandingRequestV2:
                 "expression_level": "L4",
                 "hint_level": "H0",
             },
-            "child_utterance": "잘 모르겠어",
+            "child_utterance": "4,000×4=16,000원이야",
         }
     )
 
@@ -189,7 +205,38 @@ async def run_dialogue_v2_model_smoke(
     """Exercise Sonnet understanding and Haiku speaking without logging model text."""
 
     try:
-        await gateway.understand_v2(build_understanding_smoke_request_v2())
+        request = build_understanding_smoke_request_v2()
+        understanding = await gateway.understand_v2(request)
+        guarded = guard_understanding_response_v2(request, understanding)
+        fact_claims = [
+            claim
+            for claim in guarded.response.claims
+            if isinstance(claim, FactUnderstandingClaimV2)
+            and claim.fact_id == "answer_total"
+        ]
+        relation_claims = [
+            claim
+            for claim in guarded.response.claims
+            if isinstance(claim, RelationUnderstandingClaimV2)
+            and claim.relation_id == "calculate_total"
+        ]
+        fact = fact_claims[0] if len(fact_claims) == 1 else None
+        relation = relation_claims[0] if len(relation_claims) == 1 else None
+        if (
+            fact is None
+            or fact.verdict != "correct"
+            or not isinstance(fact.interpreted_value, MoneyValueV2)
+            or fact.interpreted_value.amount != 16_000
+            or fact.interpreted_value.currency != "KRW"
+            or relation is None
+            or relation.verdict not in {"correct", "sufficient"}
+            or relation.arithmetic_interpretation is None
+            or relation.arithmetic_interpretation.operation != "multiplication"
+            or relation.arithmetic_interpretation.operands != [4_000, 4]
+            or relation.arithmetic_interpretation.result != 16_000
+            or relation.arithmetic_interpretation.mathematical_validity != "correct"
+        ):
+            raise RuntimeError("understanding_v2_smoke_output_invalid")
     except Exception as error:
         raise DialogueV2ModelSmokeStageError(
             "understanding",

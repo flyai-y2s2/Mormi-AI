@@ -459,10 +459,12 @@ def apply_guarded_understanding_v2(
     """Monotonically apply model verdicts admitted by the literal evidence guard.
 
     This function deliberately does *not* compare interpreted values with content
-    truth, normalize units, or recalculate arithmetic. A ``correct`` fact verdict
-    records the pinned canonical fact; a ``correct``/``sufficient`` relation
-    verdict records the relation. Incorrect, partial, and uncertain canonical
-    claims are observed but cannot add or remove verified progress.
+    truth, normalize units, or recalculate arithmetic. Interpreted values and
+    arithmetic details may be absent because they are diagnostic metadata, not a
+    second adjudicator. A ``correct`` fact verdict records the pinned canonical
+    fact; a ``correct``/``sufficient`` relation verdict records the relation.
+    Incorrect, partial, and uncertain canonical claims are observed but cannot add
+    or remove verified progress.
     """
 
     if not source_turn_id or len(source_turn_id) > 100:
