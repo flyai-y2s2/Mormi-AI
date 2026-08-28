@@ -10,7 +10,6 @@ from mormi_api.content import (
     CHANGE_TASK_ID,
     QUEUE_TASK_ID,
     TOTAL_CALC_TASK_ID,
-    TOTAL_MENU_PICK_TASK_ID,
 )
 from mormi_api.dialogue_v2_cafe_content import create_cafe_scenario_pack_v2
 from mormi_api.dialogue_v2_life_content import (
@@ -18,7 +17,12 @@ from mormi_api.dialogue_v2_life_content import (
     canonical_life_scenario_json_v2,
     life_scenario_hash_v2,
 )
-from mormi_api.schemas import CafeMenuItem, CafeSessionContext, QueueSessionContext
+from mormi_api.schemas import (
+    CafeMenuItem,
+    CafeSessionContext,
+    ExpressionLevel,
+    QueueSessionContext,
+)
 
 FRONTEND_MENU = [
     CafeMenuItem(
@@ -63,12 +67,14 @@ FRONTEND_MENU = [
 def _cafe_context(
     mormi_menu_id: str,
     *,
+    child_menu_id: str | None = None,
     budget: int | None = None,
     menu_items: list[CafeMenuItem] | None = None,
 ) -> CafeSessionContext:
     return CafeSessionContext(
         menu_items=menu_items or FRONTEND_MENU,
         mormi_menu_id=mormi_menu_id,
+        child_menu_id=child_menu_id,
         budget=budget,
     )
 
@@ -184,48 +190,43 @@ def test_budget_menu_preserves_multiple_answers_and_reviewed_choice_effects() ->
     assert task.help_plan.H3.visual_data["total"] == 6000
 
 
-def test_menu_total_pins_every_child_menu_variant_and_selector() -> None:
+def test_menu_total_starts_directly_with_one_pinned_calculation_problem() -> None:
+    scenario = create_cafe_scenario_pack_v2(
+        "cafe_menu_total",
+        cafe_context=_cafe_context("americano", child_menu_id="milk"),
+    )
+    assert scenario.content_version == 2
+    assert [stage.task_id for stage in scenario.task_stages] == [TOTAL_CALC_TASK_ID]
+    calculation = _only_variant(scenario, TOTAL_CALC_TASK_ID)
+    assert calculation.policies.entry_expression_level is ExpressionLevel.L4
+    assert calculation.base_visual.type == "cafe_calculation"
+    assert calculation.base_visual.data["mormi_menu"]["id"] == "americano"
+    assert calculation.base_visual.data["child_menu"]["id"] == "milk"
+    assert _fact(calculation, "mormi_menu_price").value.amount == 3000
+    assert _fact(calculation, "child_menu_price").value.amount == 2000
+    assert _fact(calculation, "total").value.amount == 5000
+    relation = calculation.reasoning_graph.relations[0]
+    assert relation.operation == "addition"
+    assert relation.input_fact_ids == ["mormi_menu_price", "child_menu_price"]
+    assert relation.output_fact_id == "total"
+    assert calculation.help_plan.H3.visual_data["result"] == 5000
+    assert len(calculation.l2_plans) == 2
+    assert len(calculation.l0_joint_plan.completion_values) == 2
+    assert calculation.policies.note_context == "3,000원과 2,000원을 더하기로 계산하는 방법"
+    assert _projection(scenario) == [("result", TOTAL_CALC_TASK_ID, "total", None)]
+
+
+def test_menu_total_old_request_without_child_pick_uses_first_different_menu() -> None:
     scenario = create_cafe_scenario_pack_v2(
         "cafe_menu_total",
         cafe_context=_cafe_context("americano"),
     )
-    selection = _only_variant(scenario, TOTAL_MENU_PICK_TASK_ID)
-    calculation_stage = scenario.stage_by_task_id(TOTAL_CALC_TASK_ID)
+    calculation = _only_variant(scenario, TOTAL_CALC_TASK_ID)
 
-    expected_menu_ids = {item.id for item in FRONTEND_MENU if item.id != "americano"}
-    assert set(calculation_stage.selector.value_to_variant_id) == expected_menu_ids
-    assert set(calculation_stage.selector.value_to_variant_id.values()) == set(
-        calculation_stage.variants
-    )
-    assert selection.policies.note_policy == "none"
-    assert selection.policies.note_context is None
-    assert selection.base_visual.data["auto_total"] is False
-    assert selection.initial_question.reviewed_fallback == (
-        "나는 아메리카노를 골랐어. 두 메뉴 값을 더해 보고 싶은데, "
-        "너는 어떤 메뉴를 고를지 알려줄래?"
-    )
-    assert selection.policies.transition_text == (
-        "네가 고른 메뉴의 값도 더해 보고 싶어..."
-    )
-
-    milk_variant_id = calculation_stage.selector.value_to_variant_id["milk"]
-    milk_task = calculation_stage.variants[milk_variant_id]
-    assert _fact(milk_task, "mormi_menu_price").value.amount == 3000
-    assert _fact(milk_task, "child_menu_price").value.amount == 2000
-    assert _fact(milk_task, "total").value.amount == 5000
-    relation = milk_task.reasoning_graph.relations[0]
-    assert relation.operation == "addition"
-    assert relation.input_fact_ids == ["mormi_menu_price", "child_menu_price"]
-    assert relation.output_fact_id == "total"
-    assert milk_task.base_visual.data["child_menu"]["id"] == "milk"
-    assert milk_task.help_plan.H3.visual_data["result"] == 5000
-    assert len(milk_task.l2_plans) == 2
-    assert len(milk_task.l0_joint_plan.completion_values) == 2
-    assert milk_task.policies.note_context == "3,000원과 2,000원을 더하기로 계산하는 방법"
-    assert _projection(scenario) == [
-        ("child_menu_id", TOTAL_MENU_PICK_TASK_ID, "child_menu", None),
-        ("result", TOTAL_CALC_TASK_ID, "total", None),
-    ]
+    assert calculation.base_visual.data["mormi_menu"]["id"] == "americano"
+    assert calculation.base_visual.data["child_menu"]["id"] == "milk"
+    assert _fact(calculation, "mormi_menu_price").value.amount == 3000
+    assert _fact(calculation, "child_menu_price").value.amount == 2000
 
 
 def test_budget_menu_starts_with_mormi_help_seeking_voice() -> None:
@@ -274,7 +275,7 @@ def test_change_uses_reviewed_subtraction_and_rejects_price_over_payment() -> No
 
 
 def test_cafe_materialization_hash_is_reproducible_and_detects_tampering() -> None:
-    context = _cafe_context("americano")
+    context = _cafe_context("americano", child_menu_id="milk")
     first = create_cafe_scenario_pack_v2("cafe_menu_total", cafe_context=context)
     second = create_cafe_scenario_pack_v2("cafe_menu_total", cafe_context=context)
 
@@ -282,14 +283,14 @@ def test_cafe_materialization_hash_is_reproducible_and_detects_tampering() -> No
     assert life_scenario_hash_v2(first) == life_scenario_hash_v2(second)
 
     visual_payload = deepcopy(first.model_dump(mode="json"))
-    visual_payload["task_stages"][0]["variants"]["default"]["base_visual"]["data"]["menu_items"][0][
-        "image_url"
-    ] = "/tampered.png"
+    visual_payload["task_stages"][0]["variants"]["default"]["base_visual"]["data"][
+        "mormi_menu"
+    ]["image_url"] = "/tampered.png"
     visual_tamper = LifeScenarioPackV2.model_validate(visual_payload)
     assert life_scenario_hash_v2(visual_tamper) != life_scenario_hash_v2(first)
 
     arithmetic_payload = deepcopy(first.model_dump(mode="json"))
-    calculation_stage = arithmetic_payload["task_stages"][1]
+    calculation_stage = arithmetic_payload["task_stages"][0]
     variant = calculation_stage["variants"][calculation_stage["default_variant_id"]]
     result_fact = next(
         fact for fact in variant["reasoning_graph"]["facts"] if fact["fact_id"] == "total"
@@ -298,7 +299,7 @@ def test_cafe_materialization_hash_is_reproducible_and_detects_tampering() -> No
     with pytest.raises(ValidationError, match="arithmetic contradicts"):
         LifeScenarioPackV2.model_validate(arithmetic_payload)
 
-    selector_payload = deepcopy(first.model_dump(mode="json"))
-    selector_payload["task_stages"][1]["selector"]["value_to_variant_id"]["milk"] = "unknown"
-    with pytest.raises(ValidationError, match="unknown variant"):
-        LifeScenarioPackV2.model_validate(selector_payload)
+    task_payload = deepcopy(first.model_dump(mode="json"))
+    task_payload["task_stages"][0]["task_id"] = "unknown"
+    with pytest.raises(ValidationError, match="task ID"):
+        LifeScenarioPackV2.model_validate(task_payload)

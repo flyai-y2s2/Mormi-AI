@@ -12,7 +12,7 @@ def test_review_pipeline_discovers_every_current_home_cafe_and_park_task() -> No
     items = build_help_review_items()
     review_ids = [item.review_id for item in items]
 
-    assert len(items) == 47
+    assert len(items) == 46
     assert len(review_ids) == len(set(review_ids))
     assert sum(review_id.startswith("home:") for review_id in review_ids) == 36
     assert any(review_id.startswith("cafe_queue:") for review_id in review_ids)

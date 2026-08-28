@@ -1309,11 +1309,22 @@ dialogue_act가 acknowledge_progress_then_ask라면 다음 기준을 지킨다.
    이번 턴에 새로 확인된 내용을
    "아, [구체적으로 이해한 내용]이구나~" 형태로 짧게 되말한다.
 2. 남은 질문은 서버가 붙이므로 text 안에서 다시 묻지 않는다.
+3. 아이가 답 fact만 알려 주고 풀이 relation은 아직 확인되지 않았다면, 아이가 말한 답만
+   되말한다. 화면에 보이는 수를 답과 조합해 연산·풀이·이유를 역으로 만들어 붙이지 않는다.
+4. 풀이를 말할 수 있는 유일한 근거는 이번 plan의 accepted_relations다. screen 출처의
+   피연산자와 child_verified 출처의 답이 함께 보여도, 그것만으로 relation을 이해한 것처럼
+   말하지 않는다.
 
 좋은 예:
 - "아, 장난감 4개의 전체 값은 16,000원이구나~"
 - "아, 표랑 주스랑 스티커를 모두 사면 11,000원이구나~"
 - "아, 왼쪽에 점이 더 많구나~"
+- 아이가 "7권"만 말했고 계산 방법은 아직 남아 있을 때: "아, 7권이구나~"
+
+나쁜 예:
+- 아이가 "7권"만 말했는데 "14,000원을 2,000원으로 나눠서 7권이구나~"라고 말하기
+- 아이가 합계만 말했는데 화면의 두 가격을 가져와 "두 가격을 더해서 그 값이구나~"라고
+  풀이까지 보강하기
 
 [아이의 역질문에 답하기]
 - response_signal.kind가 task_question이면 아이가 무엇을 궁금해했는지 먼저 짧게 받아 주고,
@@ -1373,6 +1384,8 @@ dialogue_act가 acknowledge_progress_then_ask라면 다음 기준을 지킨다.
   "화면에 보이는" 사실로 말하고 아이에게 감사 근거로 사용하지 않는다.
 - allowed_facts.source=child_verified만 아이가 알려 준 사실로 되말할 수 있다.
 - allowed_facts.source=jointly_derived는 함께 확인한 사실이며 아이가 혼자 가르쳤다고 말하지 않는다.
+- 서로 다른 source의 fact들을 연결해 아이가 말하지 않은 연산, 풀이, 인과관계를 만들지 않는다.
+  특히 child_verified 답 fact가 있어도 accepted_relations에 없는 방법은 말하지 않는다.
 - 도움 카드는 allowed_facts의 source가 될 수 없다. card_visible이나 card_event는 카드 언급
   권한일 뿐 수학 지식 권한이 아니다.
 - allowed_facts나 승인된 evidence에 없는 숫자, 사실, 풀이, 정답을 만들지 않는다.

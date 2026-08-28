@@ -101,9 +101,11 @@ H3 공동 수행에서는 `amusement_transfer_solution`의 검수된 `equation`�
 }
 ```
 
-- `auto_total=true`: 2단계에서 장바구니 합계를 자동 표시합니다.
+- `auto_total=true`: 호환용 `cafe_budget_menu`에서 장바구니 합계를 자동 표시합니다.
 - `menu_items`는 프론트가 대화 시작 시 보낸 스냅샷을 그대로 반환합니다.
-- `auto_total=false`: 3단계에서 합계를 숨기고 아이가 직접 계산합니다.
+- 새 2단계 `cafe_menu_total`은 AI 대화를 열기 전에 화면에서 모르미 메뉴 하나를 정하고,
+  아이가 다른 메뉴 하나를 직접 고릅니다. 두 ID를 고정한 다음 합계는 숨기고 아이가
+  직접 계산합니다.
 - `budget_status`: `pending`, `within`, `over` 중 하나입니다.
 - 예산을 넘으면 `child_pick`, `total`, `budget_status=over`를 함께 반환합니다.
 - 모르미가 고른 메뉴는 `choice.disabled=true`이며 아이는 다른 메뉴를 고릅니다.
@@ -127,7 +129,7 @@ H3 공동 수행에서는 `amusement_transfer_solution`의 검수된 `equation`�
 카페 계산은 현재 가로식·선택·빈칸 UI만 사용합니다. 세로식 입력은 후속 범위입니다.
 거스름돈은 `operation=subtraction`이며 `left`는 항상 10,000원,
 `right`는 `mormi_menu_id`가 가리키는 메뉴 하나의 가격입니다.
-FE의 4단계 화면과 동일하게 `10,000 − 모르미 메뉴 가격`을 계산합니다.
+FE의 3단계 여정에서 `10,000 − 모르미 메뉴 가격`을 계산합니다.
 
 ## `budget_meter`와 `budget_menu_help`
 
@@ -140,7 +142,7 @@ FE의 4단계 화면과 동일하게 `10,000 − 모르미 메뉴 가격`을 계
 
 ## `vertical_equation`
 
-집 반복학습 후 가르치기에서 사용하는 기존 계약입니다. 카페 3·4단계에서는
+집 반복학습 후 가르치기에서 사용하는 기존 계약입니다. 카페 합산·거스름돈 단계에서는
 현재 사용하지 않습니다.
 
 ```json

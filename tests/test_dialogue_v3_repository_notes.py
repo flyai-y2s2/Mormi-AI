@@ -10,7 +10,6 @@ from sqlalchemy import select
 from mormi_api.content import (
     CHANGE_TASK_ID,
     TOTAL_CALC_TASK_ID,
-    TOTAL_MENU_PICK_TASK_ID,
     create_scenario_data,
 )
 from mormi_api.db import (
@@ -71,24 +70,38 @@ MENU = [
 
 
 def _context(mormi_menu_id: str) -> CafeSessionContext:
-    return CafeSessionContext(menu_items=MENU, mormi_menu_id=mormi_menu_id)
+    child_menu_id = "milk" if mormi_menu_id != "milk" else "americano"
+    return CafeSessionContext(
+        menu_items=MENU,
+        mormi_menu_id=mormi_menu_id,
+        child_menu_id=child_menu_id,
+    )
 
 
 def _transition_scenario() -> LifeScenarioPackV2:
-    """Put the note-enabled calculation before a note-free selection task."""
+    """Put the note-enabled calculation before a synthetic note-free follow-up."""
 
     original = create_cafe_scenario_pack_v2(
         "cafe_menu_total",
         cafe_context=_context("americano"),
     )
     payload = deepcopy(original.model_dump(mode="json"))
-    stages = {stage["task_id"]: stage for stage in payload["task_stages"]}
-    calculation = stages[TOTAL_CALC_TASK_ID]
-    calculation["selector"] = None
-    payload["task_stages"] = [
-        calculation,
-        stages[TOTAL_MENU_PICK_TASK_ID],
-    ]
+    calculation = payload["task_stages"][0]
+    follow_up = deepcopy(calculation)
+    follow_up["task_id"] = "repository_note_follow_up"
+    follow_up["variants"]["default"]["task_id"] = "repository_note_follow_up"
+    follow_up["variants"]["default"]["pack_id"] = "cafe.repository-note-follow-up.v2"
+    follow_up["variants"]["default"]["policies"].update(
+        {
+            "note_policy": "none",
+            "note_relation_ids": [],
+            "note_skill_id": None,
+            "note_context": None,
+            "reviewed_direct_fallback": None,
+            "reviewed_coauthored_note": None,
+        }
+    )
+    payload["task_stages"] = [calculation, follow_up]
     return LifeScenarioPackV2.model_validate(payload)
 
 

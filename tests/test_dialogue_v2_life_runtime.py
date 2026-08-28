@@ -128,6 +128,7 @@ def _cafe_scenario(scenario_id: str) -> LifeScenarioPackV2:
         cafe_context=CafeSessionContext(
             menu_items=MENU,
             mormi_menu_id="juice" if scenario_id == "cafe_budget_menu" else "americano",
+            child_menu_id="milk" if scenario_id == "cafe_menu_total" else None,
             budget=6000 if scenario_id == "cafe_budget_menu" else None,
         ),
     )
@@ -462,7 +463,7 @@ async def _finish_through_structured_route(
             {"left_count": 2, "right_count": 5, "final_choice": "left", "reason": "fewer_people"},
         ),
         ("cafe_budget_menu", {"child_menu_id": "milk"}),
-        ("cafe_menu_total", {"child_menu_id": "milk", "result": 5000}),
+        ("cafe_menu_total", {"result": 5000}),
         ("cafe_change", {"result": 7000}),
     ],
 )
@@ -600,14 +601,14 @@ async def test_scenario_snapshot_roundtrip_resumes_without_live_materializer() -
         initial,
         _response(
             initial,
-            ResponseType.CHOICE,
-            choice_ids=[_correct_choice_id(engine, resumed)],
+            ResponseType.NO_RESPONSE,
+            no_response_kind=NoResponseKindV2.EXPLICIT_HELP,
         ),
     )
 
-    assert result.state.task_index == 1
+    assert result.state.task_index == 0
     assert result.state.pinned_dialogue_scenario_v3 is not None
-    assert result.turn.task_id == scenario.task_stages[1].task_id
+    assert result.turn.task_id == scenario.task_stages[0].task_id
     assert result.turn.status is SessionStatus.ACTIVE
     source_stage = scenario.task_stages[0]
     source_pack = source_stage.variants[source_stage.default_variant_id]
@@ -615,7 +616,7 @@ async def test_scenario_snapshot_roundtrip_resumes_without_live_materializer() -
     assert result.runtime.content_pack_id == source_pack.pack_id
     assert result.runtime.content_version == source_pack.content_version
     assert result.runtime.content_source_hash == source_snapshot.content_hash
-    assert result.runtime.new_progress
+    assert not result.runtime.new_progress
 
 
 @pytest.mark.asyncio

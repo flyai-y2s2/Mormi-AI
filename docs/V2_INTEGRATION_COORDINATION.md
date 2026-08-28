@@ -1,14 +1,15 @@
 # V2 시연 범위 통합 협업 메모
 
 이 문서는 Mormi-AI의 네이티브 V2/V3 구현을 BE·FE와 연결할 때 필요한 변경만 정리한다.
-이번 작업은 **Mormi-AI만 수정**하며 Mormi-BE, Mormi-FE, 교사용 분석 페이지와
-발화사다리 분석 모델 코드는 수정하지 않는다.
+AI·BE·FE의 제품 계약을 함께 맞추되, 교사용 분석 페이지와 발화사다리 분석 모델 코드는
+수정하지 않는다.
 
 ## 현재 AI 구현 범위
 
 - 집 준비: 카페 필수 5개와 놀이동산 준비 4개, 총 9개 단일-pack 세션
-- 카페: `cafe_queue`, `cafe_budget_menu`, `cafe_menu_total`, `cafe_change`
-  - 4개 시나리오, 총 5개 task
+- 카페 제품 여정: `cafe_queue`, `cafe_menu_total`, `cafe_change`
+  - 3개 가르치기 스테이지, 총 3개 task
+  - `cafe_budget_menu`는 기존 대화 복구용 호환 시나리오로 유지
 - 놀이동산: `amusement_ticket_multiply`, `amusement_snack_divide`,
   `amusement_pass_compare`
   - 3개 시나리오, 기본·전이 포함 총 6개 task
@@ -57,7 +58,7 @@ FE renderer와 asset을 그대로 사용한다. 이번 FE 작업은 새 그림 �
 |---|---|
 | `cafe_queue` | `left_count`, `right_count`, `final_choice`, `reason` |
 | `cafe_budget_menu` | `child_menu_id` |
-| `cafe_menu_total` | `child_menu_id`, `result` |
+| `cafe_menu_total` | `result` |
 | `cafe_change` | `result` |
 | `amusement_ticket_multiply` | `ticket_price`, `party_count`, `total_price` |
 | `amusement_snack_divide` | `snack_total`, `payer_count`, `per_person` |

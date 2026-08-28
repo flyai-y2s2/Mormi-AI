@@ -3959,13 +3959,13 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
     "cafe_menu_total": ScenarioDefinition(
         id="cafe_menu_total",
         scene=SceneType.CAFE,
-        title="3단계 메뉴값 계산하기",
-        task_ids=[TOTAL_MENU_PICK_TASK_ID, TOTAL_CALC_TASK_ID],
+        title="2단계 메뉴값 계산하기",
+        task_ids=[TOTAL_CALC_TASK_ID],
     ),
     "cafe_change": ScenarioDefinition(
         id="cafe_change",
         scene=SceneType.CAFE,
-        title="4단계 거스름돈 받기",
+        title="3단계 거스름돈 받기",
         task_ids=[CHANGE_TASK_ID],
     ),
     "amusement_ticket_multiply": ScenarioDefinition(

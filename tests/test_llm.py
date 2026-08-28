@@ -73,6 +73,11 @@ def test_v2_speaker_prompt_keeps_mormi_in_the_learner_role() -> None:
     assert "교사, 채점자, 평가자, 정답 확인자가 아니다" in SPEAKER_V2_SYSTEM
     assert '"맞아, 잘 알려줬어!"' in SPEAKER_V2_SYSTEM
     assert '"아, 전체 값은 16,000원이구나~"' in SPEAKER_V2_SYSTEM
+    assert '아이가 "7권"만 말했고 계산 방법은 아직 남아 있을 때: "아, 7권이구나~"' in (
+        SPEAKER_V2_SYSTEM
+    )
+    assert "accepted_relations에 없는 방법은 말하지 않는다" in SPEAKER_V2_SYSTEM
+    assert "14,000원을 2,000원으로 나눠서 7권이구나" in SPEAKER_V2_SYSTEM
     assert "active turn의 질문과 도움 요청은 서버가 current_question으로 붙인다" in (
         SPEAKER_V2_SYSTEM
     )

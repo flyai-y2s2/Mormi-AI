@@ -71,10 +71,12 @@ FRONTEND_MENU = [
 def cafe_context(
     mormi_menu_id: str,
     budget: int | None = None,
+    child_menu_id: str | None = None,
 ) -> dict[str, object]:
     return {
         "menu_items": FRONTEND_MENU,
         "mormi_menu_id": mormi_menu_id,
+        "child_menu_id": child_menu_id,
         "budget": budget,
     }
 
@@ -279,23 +281,21 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
             learner_id=1,
             scene="cafe",
             scenario_id="cafe_menu_total",
-            cafe_context=cafe_context("americano"),
+            cafe_context=cafe_context("americano", child_menu_id="milk"),
         )
     )
 
     assert "예산" not in started.turn.mormi.text
 
-    picked = await choose(service, started.conversation_id, started.turn, "milk")
-    assert picked.turn.task_id == "cafe_total_calculation"
-    assert picked.turn.visual.data["left"] == 3000
-    assert picked.turn.visual.data["right"] == 2000
-    assert picked.turn.visual.type == "cafe_calculation"
-    operation = await choose(service, started.conversation_id, picked.turn, "add")
+    assert started.turn.task_id == "cafe_total_calculation"
+    assert started.turn.visual.data["left"] == 3000
+    assert started.turn.visual.data["right"] == 2000
+    assert started.turn.visual.type == "cafe_calculation"
+    operation = await choose(service, started.conversation_id, started.turn, "add")
     completed = await choose(service, started.conversation_id, operation.turn, "5000")
 
     assert completed.turn.status.value == "completed"
     assert completed.turn.completion is not None
-    assert completed.turn.completion.verified_facts["child_menu_id"] == "milk"
     assert completed.turn.completion.verified_facts["result"] == 5000
     notes = await repository.list_notes(1)
     assert len(notes) == 1
@@ -324,10 +324,6 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
             ).scalars()
         )
 
-    # The first task is reset when the calculation task starts, but its final
-    # accepted choice must still be recorded as newly verified.
-    child_menu_claim = next(claim for claim in claims if claim.slot_id == "child_menu")
-    assert child_menu_claim.newly_verified is True
     # The calculation note combines the operation and result supplied on two
     # turns. Both turns must remain traceable instead of citing only the last.
     calculation_observations = {
@@ -347,12 +343,8 @@ async def test_menu_total_uses_frontend_prices_and_creates_one_note(tmp_path: ob
         ]
         for observation_id in calculation_observations
     }
-    assert [outcome.task_id for outcome in outcomes] == [
-        "cafe_total_menu_pick",
-        "cafe_total_calculation",
-    ]
-    assert outcomes[0].verified_slots_json == {"child_menu": "milk"}
-    assert outcomes[1].verified_slots_json == {"operation": "addition", "result": 5000}
+    assert [outcome.task_id for outcome in outcomes] == ["cafe_total_calculation"]
+    assert outcomes[0].verified_slots_json == {"operation": "addition", "result": 5000}
     await database.dispose()
 
 
@@ -371,23 +363,22 @@ async def test_next_task_starting_at_l0_receives_matching_h3_contract(
             learner_id=1,
             scene="cafe",
             scenario_id="cafe_menu_total",
-            cafe_context=cafe_context("americano"),
+            cafe_context=cafe_context("americano", child_menu_id="milk"),
         )
     )
 
-    picked = await choose(service, started.conversation_id, started.turn, "milk")
     state = await repository.get_state(started.conversation_id)
 
-    assert picked.turn.task_id == "cafe_total_calculation"
+    assert started.turn.task_id == "cafe_total_calculation"
     assert state.expression_level is ExpressionLevel.L0
     assert state.hint_level is HintLevel.H3
     assert state.task_max_hint is HintLevel.H3
-    assert picked.turn.input.kind is InputKind.JOINT
-    assert picked.turn.help_card is not None
-    assert picked.turn.help_card.level is HintLevel.H3
-    assert picked.turn.help_card.auto_open is True
-    assert picked.turn.visual.type == "joint_money_calculation"
-    assert picked.turn.visual.data["result"] == 5000
+    assert started.turn.input.kind is InputKind.JOINT
+    assert started.turn.help_card is not None
+    assert started.turn.help_card.level is HintLevel.H3
+    assert started.turn.help_card.auto_open is True
+    assert started.turn.visual.type == "joint_money_calculation"
+    assert started.turn.visual.data["result"] == 5000
     await database.dispose()
 
 
@@ -488,7 +479,7 @@ def test_calculation_guidance_uses_natural_korean_without_menu_name_particles() 
         **create_scenario_data("cafe_menu_total", context),
         "child_menu_id": "milk",
     }
-    task_id = get_scenario("cafe_menu_total").task_ids[1]
+    task_id = get_scenario("cafe_menu_total").task_ids[0]
     task = get_task(task_id, data)
     prompt = task.steps[ExpressionLevel.L2][0].prompt
 

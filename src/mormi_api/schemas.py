@@ -372,6 +372,7 @@ class CafeSessionContext(BaseModel):
 
     menu_items: list[CafeMenuItem] = Field(min_length=2, max_length=20)
     mormi_menu_id: str = Field(min_length=1, max_length=64)
+    child_menu_id: str | None = Field(default=None, min_length=1, max_length=64)
     budget: int | None = Field(default=None, ge=0, le=100_000)
 
     @model_validator(mode="after")
@@ -381,6 +382,11 @@ class CafeSessionContext(BaseModel):
             raise ValueError("menu item ids must be unique")
         if self.mormi_menu_id not in menu_ids:
             raise ValueError("mormi_menu_id must reference menu_items")
+        if self.child_menu_id is not None:
+            if self.child_menu_id not in menu_ids:
+                raise ValueError("child_menu_id must reference menu_items")
+            if self.child_menu_id == self.mormi_menu_id:
+                raise ValueError("child_menu_id must differ from mormi_menu_id")
         return self
 
 

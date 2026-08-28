@@ -228,9 +228,9 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 |---|---|---|
 | `home_teach` | `home_teach` | 반복한 커리큘럼에 맞는 가르치기 시나리오 생성 |
 | `cafe` | `cafe_queue` | 1단계: 두 줄을 세고 짧은 줄 선택 |
-| `cafe` | `cafe_budget_menu` | 2단계: 자동 합계를 보며 예산 안에서 메뉴 선택 |
-| `cafe` | `cafe_menu_total` | 3단계: 두 메뉴를 고르고 전체 가격 계산 |
-| `cafe` | `cafe_change` | 4단계: 10,000원에서 모르미 메뉴 하나의 가격 빼기 |
+| `cafe` | `cafe_menu_total` | 2단계: 화면에서 하나씩 고른 두 메뉴의 전체 가격 계산 |
+| `cafe` | `cafe_change` | 3단계: 10,000원에서 모르미 메뉴 하나의 가격 빼기 |
+| `cafe` | `cafe_budget_menu` | 구버전 2단계 대화 복구용 호환 시나리오 |
 | `amusement_park` | `amusement_ticket_multiply` | 표 한 장 값과 사람 수를 곱해 전체 표 값 구하기 |
 | `amusement_park` | `amusement_snack_divide` | 간식 전체 값을 사람 수로 똑같이 나누기 |
 | `amusement_park` | `amusement_pass_compare` | 1회권과 자유이용권의 손익분기 횟수 비교하기 |
@@ -251,7 +251,8 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 | 필드 | 확정 주체 | 필요한 시나리오 |
 |---|---|---|
 | `menu_items`, `mormi_menu_id` | 프론트 | 메뉴 시나리오 전체 |
-| `budget` | 프론트 | `cafe_budget_menu` |
+| `child_menu_id` | 프론트 | `cafe_menu_total` |
+| `budget` | 프론트 | 호환 `cafe_budget_menu` |
 
 ### 카페 세션 변형값
 
@@ -273,7 +274,7 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 |---|---|
 | `cafe_queue` | `left_count`, `right_count`, `final_choice`, `reason` |
 | `cafe_budget_menu` | `child_menu_id` |
-| `cafe_menu_total` | `child_menu_id`, `result` |
+| `cafe_menu_total` | `result` |
 | `cafe_change` | `result` |
 
 메뉴 시나리오 시작 예시:
@@ -282,7 +283,7 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 {
   "learner_id": 1,
   "scene": "cafe",
-  "scenario_id": "cafe_budget_menu",
+  "scenario_id": "cafe_menu_total",
   "learning_session_id": "cafe_visit_20260826_01",
   "conversation_round": 1,
   "cafe_context": {
@@ -301,7 +302,7 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
       }
     ],
     "mormi_menu_id": "strawberry-juice",
-    "budget": 10000
+    "child_menu_id": "americano"
   },
   "conversation_storage_consent": true,
   "retention_policy": "permanent"
@@ -310,10 +311,11 @@ ID는 즉흥 생성하지 않고 `422`로 거부합니다.
 
 `cafe_context` 규칙:
 
-- `cafe_budget_menu`, `cafe_menu_total`, `cafe_change`에서 필수입니다.
+- `cafe_menu_total`, `cafe_change`와 호환 `cafe_budget_menu`에서 필수입니다.
 - `menu_items`는 ID가 중복되지 않는 2~20개 메뉴입니다.
 - `mormi_menu_id`는 반드시 `menu_items` 안의 ID여야 합니다.
-- 모르미가 고른 메뉴는 선택지에서 비활성화되며 아이는 다른 메뉴를 고릅니다.
+- `cafe_menu_total`에서는 화면이 먼저 모르미 메뉴를 하나 정하고, 아이가 다른 메뉴를
+  직접 고른 뒤 두 ID를 함께 보냅니다. 메뉴 선택은 별도 AI task나 정오 판정이 아닙니다.
 - `cafe_budget_menu`에서는 `budget`도 필수이며, 아이가 고를 수 있는 메뉴가 최소
   하나는 있어야 합니다.
 - 화면에 표시한 메뉴와 API에 보낸 스냅샷은 동일해야 합니다.

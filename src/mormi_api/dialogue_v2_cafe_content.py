@@ -9,7 +9,6 @@ from .content import (
     CHANGE_TASK_ID,
     QUEUE_TASK_ID,
     TOTAL_CALC_TASK_ID,
-    TOTAL_MENU_PICK_TASK_ID,
     TaskDefinition,
     create_scenario_data,
     get_scenario,
@@ -29,7 +28,6 @@ from .dialogue_v2_life_content import (
     LifeJointRelationCompletionV2,
     LifeL0JointPlanV2,
     LifeL2ChoicePlanV2,
-    LifePriorFactVariantSelectorV2,
     LifeReasoningGraphV2,
     LifeRelationV2,
     LifeScenarioPackV2,
@@ -935,9 +933,20 @@ def _validated_cafe_scenario_data(
         {
             "menu_items": scenario_data.get("menu_items"),
             "mormi_menu_id": scenario_data.get("mormi_menu_id"),
+            "child_menu_id": scenario_data.get("child_menu_id"),
             "budget": scenario_data.get("budget"),
         }
     )
+    if scenario_id == "cafe_menu_total" and cafe_context.child_menu_id is None:
+        # Rolling compatibility for conversations created by an older screen.
+        # The current FE always sends the child's explicit pick.  For an old
+        # request, choose the first *different* menu deterministically so that
+        # the fallback never turns into "the same menu twice" and BE can
+        # reconstruct the identical pair.
+        child_menu = next(
+            item for item in cafe_context.menu_items if item.id != cafe_context.mormi_menu_id
+        )
+        cafe_context = cafe_context.model_copy(update={"child_menu_id": child_menu.id})
     return create_scenario_data(scenario_id, cafe_context)
 
 
@@ -1029,58 +1038,25 @@ def materialize_cafe_scenario_v2(
         )
 
     if scenario_id == "cafe_menu_total":
-        selection_task = get_task(TOTAL_MENU_PICK_TASK_ID, data)
-        selection_pack = _menu_selection_pack(
+        calculation_task = get_task(TOTAL_CALC_TASK_ID, data)
+        calculation_pack = _calculation_pack(
             scenario_id=scenario_id,
-            task=selection_task,
-            menu_items=menu_items,
-            mormi_menu=mormi_menu,
-            budget=None,
-            note_enabled=False,
+            task=calculation_task,
+            variant_id="default",
         )
-        selectable_ids = [item.id for item in menu_items if item.id != mormi_menu.id]
-        variants: dict[str, LifeTaskPackV2] = {}
-        selector_values: dict[str, str] = {}
-        for index, menu_id in enumerate(selectable_ids):
-            variant_id = f"menu-{index:02d}"
-            task_data = {**data, "child_menu_id": menu_id}
-            calculation_task = get_task(TOTAL_CALC_TASK_ID, task_data)
-            variants[variant_id] = _calculation_pack(
-                scenario_id=scenario_id,
-                task=calculation_task,
-                variant_id=variant_id,
-            )
-            selector_values[menu_id] = variant_id
-        default_variant_id = next(iter(variants))
         return LifeScenarioPackV2(
             pack_id="cafe.menu-total.v2",
-            content_version=1,
+            content_version=2,
             scene=SceneType.CAFE,
             scenario_id=scenario_id,
             task_stages=[
                 LifeTaskStageV2(
-                    task_id=TOTAL_MENU_PICK_TASK_ID,
-                    default_variant_id="default",
-                    variants={"default": selection_pack},
-                ),
-                LifeTaskStageV2(
                     task_id=TOTAL_CALC_TASK_ID,
-                    default_variant_id=default_variant_id,
-                    variants=variants,
-                    selector=LifePriorFactVariantSelectorV2(
-                        source_task_id=TOTAL_MENU_PICK_TASK_ID,
-                        fact_id="child_menu",
-                        value_to_variant_id=selector_values,
-                    ),
+                    default_variant_id="default",
+                    variants={"default": calculation_pack},
                 ),
             ],
             completion_projection=[
-                LifeCompletionProjectionV2(
-                    output_key="child_menu_id",
-                    source_task_id=TOTAL_MENU_PICK_TASK_ID,
-                    source_kind="fact",
-                    source_id="child_menu",
-                ),
                 LifeCompletionProjectionV2(
                     output_key="result",
                     source_task_id=TOTAL_CALC_TASK_ID,
