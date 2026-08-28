@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from mormi_api.dialogue_v2_model_smoke import (
     DialogueV2ModelSmokeStageError,
     build_speaker_smoke_plan_v2,
@@ -25,14 +27,44 @@ class _SmokeGateway:
         self.understanding_requests.append(request)
         return UnderstandingResponseV2.model_validate(
             {
-                "utterance_class": "help_request",
+                "utterance_class": "learning_response",
                 "conversation_move": "none",
                 "move_subject": "other",
-                "support_need": "general_help",
-                "contains_learning_evidence": False,
-                "answer_status": "not_applicable",
-                "reasoning_status": "not_applicable",
-                "claims": [],
+                "support_need": "none",
+                "contains_learning_evidence": True,
+                "answer_status": "complete",
+                "reasoning_status": "sufficient",
+                "claims": [
+                    {
+                        "claim_kind": "fact",
+                        "claim_id": "smoke_fact",
+                        "fact_id": "answer_total",
+                        "claim_type": "final_answer",
+                        "evidence_span": "16,000원이야",
+                        "interpreted_value": {
+                            "type": "money",
+                            "amount": 16_000,
+                            "currency": "KRW",
+                        },
+                        "verdict": "correct",
+                        "confidence": 0.99,
+                    },
+                    {
+                        "claim_kind": "relation",
+                        "claim_id": "smoke_relation",
+                        "relation_id": "calculate_total",
+                        "claim_type": "procedure_step",
+                        "evidence_span": "4,000×4=16,000",
+                        "verdict": "sufficient",
+                        "arithmetic_interpretation": {
+                            "operation": "multiplication",
+                            "operands": [4_000, 4],
+                            "result": 16_000,
+                            "mathematical_validity": "correct",
+                        },
+                        "confidence": 0.99,
+                    },
+                ],
                 "confidence": "high",
             }
         )
@@ -47,7 +79,7 @@ def test_model_smoke_contract_contains_no_child_or_hidden_truth_in_speaker_plan(
     plan = build_speaker_smoke_plan_v2()
     plan_json = plan.model_dump_json()
 
-    assert request.child_utterance == "잘 모르겠어"
+    assert request.child_utterance == "4,000×4=16,000원이야"
     assert "16000" not in plan_json
     assert "child_utterance" not in plan_json
     assert plan.response_plan is not None
@@ -84,6 +116,41 @@ async def test_model_smoke_rejects_a_speaker_that_guesses_hidden_truth() -> None
         assert str(error) == "speaker_v2_smoke_output_invalid"
     else:  # pragma: no cover - protects the deployment safety contract
         raise AssertionError("hidden truth must fail the provider smoke")
+
+
+async def test_model_smoke_rejects_classifier_without_arithmetic_claims() -> None:
+    class MissingClaimsGateway(_SmokeGateway):
+        async def understand_v2(
+            self,
+            request: UnderstandingRequestV2,
+        ) -> UnderstandingResponseV2:
+            self.understanding_requests.append(request)
+            return UnderstandingResponseV2.model_validate(
+                {
+                    "utterance_class": "learning_response",
+                    "conversation_move": "none",
+                    "move_subject": "other",
+                    "support_need": "none",
+                    "contains_learning_evidence": False,
+                    "answer_status": "uncertain",
+                    "reasoning_status": "uncertain",
+                    "claims": [],
+                    "confidence": "low",
+                }
+            )
+
+    with pytest.raises(DialogueV2ModelSmokeStageError) as caught:
+        await run_dialogue_v2_model_smoke(
+            MissingClaimsGateway(),
+            classifier_model="claude-sonnet-4-6",
+            speaker_model="claude-haiku-4-5-20251001",
+        )
+
+    assert caught.value.stage == "understanding"
+    assert caught.value.error_code == "output_guard_failed"
+    assert safe_model_smoke_error_code(caught.value) == (
+        "understanding_output_guard_failed"
+    )
 
 
 def test_model_smoke_failure_diagnostics_are_bounded_codes() -> None:

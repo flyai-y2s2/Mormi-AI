@@ -22,6 +22,7 @@ from mormi_api.llm import (
     SPEAKER_V2_SYSTEM,
     UNDERSTANDING_V2_SYSTEM,
     ClaudeGateway,
+    _model_claim_value,
     structured_output_schema,
     validate_speaker_output,
 )
@@ -32,6 +33,7 @@ from mormi_api.schemas import (
     DifficultyClass,
     ExpressionLevel,
     InteractionIntent,
+    ModelFactUnderstandingClaimV2,
     NoteContextualizationContext,
     NoteContextualizationOutput,
     ReportFact,
@@ -90,6 +92,54 @@ def test_v2_understanding_prompt_keeps_conversation_and_learning_axes_independen
     assert '"너 AI인데 16,000원이잖아"' in UNDERSTANDING_V2_SYSTEM
     assert '"못 알려주겠는데?"' in UNDERSTANDING_V2_SYSTEM
     assert '"네가 해"' in UNDERSTANDING_V2_SYSTEM
+    assert '"6000나누기 2는 3000이니까"' in UNDERSTANDING_V2_SYSTEM
+    assert '"500+100=600"' in UNDERSTANDING_V2_SYSTEM
+    assert 'value_type=money의 unit은 통화 코드 "KRW" 또는 null만' in (
+        UNDERSTANDING_V2_SYSTEM
+    )
+
+
+@pytest.mark.parametrize("unit", [None, "", "원", "원화", "₩", "￦", "KRW", "krw"])
+def test_v2_provider_money_unit_normalizes_korean_won_surfaces(unit: str | None) -> None:
+    claim = ModelFactUnderstandingClaimV2(
+        claim_id="answer",
+        target_id="per_person",
+        claim_type="final_answer",
+        evidence_span="3000원",
+        verdict="correct",
+        value_type="money",
+        numeric_value=3_000,
+        text_value=None,
+        boolean_value=None,
+        unit=unit,
+        confidence=0.99,
+    )
+
+    value = _model_claim_value(claim)
+
+    assert value.type == "money"
+    assert value.amount == 3_000
+    assert value.currency == "KRW"
+
+
+def test_v2_provider_money_unit_preserves_other_iso_currency_codes() -> None:
+    claim = ModelFactUnderstandingClaimV2(
+        claim_id="answer",
+        target_id="total",
+        claim_type="final_answer",
+        evidence_span="6 dollars",
+        verdict="correct",
+        value_type="money",
+        numeric_value=6,
+        text_value=None,
+        boolean_value=None,
+        unit="usd",
+        confidence=0.99,
+    )
+
+    value = _model_claim_value(claim)
+
+    assert value.currency == "USD"
 
 
 def test_v2_understanding_prompt_does_not_turn_help_card_text_into_learning() -> None:

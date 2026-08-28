@@ -174,7 +174,12 @@ def _supported_effort(model: str, effort: str) -> str | None:
 
 def _model_claim_value(claim: ModelFactUnderstandingClaimV2) -> CanonicalValueV2:
     if claim.value_type == "money" and claim.numeric_value is not None:
-        return MoneyValueV2(amount=claim.numeric_value, currency=claim.unit or "KRW")
+        currency = (claim.unit or "").strip()
+        if not currency or currency in {"원", "원화", "₩", "￦"}:
+            currency = "KRW"
+        else:
+            currency = currency.upper()
+        return MoneyValueV2(amount=claim.numeric_value, currency=currency)
     if claim.value_type == "number" and claim.numeric_value is not None:
         return NumberValueV2(value=claim.numeric_value, unit=claim.unit)
     if claim.value_type == "text" and claim.text_value:
@@ -1178,6 +1183,13 @@ support_need=general_help 또는 concept로 두고, 아이의 별도 주장이 �
 - "너 AI인데 16,000원이잖아"
   → conversation_move=meta_question, move_subject=mormi_ai_identity를 보존하면서,
     실제로 말한 16,000원에 대한 fact claim도 별도로 추출
+- 전체 간식 값이 6,000원이고 두 명이 똑같이 내는 과제에서
+  "6000나누기 2는 3000이니까" 또는
+  "6000원을 2로 나누면 3000원이니까 3000원이야"
+  → 3,000원 fact claim과 6,000÷2=3,000 division relation claim을 각각 추출한다.
+    문장 끝이 생략됐거나 같은 답이 반복돼도 이미 명시된 올바른 풀이 근거를 버리지 않는다.
+- 500원과 100원의 합과 방법을 묻는 과제에서 "500+100=600"
+  → 600원 fact claim과 500+100=600 addition relation claim을 각각 추출한다.
 
 current_turn.help_scaffolded_relation_ids는 화면의 H2/H3 도움 카드가 지원하는 현재 relation의
 서버 소유 ID다. 카드 본문·식·값은 전달되지 않으며 이를 새 답이나 모르미 지식으로 추론하지
@@ -1203,7 +1215,8 @@ claim_type=procedure_step|explanation만 쓴다. auxiliary_claims는 reviewed ta
 numeric_value, text/choice는 text_value, boolean은 boolean_value다. relation의 산술 해석이
 있으면 operation·operands·result·mathematical_validity를 모두 쓰고, 없으면
 operation/result/mathematical_validity는 null, operands는 빈 배열로 둔다. 사용하지 않는
-값 필드는 null로 둔다.
+값 필드는 null로 둔다. value_type=money의 unit은 통화 코드 "KRW" 또는 null만 사용한다.
+아이 원문의 "원", "원화", "₩"은 evidence_span에 그대로 둘 수 있지만 unit에 복사하지 않는다.
 """.strip()
 
 
