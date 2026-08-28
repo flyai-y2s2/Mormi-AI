@@ -312,6 +312,49 @@ def test_correct_verdict_is_not_regraded_against_value_or_arithmetic() -> None:
     assert result.completion.complete is True
 
 
+def test_correct_verdict_progresses_without_diagnostic_value_or_arithmetic() -> None:
+    pack = _mixed_pack()
+    snapshot = pin_content_pack_v2(pack)
+    utterance = "1000원이 모자라고 전체 값에서 예산을 빼"
+    guarded = _guard(
+        pack,
+        utterance,
+        UnderstandingResponseV2(
+            utterance_class="learning_response",
+            contains_learning_evidence=True,
+            claims=[
+                FactUnderstandingClaimV2(
+                    claim_id="claim_without_value",
+                    fact_id="shortage",
+                    claim_type="final_answer",
+                    evidence_span="1000원이 모자라고",
+                    interpreted_value=None,
+                    verdict="correct",
+                ),
+                RelationUnderstandingClaimV2(
+                    claim_id="claim_without_arithmetic",
+                    relation_id="calculate_shortage",
+                    claim_type="procedure_step",
+                    evidence_span="전체 값에서 예산을 빼",
+                    verdict="sufficient",
+                    arithmetic_interpretation=None,
+                ),
+            ],
+        ),
+    )
+
+    result = apply_guarded_understanding_v2(
+        snapshot,
+        empty_reasoning_ledger_v2(snapshot),
+        guarded,
+        source_turn_id="turn_diagnostics_optional",
+    )
+
+    assert result.new_fact_ids == ["shortage"]
+    assert result.new_relation_ids == ["calculate_shortage"]
+    assert result.completion.complete is True
+
+
 def test_incorrect_verdict_cannot_verify_truth_or_erase_prior_progress() -> None:
     pack = _mixed_pack()
     snapshot = pin_content_pack_v2(pack)

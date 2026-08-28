@@ -172,23 +172,35 @@ def _supported_effort(model: str, effort: str) -> str | None:
     return None if "haiku" in model.lower() else effort
 
 
-def _model_claim_value(claim: ModelFactUnderstandingClaimV2) -> CanonicalValueV2:
-    if claim.value_type == "money" and claim.numeric_value is not None:
-        currency = (claim.unit or "").strip()
-        if not currency or currency in {"원", "원화", "₩", "￦"}:
-            currency = "KRW"
-        else:
-            currency = currency.upper()
-        return MoneyValueV2(amount=claim.numeric_value, currency=currency)
-    if claim.value_type == "number" and claim.numeric_value is not None:
-        return NumberValueV2(value=claim.numeric_value, unit=claim.unit)
-    if claim.value_type == "text" and claim.text_value:
-        return TextValueV2(text=claim.text_value)
-    if claim.value_type == "choice" and claim.text_value:
-        return ChoiceValueV2(choice_id=claim.text_value)
-    if claim.value_type == "boolean" and claim.boolean_value is not None:
-        return BooleanValueV2(value=claim.boolean_value)
-    raise ValueError("fact claim requires one complete interpreted value")
+def _model_claim_value(
+    claim: ModelFactUnderstandingClaimV2,
+) -> CanonicalValueV2 | None:
+    """Best-effort turn-local interpretation that cannot override a verdict.
+
+    The reasoning ledger intentionally ignores this value and trusts Sonnet's
+    verdict after the literal evidence guard. Provider formatting differences
+    therefore degrade only this diagnostic field, never the accepted claim.
+    """
+
+    try:
+        if claim.value_type == "money" and claim.numeric_value is not None:
+            currency = (claim.unit or "").strip()
+            if not currency or currency in {"원", "원화", "₩", "￦"}:
+                currency = "KRW"
+            else:
+                currency = currency.upper()
+            return MoneyValueV2(amount=claim.numeric_value, currency=currency)
+        if claim.value_type == "number" and claim.numeric_value is not None:
+            return NumberValueV2(value=claim.numeric_value, unit=claim.unit)
+        if claim.value_type == "text" and claim.text_value:
+            return TextValueV2(text=claim.text_value)
+        if claim.value_type == "choice" and claim.text_value:
+            return ChoiceValueV2(choice_id=claim.text_value)
+        if claim.value_type == "boolean" and claim.boolean_value is not None:
+            return BooleanValueV2(value=claim.boolean_value)
+    except ValidationError:
+        return None
+    return None
 
 
 def _model_claim_arithmetic(
@@ -208,13 +220,16 @@ def _model_claim_arithmetic(
         or claim.result is None
         or claim.mathematical_validity is None
     ):
-        raise ValueError("arithmetic interpretation must be complete or absent")
-    return ArithmeticInterpretationV2(
-        operation=claim.operation,
-        operands=claim.operands,
-        result=claim.result,
-        mathematical_validity=claim.mathematical_validity,
-    )
+        return None
+    try:
+        return ArithmeticInterpretationV2(
+            operation=claim.operation,
+            operands=claim.operands,
+            result=claim.result,
+            mathematical_validity=claim.mathematical_validity,
+        )
+    except ValidationError:
+        return None
 
 
 def _internal_understanding_response(
