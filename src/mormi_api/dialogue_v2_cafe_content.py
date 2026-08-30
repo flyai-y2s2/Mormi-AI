@@ -780,8 +780,21 @@ def _calculation_pack(
             else "낸 돈에서 메뉴값을 빼 거스름돈을 구한다"
         ),
         rubric=RelationRubricV2(
-            sufficient=[f"{contract.left:,}{symbol}{contract.right:,}으로 계산한다"],
-            partial=["두 금액을 더한다" if operation == "addition" else "메뉴값을 뺀다"],
+            sufficient=[
+                (
+                    "두 메뉴 가격을 합치는 관계를 올바르게 설명한다"
+                    if operation == "addition"
+                    else "낸 돈을 기준으로 주문한 메뉴 가격만큼 빼는 관계를 올바르게 설명한다"
+                ),
+                f"{contract.left:,}{symbol}{contract.right:,}으로 계산한다",
+            ],
+            partial=[
+                (
+                    "더한다고만 말해 어떤 금액들을 합치는지 불분명하다"
+                    if operation == "addition"
+                    else "뺀다고만 말해 어느 금액에서 어느 금액을 빼는지 불분명하다"
+                )
+            ],
             incorrect=["두 금액을 뺀다" if operation == "addition" else "메뉴값을 더한다"],
         ),
         required_for_completion=True,
@@ -849,7 +862,7 @@ def _calculation_pack(
     prefix = f"{scenario_id}.{variant_id}"
     return LifeTaskPackV2(
         pack_id=f"cafe.{scenario_id.replace('_', '-')}.{task.id.replace('_', '-')}.{variant_id}.v2",
-        content_version=1,
+        content_version=2,
         scene=SceneType.CAFE,
         scenario_id=scenario_id,
         task_id=task.id,
@@ -1046,7 +1059,7 @@ def materialize_cafe_scenario_v2(
         )
         return LifeScenarioPackV2(
             pack_id="cafe.menu-total.v2",
-            content_version=2,
+            content_version=3,
             scene=SceneType.CAFE,
             scenario_id=scenario_id,
             task_stages=[
@@ -1076,7 +1089,7 @@ def materialize_cafe_scenario_v2(
     )
     return LifeScenarioPackV2(
         pack_id="cafe.change.v2",
-        content_version=1,
+        content_version=2,
         scene=SceneType.CAFE,
         scenario_id=scenario_id,
         task_stages=[

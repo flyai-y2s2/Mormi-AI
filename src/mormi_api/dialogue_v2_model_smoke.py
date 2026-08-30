@@ -115,6 +115,26 @@ def build_understanding_smoke_request_v2() -> UnderstandingRequestV2:
                 "unit_price": 4_000,
                 "quantity": 4,
             },
+            "fact_contexts": [
+                {
+                    "fact_id": "unit_price",
+                    "speaker_label": "한 개 값",
+                    "semantic_aliases": ["한 개 가격"],
+                    "visible": True,
+                },
+                {
+                    "fact_id": "quantity",
+                    "speaker_label": "개수",
+                    "semantic_aliases": [],
+                    "visible": True,
+                },
+                {
+                    "fact_id": "answer_total",
+                    "speaker_label": "전체 값",
+                    "semantic_aliases": [],
+                    "visible": False,
+                },
+            ],
             "targets": [
                 {
                     "target_kind": "fact",
@@ -128,6 +148,17 @@ def build_understanding_smoke_request_v2() -> UnderstandingRequestV2:
                     "target_id": "calculate_total",
                     "ask_kind": "reason_or_method",
                     "rubric": {"sufficient": "한 개 값과 개수를 이용한다"},
+                    "semantic_contract": {
+                        "relation_id": "calculate_total",
+                        "speaker_label": "한 개 값에 개수를 곱해 전체 값을 구한다",
+                        "operation": "multiplication",
+                        "input_fact_ids": ["unit_price", "quantity"],
+                        "output_fact_id": "answer_total",
+                        "method_policy": "open_equivalent",
+                        "numeric_expression_required": False,
+                        "answer_required_in_same_utterance": False,
+                        "rubric_examples_exhaustive": False,
+                    },
                 },
             ],
             "claimable_graph": {

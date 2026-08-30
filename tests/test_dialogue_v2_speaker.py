@@ -937,6 +937,20 @@ def _understanding_request() -> UnderstandingRequestV2:
     return UnderstandingRequestV2(
         task_id="home_teaching",
         visible_facts={"budget": 10_000},
+        fact_contexts=[
+            {
+                "fact_id": "budget",
+                "speaker_label": "예산",
+                "semantic_aliases": ["쓸 수 있는 돈"],
+                "visible": True,
+            },
+            {
+                "fact_id": "shortage",
+                "speaker_label": "모자라는 돈",
+                "semantic_aliases": [],
+                "visible": False,
+            },
+        ],
         targets=[
             {
                 "target_kind": "fact",
@@ -945,7 +959,7 @@ def _understanding_request() -> UnderstandingRequestV2:
                 "expected_truth": {"type": "money", "amount": 1_000},
             }
         ],
-        claimable_graph={"fact_ids": ["shortage"], "relation_ids": []},
+        claimable_graph={"fact_ids": ["budget", "shortage"], "relation_ids": []},
         current_turn={
             "mormi_question": "얼마가 모자라는지 알려줄 수 있어?",
             "asks": ["answer"],

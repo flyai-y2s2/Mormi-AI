@@ -232,6 +232,15 @@ class DialogueV2LifeEngine(DialogueV2Engine):
         ]
         if state.expression_level in {ExpressionLevel.L4, ExpressionLevel.L0}:
             return ordered
+        partial_relation_ids = set(ledger.partial_relations).difference(
+            ledger.verified_relations
+        )
+        for target in ordered:
+            if (
+                target.target_kind == "relation"
+                and target.target_id in partial_relation_ids
+            ):
+                return [target]
         plans = pack.l3_plans if state.expression_level is ExpressionLevel.L3 else []
         for l3_plan in plans:
             if l3_plan.targets[0] in ordered:

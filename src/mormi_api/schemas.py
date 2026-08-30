@@ -937,6 +937,63 @@ class UnderstandingTargetV2(DialogueV2Model):
     ask_kind: Literal["answer", "reason_or_method"]
     rubric: dict[str, str] = Field(default_factory=dict)
     expected_truth: CanonicalValueV2 | None = None
+    semantic_contract: UnderstandingRelationContractV2 | None = None
+
+    @model_validator(mode="after")
+    def semantic_contract_belongs_only_to_relations(self) -> UnderstandingTargetV2:
+        if self.target_kind == "fact" and self.semantic_contract is not None:
+            raise ValueError("fact target cannot declare a relation semantic contract")
+        if self.target_kind == "relation":
+            if self.semantic_contract is None:
+                raise ValueError("relation target needs a semantic contract")
+            if self.semantic_contract.relation_id != self.target_id:
+                raise ValueError("semantic contract relation_id must match target_id")
+        return self
+
+
+class UnderstandingFactContextV2(DialogueV2Model):
+    """Safe scene vocabulary for mapping child words to reviewed graph facts."""
+
+    fact_id: str = Field(min_length=1, max_length=160)
+    speaker_label: str = Field(min_length=1, max_length=100)
+    semantic_aliases: list[str] = Field(default_factory=list, max_length=12)
+    visible: bool
+
+    @model_validator(mode="after")
+    def aliases_must_be_unique(self) -> UnderstandingFactContextV2:
+        if len(self.semantic_aliases) != len(set(self.semantic_aliases)):
+            raise ValueError("fact semantic aliases must be unique")
+        return self
+
+
+class UnderstandingRelationContractV2(DialogueV2Model):
+    """Meaning boundary for open-world relation judgment, not a phrase whitelist."""
+
+    relation_id: str = Field(min_length=1, max_length=160)
+    speaker_label: str = Field(min_length=1, max_length=160)
+    operation: Literal[
+        "counting",
+        "comparison",
+        "addition",
+        "subtraction",
+        "multiplication",
+        "division",
+        "selection",
+    ]
+    input_fact_ids: list[str] = Field(min_length=1, max_length=20)
+    output_fact_id: str = Field(min_length=1, max_length=160)
+    method_policy: Literal["canonical_relation", "open_equivalent"]
+    numeric_expression_required: bool = False
+    answer_required_in_same_utterance: bool = False
+    rubric_examples_exhaustive: Literal[False] = False
+
+    @model_validator(mode="after")
+    def fact_references_must_be_distinct(self) -> UnderstandingRelationContractV2:
+        if len(self.input_fact_ids) != len(set(self.input_fact_ids)):
+            raise ValueError("relation semantic contract inputs must be unique")
+        if self.output_fact_id in self.input_fact_ids:
+            raise ValueError("relation output cannot also be an input")
+        return self
 
 
 class ClaimableGraphContextV2(DialogueV2Model):
@@ -984,6 +1041,10 @@ class UnderstandingRequestV2(DialogueV2Model):
 
     task_id: str = Field(min_length=1, max_length=160)
     visible_facts: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    fact_contexts: list[UnderstandingFactContextV2] = Field(
+        default_factory=list,
+        max_length=100,
+    )
     targets: list[UnderstandingTargetV2] = Field(min_length=1, max_length=20)
     claimable_graph: ClaimableGraphContextV2
     current_turn: UnderstandingTurnContextV2
@@ -1002,6 +1063,18 @@ class UnderstandingRequestV2(DialogueV2Model):
 
         fact_ids = set(self.claimable_graph.fact_ids)
         relation_ids = set(self.claimable_graph.relation_ids)
+        context_ids = [context.fact_id for context in self.fact_contexts]
+        if len(context_ids) != len(set(context_ids)):
+            raise ValueError("understanding fact contexts must be unique")
+        if set(context_ids) != fact_ids:
+            raise ValueError("understanding fact contexts must cover claimable facts")
+        if not set(self.visible_facts).issubset(fact_ids):
+            raise ValueError("visible facts must reference claimable facts")
+        visible_context_ids = {
+            context.fact_id for context in self.fact_contexts if context.visible
+        }
+        if visible_context_ids != set(self.visible_facts):
+            raise ValueError("visible fact contexts must match visible_facts")
         for target in self.targets:
             if target.target_kind == "fact" and target.target_id not in fact_ids:
                 raise ValueError("fact target must exist in claimable_graph.fact_ids")
@@ -1012,6 +1085,12 @@ class UnderstandingRequestV2(DialogueV2Model):
                     )
                 if target.expected_truth is not None:
                     raise ValueError("relation target cannot declare expected_truth")
+                contract = target.semantic_contract
+                assert contract is not None
+                if not set(contract.input_fact_ids).issubset(fact_ids):
+                    raise ValueError("semantic contract inputs must be claimable facts")
+                if contract.output_fact_id not in fact_ids:
+                    raise ValueError("semantic contract output must be a claimable fact")
 
         if set(self.current_turn.asks) != {target.ask_kind for target in self.targets}:
             raise ValueError("current_turn asks must match target ask kinds")

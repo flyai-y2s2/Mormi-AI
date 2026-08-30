@@ -195,9 +195,10 @@ def test_menu_total_starts_directly_with_one_pinned_calculation_problem() -> Non
         "cafe_menu_total",
         cafe_context=_cafe_context("americano", child_menu_id="milk"),
     )
-    assert scenario.content_version == 2
+    assert scenario.content_version == 3
     assert [stage.task_id for stage in scenario.task_stages] == [TOTAL_CALC_TASK_ID]
     calculation = _only_variant(scenario, TOTAL_CALC_TASK_ID)
+    assert calculation.content_version == 2
     assert calculation.policies.entry_expression_level is ExpressionLevel.L4
     assert calculation.base_visual.type == "cafe_calculation"
     assert calculation.base_visual.data["mormi_menu"]["id"] == "americano"
@@ -249,12 +250,18 @@ def test_change_uses_reviewed_subtraction_and_rejects_price_over_payment() -> No
     )
     task = _only_variant(scenario, CHANGE_TASK_ID)
 
+    assert scenario.content_version == 2
+    assert task.content_version == 2
     assert _fact(task, "payment").value.amount == 10000
     assert _fact(task, "menu_price").value.amount == 4500
+    assert _fact(task, "menu_price").speaker_label == "딸기케이크 값"
     assert _fact(task, "change").value.amount == 5500
     relation = task.reasoning_graph.relations[0]
     assert relation.operation == "subtraction"
     assert relation.input_fact_ids == ["payment", "menu_price"]
+    assert relation.rubric.sufficient[0] == (
+        "낸 돈을 기준으로 주문한 메뉴 가격만큼 빼는 관계를 올바르게 설명한다"
+    )
     assert task.base_visual.data["payment"] == 10000
     assert task.base_visual.data["menu_total"] == 4500
     assert task.help_plan.H3.revealed_fact_ids == ["change"]

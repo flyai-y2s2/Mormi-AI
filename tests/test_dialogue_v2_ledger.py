@@ -55,16 +55,41 @@ def _request(
         if target.target_kind == "fact":
             payload["expected_truth"] = facts[target.target_id].value.model_dump(mode="json")
         else:
-            rubric = relations[target.target_id].rubric
+            relation = relations[target.target_id]
+            rubric = relation.rubric
             payload["rubric"] = {
                 "sufficient": " / ".join(rubric.sufficient),
                 "partial": " / ".join(rubric.partial),
                 "incorrect": " / ".join(rubric.incorrect),
             }
+            payload["semantic_contract"] = {
+                "relation_id": relation.relation_id,
+                "speaker_label": relation.speaker_label,
+                "operation": relation.operation,
+                "input_fact_ids": relation.input_fact_ids,
+                "output_fact_id": relation.output_fact_id,
+                "method_policy": (
+                    "open_equivalent"
+                    if relation.evaluation_mode == "open_semantic_support"
+                    else "canonical_relation"
+                ),
+                "numeric_expression_required": False,
+                "answer_required_in_same_utterance": False,
+                "rubric_examples_exhaustive": False,
+            }
         targets.append(payload)
 
     return UnderstandingRequestV2(
         task_id=pack.task_id,
+        fact_contexts=[
+            {
+                "fact_id": fact.fact_id,
+                "speaker_label": fact.speaker_label,
+                "semantic_aliases": [],
+                "visible": False,
+            }
+            for fact in pack.reasoning_graph.facts
+        ],
         targets=targets,  # type: ignore[arg-type]
         claimable_graph={
             "fact_ids": [fact.fact_id for fact in pack.reasoning_graph.facts],
@@ -194,6 +219,90 @@ def test_mixed_11000_is_monotonic_milestone_progress_not_completion() -> None:
     # the conversation ledger. Only offsets and semantic audit data are pinned.
     serialized_ledger = json.dumps(result.ledger.model_dump(mode="json"), ensure_ascii=False)
     assert "5000+3000+3000해서 11000원이야" not in serialized_ledger
+
+
+def test_partial_relation_is_preserved_without_satisfying_completion() -> None:
+    pack = _mixed_pack()
+    snapshot = pin_content_pack_v2(pack)
+    child_text = "전체 값에서 빼면 돼"
+    guarded = _guard(
+        pack,
+        child_text,
+        UnderstandingResponseV2(
+            utterance_class="learning_response",
+            contains_learning_evidence=True,
+            answer_status="missing",
+            reasoning_status="partial",
+            claims=[
+                RelationUnderstandingClaimV2(
+                    claim_id="partial_subtraction_direction",
+                    relation_id="calculate_shortage",
+                    claim_type="procedure_step",
+                    evidence_span=child_text,
+                    verdict="partial",
+                )
+            ],
+        ),
+    )
+
+    result = apply_guarded_understanding_v2(
+        snapshot,
+        empty_reasoning_ledger_v2(snapshot),
+        guarded,
+        source_turn_id="turn_partial_relation",
+    )
+
+    assert result.new_partial_relation_ids == ["calculate_shortage"]
+    assert set(result.ledger.partial_relations) == {"calculate_shortage"}
+    assert result.ledger.verified_relations == {}
+    assert result.has_new_partial_progress is True
+    assert result.has_new_canonical_progress is False
+    assert result.completion.complete is False
+    assert child_text not in result.ledger.model_dump_json()
+
+
+def test_partial_claim_cannot_reopen_an_already_verified_relation() -> None:
+    pack = _mixed_pack()
+    snapshot = pin_content_pack_v2(pack)
+    verified = apply_structured_progress_v2(
+        snapshot,
+        empty_reasoning_ledger_v2(snapshot),
+        fact_values={},
+        relation_ids=["calculate_shortage"],
+        source_turn_id="turn_verified_relation",
+        source_kind="choice",
+    ).ledger
+    child_text = "빼면 돼"
+    guarded = _guard(
+        pack,
+        child_text,
+        UnderstandingResponseV2(
+            utterance_class="learning_response",
+            contains_learning_evidence=True,
+            reasoning_status="partial",
+            claims=[
+                RelationUnderstandingClaimV2(
+                    claim_id="late_partial_relation",
+                    relation_id="calculate_shortage",
+                    claim_type="procedure_step",
+                    evidence_span=child_text,
+                    verdict="partial",
+                )
+            ],
+        ),
+    )
+
+    result = apply_guarded_understanding_v2(
+        snapshot,
+        verified,
+        guarded,
+        source_turn_id="turn_late_partial",
+    )
+
+    assert result.new_partial_relation_ids == []
+    assert result.ledger.partial_relations == {}
+    assert result.ignored_claim_ids == ["late_partial_relation"]
+    assert result.has_new_partial_progress is False
 
 
 def test_required_fact_and_relation_are_the_only_completion_authority() -> None:

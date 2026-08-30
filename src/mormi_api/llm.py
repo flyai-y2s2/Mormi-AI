@@ -1233,11 +1233,34 @@ operation/result/mathematical_validity는 null, operands는 빈 배열로 둔다
 값 필드는 null로 둔다. value_type=money의 unit은 통화 코드 "KRW" 또는 null만 사용한다.
 아이 원문의 "원", "원화", "₩"은 evidence_span에 그대로 둘 수 있지만 unit에 복사하지 않는다.
 relation rubric의 sufficient에는 canonical 식 외의 동치 풀이가 함께 들어갈 수 있다. 아이가
-나눗셈 대신 역산 곱셈이나 반복 덧셈처럼 rubric에 허용된 다른 방법으로 같은 관계를 정당하게
+나눗셈 대신 역산 곱셈이나 반복 덧셈처럼 semantic contract와 예시가 나타내는 같은 관계를 정당하게
 설명하면 operation 이름이 canonical graph와 다르다는 이유로 partial/incorrect로 낮추지 말고
 sufficient로 판정한다. 예를 들어 1회 이용권 2,000원과 자유이용권 12,000원을 비교할 때
 "2000곱하기 6이 12000이니까 6번 탈 때 같고, 7번부터 저렴해"는 값이 같아지는 횟수와
 이득 시작 횟수, 역산 곱셈 방법을 모두 올바르게 설명한 것이다.
+
+fact_contexts는 현재 장면의 graph fact를 아이가 보는 말과 연결하는 서버 소유 의미 사전이다.
+speaker_label과 semantic_aliases는 표현을 그대로 맞춰야 하는 답안 목록이 아니라 "쿠키 값"이
+menu_price이고 "낸 돈"이 payment라는 식의 지시 대상 grounding이다. 아이가 같은 대상을
+일상적인 다른 말로 표현해도 의미가 분명하면 인정한다.
+
+relation target의 semantic_contract가 방법 판정의 우선 기준이다. rubric의 sufficient,
+partial, incorrect 문구는 경계를 설명하는 비완전한 예시이며
+rubric_examples_exhaustive=false이면 예시에 없는 표현이나 풀이도 배제하지 않는다.
+- numeric_expression_required=false이면 숫자나 완성된 식이 없어도 입력 fact의 역할과 계산
+  방향을 올바르게 말한 방법 설명은 sufficient다.
+- answer_required_in_same_utterance=false이면 방법을 충분히 설명하고 결과 답을 말하지 않았어도
+  relation은 sufficient이고, 별도의 answer fact만 missing이다. 답 누락을 이유로 방법 relation을
+  partial로 낮추지 않는다.
+- method_policy=open_equivalent이면 canonical operation 표현뿐 아니라 같은 output을 정당하게
+  구하는 역산·반복·세어 올라가기·분해 같은 수학적으로 타당한 동치 방법을 인정한다.
+- partial은 아이가 실제 방법 일부를 말했지만 연산, 입력 역할, 방향 또는 목표 관계 중 중요한
+  부분이 불분명한 경우다. 단지 숫자·결과·교과서 표현이 없다는 이유로 partial을 선택하지 않는다.
+
+예를 들어 payment가 "낸 돈", menu_price가 "쿠키 값", change가 "거스름돈"인 장면에서
+"네가 낸 돈에서 쿠키 값을 빼면 돼"는 숫자와 답이 없어도 subtract_menu_price relation을
+sufficient로 뒷받침한다. change 답 fact는 별도로 missing이다. "빼면 돼"처럼 어느 값에서
+어느 값을 빼는지 불분명한 말만 partial이다.
 """.strip()
 
 

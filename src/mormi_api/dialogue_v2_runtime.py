@@ -654,6 +654,15 @@ class DialogueV2Engine:
                 for fact in pack.reasoning_graph.facts
                 if fact.initially_visible
             },
+            "fact_contexts": [
+                {
+                    "fact_id": fact.fact_id,
+                    "speaker_label": fact.speaker_label,
+                    "semantic_aliases": self._fact_semantic_aliases(pack, fact.fact_id),
+                    "visible": fact.initially_visible,
+                }
+                for fact in pack.reasoning_graph.facts
+            ],
             "targets": [
                 {
                     "target_kind": target.target_kind,
@@ -661,6 +670,7 @@ class DialogueV2Engine:
                     "ask_kind": target.ask_kind,
                     "rubric": self._target_rubric(pack, target),
                     "expected_truth": self._target_truth(pack, target),
+                    "semantic_contract": self._target_semantic_contract(pack, target),
                 }
                 for target in targets
             ],
@@ -1087,6 +1097,15 @@ class DialogueV2Engine:
             }:
                 self._raise_hint(state)
             return
+        if semantics.apply_result.has_new_partial_progress:
+            # Preserve a real but incomplete method attempt as progress.  It is
+            # not mastery and does not raise a hint; the next visible turn asks
+            # only for the missing part of that relation at L3.
+            state.vague_clarifications = 0
+            state.unrelated_count = 0
+            if state.expression_level is ExpressionLevel.L4:
+                state.expression_level = ExpressionLevel.L3
+            return
         if response.conversation_move in {
             ConversationMoveV2.TASK_QUESTION,
             ConversationMoveV2.REQUEST_MORMI_ANSWER,
@@ -1455,6 +1474,15 @@ class DialogueV2Engine:
             return []
         if state.expression_level in {ExpressionLevel.L4, ExpressionLevel.L0}:
             return ordered
+        partial_relation_ids = set(ledger.partial_relations).difference(
+            ledger.verified_relations
+        )
+        for target in ordered:
+            if (
+                target.target_kind == "relation"
+                and target.target_id in partial_relation_ids
+            ):
+                return [target]
         l3_plans = pack.l3_plans if state.expression_level is ExpressionLevel.L3 else []
         if l3_plans:
             for l3_plan in l3_plans:
@@ -1535,6 +1563,57 @@ class DialogueV2Engine:
             "sufficient": " | ".join(relation.rubric.sufficient),
             "partial": " | ".join(relation.rubric.partial),
             "incorrect": " | ".join(relation.rubric.incorrect),
+        }
+
+    @staticmethod
+    def _fact_semantic_aliases(
+        pack: RequiredHomeTeachingPackV2,
+        fact_id: str,
+    ) -> list[str]:
+        """Expose reviewed screen vocabulary without constructing a phrase whitelist."""
+
+        fact = next(item for item in pack.reasoning_graph.facts if item.fact_id == fact_id)
+        aliases: list[str] = []
+        compact = fact.speaker_label.replace(" ", "")
+        if compact != fact.speaker_label:
+            aliases.append(compact)
+        source_problem = getattr(pack, "source_problem", None)
+        if source_problem is not None:
+            aliases.extend(
+                binding.rendered_label
+                for binding in source_problem.rendered_facts
+                if binding.fact_id == fact_id and binding.rendered_label is not None
+            )
+        return list(dict.fromkeys(aliases))
+
+    @staticmethod
+    def _target_semantic_contract(
+        pack: RequiredHomeTeachingPackV2,
+        target: TargetRefV2,
+    ) -> dict[str, object] | None:
+        if target.target_kind == "fact":
+            return None
+        relation = next(
+            item
+            for item in pack.reasoning_graph.relations
+            if item.relation_id == target.target_id
+        )
+        return {
+            "relation_id": relation.relation_id,
+            "speaker_label": relation.speaker_label,
+            "operation": relation.operation,
+            "input_fact_ids": relation.input_fact_ids,
+            "output_fact_id": relation.output_fact_id,
+            "method_policy": (
+                "open_equivalent"
+                if relation.evaluation_mode == "open_semantic_support"
+                else "canonical_relation"
+            ),
+            # Answer facts are independent graph targets. A child can fully teach
+            # the method without instantiating the equation or stating its result.
+            "numeric_expression_required": False,
+            "answer_required_in_same_utterance": False,
+            "rubric_examples_exhaustive": False,
         }
 
     async def _stable_fallback(
