@@ -27,6 +27,26 @@ def _request(
     return UnderstandingRequestV2(
         task_id="money-budget",
         visible_facts={"budget": 10_000},
+        fact_contexts=[
+            {
+                "fact_id": "budget",
+                "speaker_label": "예산",
+                "semantic_aliases": ["쓸 수 있는 돈"],
+                "visible": True,
+            },
+            {
+                "fact_id": "purchase_total",
+                "speaker_label": "전체 값",
+                "semantic_aliases": [],
+                "visible": False,
+            },
+            {
+                "fact_id": "shortage",
+                "speaker_label": "모자라는 돈",
+                "semantic_aliases": [],
+                "visible": False,
+            },
+        ],
         targets=[
             {
                 "target_kind": "fact",
@@ -36,7 +56,7 @@ def _request(
             }
         ],
         claimable_graph={
-            "fact_ids": ["purchase_total", "shortage"],
+            "fact_ids": ["budget", "purchase_total", "shortage"],
             "relation_ids": ["sum_item_costs", "calculate_shortage"],
             "open_auxiliary_claims": open_auxiliary_claims,
         },

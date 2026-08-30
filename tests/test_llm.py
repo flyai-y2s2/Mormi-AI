@@ -105,6 +105,15 @@ def test_v2_understanding_prompt_keeps_conversation_and_learning_axes_independen
     assert "operation 이름이 canonical graph와 다르다는 이유로" in (
         UNDERSTANDING_V2_SYSTEM
     )
+    assert "fact_contexts는 현재 장면의 graph fact를 아이가 보는 말과 연결하는" in (
+        UNDERSTANDING_V2_SYSTEM
+    )
+    assert "semantic_contract가 방법 판정의 우선 기준" in UNDERSTANDING_V2_SYSTEM
+    assert "rubric_examples_exhaustive=false이면 예시에 없는 표현이나 풀이도" in (
+        UNDERSTANDING_V2_SYSTEM
+    )
+    assert '"네가 낸 돈에서 쿠키 값을 빼면 돼"' in UNDERSTANDING_V2_SYSTEM
+    assert "change 답 fact는 별도로 missing" in UNDERSTANDING_V2_SYSTEM
     assert 'value_type=money의 unit은 통화 코드 "KRW" 또는 null만' in (
         UNDERSTANDING_V2_SYSTEM
     )

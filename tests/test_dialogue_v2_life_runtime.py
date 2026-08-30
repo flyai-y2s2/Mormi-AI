@@ -52,6 +52,7 @@ class LifeRuntimeGateway:
         understandings: Iterable[UnderstandingResponseV2] = (),
     ) -> None:
         self.understandings = list(understandings)
+        self.understanding_requests: list[UnderstandingRequestV2] = []
         self.speaker_plans: list[SpeakerPlanV2] = []
         self.note_contexts: list[NoteContextualizationContext] = []
 
@@ -59,7 +60,7 @@ class LifeRuntimeGateway:
         self,
         request: UnderstandingRequestV2,
     ) -> UnderstandingResponseV2:
-        del request
+        self.understanding_requests.append(request)
         if not self.understandings:
             raise AssertionError("structured life route must not call understanding")
         return self.understandings.pop(0)
@@ -739,6 +740,127 @@ async def test_reverse_question_confirmation_keeps_primary_note_coauthored(
     note_state = pinned.task_note_states[primary.task_id]
     assert note_state.independent_relation_evidence == {}
     assert note_state.supported_relation_ids == ["divide_snack_equally"]
+
+
+@pytest.mark.asyncio
+async def test_cafe_change_accepts_role_grounded_method_without_numbers() -> None:
+    child_text = "너가 낸 돈에서 쿠키 값을 빼면 돼~^^"
+    gateway = LifeRuntimeGateway(
+        [
+            UnderstandingResponseV2.model_validate(
+                {
+                    "utterance_class": "learning_response",
+                    "contains_learning_evidence": True,
+                    "answer_status": "missing",
+                    "reasoning_status": "sufficient",
+                    "claims": [
+                        {
+                            "claim_kind": "relation",
+                            "claim_id": "role_grounded_subtraction",
+                            "relation_id": "subtract_menu_price",
+                            "claim_type": "procedure_step",
+                            "evidence_span": "낸 돈에서 쿠키 값을 빼면 돼",
+                            "verdict": "sufficient",
+                        }
+                    ],
+                }
+            )
+        ]
+    )
+    engine = DialogueV2LifeEngine(gateway)
+    scenario = create_cafe_scenario_pack_v2(
+        "cafe_change",
+        cafe_context=CafeSessionContext(
+            menu_items=MENU,
+            mormi_menu_id="cookie",
+        ),
+    )
+    state = _state(scenario)
+    initial = await engine.initialize_scenario_state(
+        state,
+        scenario,
+        selector_reason="test_role_grounding",
+        canary_bucket=12,
+    )
+
+    result = await _run(
+        engine,
+        state,
+        initial,
+        _response(initial, ResponseType.TEXT, text=child_text),
+    )
+
+    assert result.state.status is SessionStatus.ACTIVE
+    _, _, ledger, _ = engine._resolve_state(result.state)
+    assert set(ledger.verified_relations) == {"subtract_menu_price"}
+    assert "change" not in ledger.verified_facts
+    assert result.turn.input.target_slots == ["fact:change"]
+
+    request = gateway.understanding_requests[0]
+    contexts = {context.fact_id: context for context in request.fact_contexts}
+    assert contexts["payment"].speaker_label == "낸 돈"
+    assert contexts["menu_price"].speaker_label == "쿠키 값"
+    relation_target = next(
+        target for target in request.targets if target.target_kind == "relation"
+    )
+    contract = relation_target.semantic_contract
+    assert contract is not None
+    assert contract.operation == "subtraction"
+    assert contract.input_fact_ids == ["payment", "menu_price"]
+    assert contract.output_fact_id == "change"
+    assert contract.numeric_expression_required is False
+    assert contract.answer_required_in_same_utterance is False
+    assert contract.rubric_examples_exhaustive is False
+
+
+@pytest.mark.asyncio
+async def test_partial_life_method_is_preserved_and_followed_up_as_one_relation() -> None:
+    child_text = "빼면 돼"
+    gateway = LifeRuntimeGateway(
+        [
+            UnderstandingResponseV2.model_validate(
+                {
+                    "utterance_class": "learning_response",
+                    "contains_learning_evidence": True,
+                    "answer_status": "missing",
+                    "reasoning_status": "partial",
+                    "claims": [
+                        {
+                            "claim_kind": "relation",
+                            "claim_id": "underspecified_subtraction",
+                            "relation_id": "subtract_menu_price",
+                            "claim_type": "procedure_step",
+                            "evidence_span": child_text,
+                            "verdict": "partial",
+                        }
+                    ],
+                }
+            )
+        ]
+    )
+    engine = DialogueV2LifeEngine(gateway)
+    scenario = _cafe_scenario("cafe_change")
+    state = _state(scenario)
+    initial = await engine.initialize_scenario_state(
+        state,
+        scenario,
+        selector_reason="test_partial_relation",
+        canary_bucket=12,
+    )
+
+    result = await _run(
+        engine,
+        state,
+        initial,
+        _response(initial, ResponseType.TEXT, text=child_text),
+    )
+
+    assert result.state.status is SessionStatus.ACTIVE
+    assert result.state.expression_level is ExpressionLevel.L3
+    _, _, ledger, _ = engine._resolve_state(result.state)
+    assert set(ledger.partial_relations) == {"subtract_menu_price"}
+    assert ledger.verified_relations == {}
+    assert result.turn.input.target_slots == ["relation:subtract_menu_price"]
 
 
 @pytest.mark.asyncio

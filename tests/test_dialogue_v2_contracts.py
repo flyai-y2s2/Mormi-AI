@@ -170,6 +170,26 @@ def test_v2_understanding_contract_preserves_correct_intermediate_progress() -> 
     request = UnderstandingRequestV2(
         task_id="home_teaching",
         visible_facts={"budget": 10_000},
+        fact_contexts=[
+            {
+                "fact_id": "budget",
+                "speaker_label": "예산",
+                "semantic_aliases": [],
+                "visible": True,
+            },
+            {
+                "fact_id": "purchase_total",
+                "speaker_label": "구매 합계",
+                "semantic_aliases": [],
+                "visible": False,
+            },
+            {
+                "fact_id": "shortage",
+                "speaker_label": "모자라는 돈",
+                "semantic_aliases": [],
+                "visible": False,
+            },
+        ],
         targets=[
             {
                 "target_kind": "fact",
@@ -183,10 +203,18 @@ def test_v2_understanding_contract_preserves_correct_intermediate_progress() -> 
                 "target_id": "calculate_shortage",
                 "ask_kind": "reason_or_method",
                 "rubric": {"sufficient": "전체 금액에서 예산을 비교한다"},
+                "semantic_contract": {
+                    "relation_id": "calculate_shortage",
+                    "speaker_label": "전체 값에서 예산을 빼 모자라는 돈을 구한다",
+                    "operation": "subtraction",
+                    "input_fact_ids": ["purchase_total", "budget"],
+                    "output_fact_id": "shortage",
+                    "method_policy": "open_equivalent",
+                },
             },
         ],
         claimable_graph=ClaimableGraphContextV2(
-            fact_ids=["purchase_total", "shortage"],
+            fact_ids=["budget", "purchase_total", "shortage"],
             relation_ids=["sum_item_costs", "calculate_shortage"],
         ),
         current_turn={
@@ -233,7 +261,7 @@ def test_v2_understanding_contract_preserves_correct_intermediate_progress() -> 
         ],
     )
 
-    assert request.claimable_graph.fact_ids == ["purchase_total", "shortage"]
+    assert request.claimable_graph.fact_ids == ["budget", "purchase_total", "shortage"]
     assert response.answer_status.value == "missing"
     assert response.reasoning_status.value == "partial"
     relation = response.claims[1]
@@ -571,6 +599,20 @@ def test_v2_understanding_request_rejects_invalid_graph_targets() -> None:
     base = {
         "task_id": "home_teaching",
         "visible_facts": {"budget": 10_000},
+        "fact_contexts": [
+            {
+                "fact_id": "budget",
+                "speaker_label": "예산",
+                "semantic_aliases": [],
+                "visible": True,
+            },
+            {
+                "fact_id": "shortage",
+                "speaker_label": "모자라는 돈",
+                "semantic_aliases": [],
+                "visible": False,
+            },
+        ],
         "targets": [
             {
                 "target_kind": "fact",
@@ -580,7 +622,7 @@ def test_v2_understanding_request_rejects_invalid_graph_targets() -> None:
             }
         ],
         "claimable_graph": {
-            "fact_ids": ["shortage"],
+            "fact_ids": ["budget", "shortage"],
             "relation_ids": [],
         },
         "current_turn": {
@@ -602,7 +644,7 @@ def test_v2_understanding_request_rejects_invalid_graph_targets() -> None:
             "help_scaffolded_relation_ids": ["calculate_shortage"],
         },
         "claimable_graph": {
-            "fact_ids": ["shortage"],
+            "fact_ids": ["budget", "shortage"],
             "relation_ids": ["calculate_shortage"],
         },
     }
@@ -620,10 +662,18 @@ def test_v2_understanding_request_rejects_invalid_graph_targets() -> None:
                 "target_kind": "relation",
                 "target_id": "calculate_shortage",
                 "ask_kind": "reason_or_method",
+                "semantic_contract": {
+                    "relation_id": "calculate_shortage",
+                    "speaker_label": "예산에서 모자라는 돈을 구한다",
+                    "operation": "subtraction",
+                    "input_fact_ids": ["budget"],
+                    "output_fact_id": "shortage",
+                    "method_policy": "open_equivalent",
+                },
             }
         ],
         "claimable_graph": {
-            "fact_ids": ["shortage"],
+            "fact_ids": ["budget", "shortage"],
             "relation_ids": ["calculate_shortage"],
         },
     }
@@ -631,7 +681,12 @@ def test_v2_understanding_request_rejects_invalid_graph_targets() -> None:
     with pytest.raises(ValidationError, match="H2 or H3"):
         UnderstandingRequestV2.model_validate(h0_scaffold)
 
-    invalid_fact = {**base, "claimable_graph": {"fact_ids": [], "relation_ids": []}}
+    invalid_fact = {
+        **base,
+        "visible_facts": {},
+        "fact_contexts": [],
+        "claimable_graph": {"fact_ids": [], "relation_ids": []},
+    }
     with pytest.raises(ValidationError, match="fact target must exist"):
         UnderstandingRequestV2.model_validate(invalid_fact)
 
@@ -643,10 +698,18 @@ def test_v2_understanding_request_rejects_invalid_graph_targets() -> None:
                 "target_id": "calculate_shortage",
                 "ask_kind": "reason_or_method",
                 "expected_truth": {"type": "text", "text": "전체 금액에서 예산을 뺀다"},
+                "semantic_contract": {
+                    "relation_id": "calculate_shortage",
+                    "speaker_label": "예산에서 모자라는 돈을 구한다",
+                    "operation": "subtraction",
+                    "input_fact_ids": ["budget"],
+                    "output_fact_id": "shortage",
+                    "method_policy": "open_equivalent",
+                },
             }
         ],
         "claimable_graph": {
-            "fact_ids": [],
+            "fact_ids": ["budget", "shortage"],
             "relation_ids": ["calculate_shortage"],
         },
         "current_turn": {
@@ -768,6 +831,26 @@ async def test_v2_understanding_converts_compact_provider_claim_to_internal_cont
         {
             "task_id": "home_teaching",
             "visible_facts": {"unit_price": 4000, "quantity": 4},
+            "fact_contexts": [
+                {
+                    "fact_id": "unit_price",
+                    "speaker_label": "한 개 값",
+                    "semantic_aliases": [],
+                    "visible": True,
+                },
+                {
+                    "fact_id": "quantity",
+                    "speaker_label": "개수",
+                    "semantic_aliases": [],
+                    "visible": True,
+                },
+                {
+                    "fact_id": "total_price",
+                    "speaker_label": "전체 값",
+                    "semantic_aliases": [],
+                    "visible": False,
+                },
+            ],
             "targets": [
                 {
                     "target_kind": "fact",
@@ -778,7 +861,7 @@ async def test_v2_understanding_converts_compact_provider_claim_to_internal_cont
                 }
             ],
             "claimable_graph": {
-                "fact_ids": ["total_price"],
+                "fact_ids": ["unit_price", "quantity", "total_price"],
                 "relation_ids": [],
                 "open_auxiliary_claims": True,
             },

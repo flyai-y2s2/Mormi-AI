@@ -200,6 +200,15 @@ class RelationVerificationEvidenceV2(LedgerEvidencePointerV2):
     classifier_verdict: Literal["correct", "sufficient"]
 
 
+class PartialRelationEvidenceV2(LedgerEvidencePointerV2):
+    """Literal evidence for an incomplete method that must not count as mastery."""
+
+    evidence_kind: Literal["understanding_relation_partial"] = (
+        "understanding_relation_partial"
+    )
+    classifier_verdict: Literal["partial"] = "partial"
+
+
 class StructuredVerificationEvidenceV2(LedgerModelV2):
     """Server-authored evidence from a pinned L2 choice or L0 joint action."""
 
@@ -259,6 +268,20 @@ class VerifiedRelationLedgerEntryV2(LedgerModelV2):
         return self
 
 
+class PartialRelationLedgerEntryV2(LedgerModelV2):
+    """Monotonic audit trail for a relation attempt that still needs clarification."""
+
+    relation_id: str = Field(pattern=_ID_PATTERN, max_length=160)
+    evidence: list[PartialRelationEvidenceV2] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def evidence_ids_must_be_unique(self) -> PartialRelationLedgerEntryV2:
+        evidence_ids = [item.evidence_id for item in self.evidence]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("partial relation evidence ids must be unique")
+        return self
+
+
 class AcceptedAuxiliaryEvidenceV2(LedgerEvidencePointerV2):
     summary: str = Field(min_length=1, max_length=160)
     classifier_verdict: Literal["correct", "sufficient", "partial"]
@@ -284,6 +307,10 @@ class ReasoningLedgerV2(LedgerModelV2):
         default_factory=dict,
         max_length=100,
     )
+    partial_relations: dict[str, PartialRelationLedgerEntryV2] = Field(
+        default_factory=dict,
+        max_length=100,
+    )
     accepted_auxiliary_evidence: dict[str, AcceptedAuxiliaryEvidenceV2] = Field(
         default_factory=dict,
         max_length=200,
@@ -297,6 +324,10 @@ class ReasoningLedgerV2(LedgerModelV2):
             key != value.relation_id for key, value in self.verified_relations.items()
         ):
             raise ValueError("verified relation map keys must match relation ids")
+        if any(
+            key != value.relation_id for key, value in self.partial_relations.items()
+        ):
+            raise ValueError("partial relation map keys must match relation ids")
         if any(
             key != value.evidence_id
             for key, value in self.accepted_auxiliary_evidence.items()
@@ -334,6 +365,8 @@ class ReasoningLedgerApplyResultV2(LedgerModelV2):
     new_milestone_fact_ids: list[str]
     new_fact_evidence_ids: list[str]
     new_relation_evidence_ids: list[str]
+    new_partial_relation_ids: list[str] = Field(default_factory=list)
+    new_partial_relation_evidence_ids: list[str] = Field(default_factory=list)
     new_auxiliary_evidence_ids: list[str]
     # Model-authored claim IDs are turn-local correlation handles. They may
     # contain child text, so both maps are excluded from every serialization.
@@ -345,6 +378,10 @@ class ReasoningLedgerApplyResultV2(LedgerModelV2):
     @property
     def has_new_canonical_progress(self) -> bool:
         return bool(self.new_fact_ids or self.new_relation_ids)
+
+    @property
+    def has_new_partial_progress(self) -> bool:
+        return bool(self.new_partial_relation_ids)
 
 
 def _validate_ledger_binding(
@@ -369,6 +406,8 @@ def _validate_ledger_binding(
         raise DialogueV2LedgerError("reasoning ledger contains an unknown fact")
     if not set(ledger.verified_relations).issubset(relations):
         raise DialogueV2LedgerError("reasoning ledger contains an unknown relation")
+    if not set(ledger.partial_relations).issubset(relations):
+        raise DialogueV2LedgerError("reasoning ledger contains an unknown partial relation")
     for fact_id, entry in ledger.verified_facts.items():
         fact = facts[fact_id]
         value_matches = (
@@ -463,8 +502,9 @@ def apply_guarded_understanding_v2(
     arithmetic details may be absent because they are diagnostic metadata, not a
     second adjudicator. A ``correct`` fact verdict records the pinned canonical
     fact; a ``correct``/``sufficient`` relation verdict records the relation.
-    Incorrect, partial, and uncertain canonical claims are observed but cannot add
-    or remove verified progress.
+    Incorrect and uncertain canonical claims cannot add or remove verified progress.
+    A partial relation is retained separately for focused follow-up, but never
+    satisfies a required relation or completion.
     """
 
     if not source_turn_id or len(source_turn_id) > 100:
@@ -478,6 +518,7 @@ def apply_guarded_understanding_v2(
     before_completion = reasoning_completion_v2(snapshot, ledger)
     verified_facts = dict(ledger.verified_facts)
     verified_relations = dict(ledger.verified_relations)
+    partial_relations = dict(ledger.partial_relations)
     auxiliary_evidence = dict(ledger.accepted_auxiliary_evidence)
 
     new_fact_ids: list[str] = []
@@ -485,6 +526,8 @@ def apply_guarded_understanding_v2(
     new_milestone_fact_ids: list[str] = []
     new_fact_evidence_ids: list[str] = []
     new_relation_evidence_ids: list[str] = []
+    new_partial_relation_ids: list[str] = []
+    new_partial_relation_evidence_ids: list[str] = []
     new_auxiliary_evidence_ids: list[str] = []
     claim_evidence_ids: dict[str, str] = {}
     ignored_claim_ids: list[str] = []
@@ -531,6 +574,48 @@ def apply_guarded_understanding_v2(
             continue
 
         if isinstance(claim, RelationUnderstandingClaimV2):
+            if claim.verdict == "partial":
+                if claim.relation_id in verified_relations:
+                    ignored_claim_ids.append(claim.claim_id)
+                    continue
+                partial_relation_semantic_payload: dict[str, object] = {
+                    "verdict": "partial",
+                }
+                evidence_id = _stable_evidence_id(
+                    source_turn_id=source_turn_id,
+                    match=match,
+                    claim_kind="relation",
+                    target_id=claim.relation_id,
+                    semantic_payload=partial_relation_semantic_payload,
+                )
+                partial_evidence = PartialRelationEvidenceV2(
+                    evidence_id=evidence_id,
+                    source_turn_id=source_turn_id,
+                    source_start=match.source_start,
+                    source_end=match.source_end,
+                    match_kind=match.match_kind,
+                )
+                claim_evidence_ids[claim.claim_id] = evidence_id
+                existing_partial = partial_relations.get(claim.relation_id)
+                if existing_partial is None:
+                    partial_relations[claim.relation_id] = (
+                        PartialRelationLedgerEntryV2(
+                            relation_id=claim.relation_id,
+                            evidence=[partial_evidence],
+                        )
+                    )
+                    new_partial_relation_ids.append(claim.relation_id)
+                    new_partial_relation_evidence_ids.append(evidence_id)
+                elif evidence_id not in {
+                    item.evidence_id for item in existing_partial.evidence
+                }:
+                    partial_relations[claim.relation_id] = existing_partial.model_copy(
+                        update={
+                            "evidence": [*existing_partial.evidence, partial_evidence]
+                        }
+                    )
+                    new_partial_relation_evidence_ids.append(evidence_id)
+                continue
             if claim.verdict not in {"correct", "sufficient"}:
                 ignored_claim_ids.append(claim.claim_id)
                 continue
@@ -615,6 +700,7 @@ def apply_guarded_understanding_v2(
         content_hash=ledger.content_hash,
         verified_facts=verified_facts,
         verified_relations=verified_relations,
+        partial_relations=partial_relations,
         accepted_auxiliary_evidence=auxiliary_evidence,
     )
     completion = reasoning_completion_v2(snapshot, next_ledger)
@@ -625,6 +711,8 @@ def apply_guarded_understanding_v2(
         new_milestone_fact_ids=new_milestone_fact_ids,
         new_fact_evidence_ids=new_fact_evidence_ids,
         new_relation_evidence_ids=new_relation_evidence_ids,
+        new_partial_relation_ids=new_partial_relation_ids,
+        new_partial_relation_evidence_ids=new_partial_relation_evidence_ids,
         new_auxiliary_evidence_ids=new_auxiliary_evidence_ids,
         claim_evidence_ids=claim_evidence_ids,
         ignored_claim_ids=ignored_claim_ids,
@@ -788,6 +876,7 @@ def apply_structured_progress_v2(
         content_hash=ledger.content_hash,
         verified_facts=verified_facts,
         verified_relations=verified_relations,
+        partial_relations=ledger.partial_relations,
         accepted_auxiliary_evidence=ledger.accepted_auxiliary_evidence,
     )
     completion = reasoning_completion_v2(snapshot, next_ledger)
