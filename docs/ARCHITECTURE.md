@@ -251,6 +251,34 @@ flowchart TD
 
 ### 3.1 V2 자유 발화: 의미 판정, literal evidence, reasoning ledger
 
+#### V2 실행 그래프 리팩터링 후보 (2026-08-31)
+
+`codex/v2-langgraph-parity-refactor`는 교육 정책을 바꾸지 않고 실행 제어만 분리한다.
+`dialogue_v2_runtime.py`의 요청별 `_TurnExecution`은 원 과제 context와 복사한 다음 상태를
+분리한다. `dialogue_v2_graph.py`는 입력 종류 → 정책 적용 → 완료/대사 분기 → 응답 구성 →
+별노트의 순서를 명시한다. `dialogue_v2_attempt_graph.py`는 기존 이해·화자의 최대 두 번
+시도만 표현하며 새로운 재판정, 자동 RetryPolicy, backoff나 모델 호출을 추가하지 않는다.
+
+현재 공개 `run_turn_stream`은 추출된 단계를 순서대로 실행하고, 이해·화자 제한 재시도는
+서브그래프를 사용한다. 바깥 전체 그래프 `_run_turn_graph`는 테스트에서 명시적으로 선택하는
+후보다. 기능 검사는 통과했으나 CPU 처리량 기준을 넘어서 기본 전환·병합·배포를 보류한다.
+기존 V2 canary 설정은 이 두 실행기를 선택하는 스위치가 아니다.
+
+- 그래프는 엔진마다 한 번 compile하며 checkpointer/store가 없다. 영속 DB/snapshot 계약은
+  그대로이고, 요청별 임시 graph state를 모델이나 외부 tracing에 전달하지 않는다.
+- 진행 이벤트는 작업 **전**에 내보내고 소비자가 다음 이벤트를 요청할 때 작업을 시작한다.
+  서비스와 HTTP 스트림의 종료도 엔진까지 전파하여 미완료 그래프 작업을 취소한다.
+- 내부 DEBUG 진단은 대화/턴 ID, 노드, 시도 수, 시간, 상태만 기록한다. 원문·모델 요청·
+  graph state는 기록하지 않으며 기존 영속 audit 스키마는 바뀌지 않는다.
+- 기준 커밋 `a8c82ff`의 실행기 원본을 테스트 전용 fixture로 고정했다. 모델·캐시 요청과
+  응답 순서, 결과 전체, DB 전체 행, 과제 전환·별노트·재전송을 비교한다. 기존 실행기의
+  결과를 새 구현에 맞춰 갱신하지 않으며 latency 값만 정규화한다.
+- 1,188개 테스트, ruff, mypy가 통과했다. 실제 Sonnet·Haiku 각 1회 계약 smoke도 통과했다.
+  실제 모델 smoke는 전체 그래프의 확률적 대화 품질 검사나 동등성 증명이 아니다.
+- 모델 대기 없는 100회 warm 측정: 기존 p95 8.03ms → 후보 11.56ms, +3.53ms.
+  평균 시간 기반 합성 처리량 감소는 31.99%다. 추가 p95 ≤20ms 조건은 통과하지만
+  감소 ≤10% 조건은 실패했다. 실제 운영 처리량 감소율로 해석하지 않는다.
+
 V2 자유 발화는 Sonnet Low가 현재 모르미 질문, 요청 중인 answer/reason target,
 현재 L/H, 화면에 공개된 사실과 최근 6턴을 함께 보고 한 번에 구조화한다. Sonnet 응답은
 fact·relation별 verdict와 현재 아이 원문에서 복사한 `evidence_span`을 가진다.
