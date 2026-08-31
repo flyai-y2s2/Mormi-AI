@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from .content import create_scenario_data, get_scenario, get_task
 from .dialogue_v2_amusement_content import materialize_amusement_scenario_v2
@@ -328,14 +329,15 @@ class ConversationService:
         self,
         conversation_id: str,
         response: ChildResponse,
-    ) -> AsyncIterator[ConversationStreamEvent]:
+    ) -> AsyncGenerator[ConversationStreamEvent, None]:
         """Run one canonical response path while exposing non-sensitive progress."""
 
         # Every llm_call logged below this point carries this turn's ids.
         token = turn_scope.set(TurnScope(conversation_id, response.turn_id))
         try:
-            async for event in self._respond_stream_scoped(conversation_id, response):
-                yield event
+            async with aclosing(self._respond_stream_scoped(conversation_id, response)) as events:
+                async for event in events:
+                    yield event
         finally:
             turn_scope.reset(token)
 
@@ -343,7 +345,7 @@ class ConversationService:
         self,
         conversation_id: str,
         response: ChildResponse,
-    ) -> AsyncIterator[ConversationStreamEvent]:
+    ) -> AsyncGenerator[ConversationStreamEvent, None]:
         started = time.perf_counter()
         response_id = str(response.response_id)
         prior = await self.repository.response_exists(conversation_id, response_id)
@@ -383,19 +385,23 @@ class ConversationService:
             limit=6,
         )
         result: EngineTurnResult | None = None
-        async for engine_event in runtime_engine.run_turn_stream(
-            state,
-            response,
-            active_turn.mormi.text,
-            recent_dialogue=recent_dialogue,
-        ):
-            if isinstance(engine_event, EngineProgress):
-                yield ConversationStreamEvent(
-                    name="progress",
-                    stage=engine_event.stage,
-                )
-            else:
-                result = engine_event
+        engine_events = cast(
+            AsyncGenerator[EngineProgress | EngineTurnResult, None],
+            runtime_engine.run_turn_stream(
+                state, response, active_turn.mormi.text, recent_dialogue=recent_dialogue,
+            ),
+        )
+        # Both engines return async generators. Explicitly close the nested
+        # iterator before releasing the request scope, including on disconnect.
+        async with aclosing(engine_events):
+            async for engine_event in engine_events:
+                if isinstance(engine_event, EngineProgress):
+                    yield ConversationStreamEvent(
+                        name="progress",
+                        stage=engine_event.stage,
+                    )
+                else:
+                    result = engine_event
         if result is None:  # pragma: no cover - graph always reaches END
             raise RuntimeError("Conversation graph produced no result")
         next_state, analysis, next_turn = result.state, result.analysis, result.turn

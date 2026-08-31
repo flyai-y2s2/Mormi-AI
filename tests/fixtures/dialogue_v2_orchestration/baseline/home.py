@@ -3,11 +3,9 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator, Mapping
-from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from .dialogue_v2_attempt_graph import build_two_attempt_graph, run_attempt_graph
 from .dialogue_v2_content import (
     CopySlotV2,
     L2ChoicePlanV2,
@@ -196,68 +194,11 @@ class _TurnSemantics:
 
 
 @dataclass(frozen=True, slots=True)
-class _TurnSpeech:
-    text: str
-    mood: MoodV2
-    source: str
-    fallback_reason: str | None
-    stable_status: str
-    stable_key_digest: str | None
-    speaker_latency: int | None
-    dialogue_act: str
-
-
-@dataclass(slots=True)
-class _TurnExecution:
-    """Request-local execution frame; never checkpointed or passed to a model.
-
-    Source pack/snapshot/ledger intentionally survive life task transitions.
-    Only next_state is mutated, by sequential engine hooks, exactly once.
-    """
-    state: SessionState
-    response: ChildResponse
-    previous_question: str
-    recent_dialogue: list[DialogueHistoryTurn]
-    pack: RequiredHomeTeachingPackV2
-    snapshot: PinnedContentSnapshotV2
-    ledger: ReasoningLedgerV2
-    stable_copy_plans: dict[str, StableCopyPlanV2]
-    next_state: SessionState
-    semantics: _TurnSemantics | None = None
-    question: _QuestionContract | None = None
-    stable: StableCopyResolution | None = None
-    stable_status: str = "not_applicable"
-    stable_key_digest: str | None = None
-    conversational_fallback: str = ""
-    speech: _TurnSpeech | None = None
-    result: EngineTurnResult | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class _UnresolvedAnswerFirewall:
     """Server-only deny material; never serialized into a speaker model plan."""
 
     values: tuple[CanonicalValueV2, ...]
     surfaces: tuple[str, ...]
-
-
-@dataclass(slots=True)
-class _UnderstandingAttemptContext:
-    state: SessionState
-    snapshot: PinnedContentSnapshotV2
-    ledger: ReasoningLedgerV2
-    response: ChildResponse
-    request: UnderstandingRequestV2
-    started: float
-
-
-@dataclass(slots=True)
-class _SpeakerAttemptContext:
-    plan: SpeakerPlanV2
-    firewall: _UnresolvedAnswerFirewall
-    response_plan: ConversationResponsePlanV2
-    fallback: str
-    last_reason: str = "speaker_contract_rejected"
 
 
 def _elapsed_ms(started: float) -> int:
@@ -334,11 +275,6 @@ class DialogueV2Engine:
         self.classifier_timeout_seconds = classifier_timeout_seconds
         self.speaker_timeout_seconds = speaker_timeout_seconds
         self.bridge_timeout_seconds = bridge_timeout_seconds
-        from .dialogue_v2_graph import build_turn_graph
-
-        self._turn_graph = build_turn_graph(self)
-        self._understanding_graph = build_two_attempt_graph("mormi_v2_understanding")
-        self._speaker_graph = build_two_attempt_graph("mormi_v2_speaker")
 
     async def initialize_state(
         self,
@@ -396,38 +332,20 @@ class DialogueV2Engine:
         )
 
     async def run_turn_stream(
-        self, state: SessionState, response: ChildResponse, previous_question: str, *,
+        self,
+        state: SessionState,
+        response: ChildResponse,
+        previous_question: str,
+        *,
         recent_dialogue: list[DialogueHistoryTurn] | None = None,
     ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
-        from .dialogue_v2_graph import stream_turn_graph
-
-        turn = self._prepare_execution(state, response, previous_question, recent_dialogue)
-        async with aclosing(stream_turn_graph(self._turn_graph, turn)) as events:
-            async for event in events:
-                yield event
-
-    def _prepare_execution(
-        self, state: SessionState, response: ChildResponse, previous_question: str,
-        recent_dialogue: list[DialogueHistoryTurn] | None,
-    ) -> _TurnExecution:
         pack, snapshot, ledger, stable_copy_plans = self._resolve_state(state)
         next_state = state.model_copy(deep=True)
         next_state.state_version += 1
         next_state.current_turn_id = None
-        return _TurnExecution(
-            state, response, previous_question, recent_dialogue or [],
-            pack, snapshot, ledger, stable_copy_plans, next_state,
-        )
 
-    async def _interpret_execution(self, turn: _TurnExecution) -> None:
-        state = turn.state
-        response = turn.response
-        pack = turn.pack
-        snapshot = turn.snapshot
-        ledger = turn.ledger
-        previous_question = turn.previous_question
-        recent_dialogue = turn.recent_dialogue
         if response.type is ResponseType.TEXT:
+            yield EngineProgress("understanding")
             semantics = await self._understand_text(
                 state,
                 pack,
@@ -463,14 +381,7 @@ class DialogueV2Engine:
         else:
             raise ValueError("V2 home teaching received an unsupported response type")
 
-        turn.semantics = semantics
-
-    def _apply_execution(self, turn: _TurnExecution) -> None:
-        state = turn.state
-        pack = turn.pack
-        next_state = turn.next_state
-        semantics = turn.semantics
-        assert semantics is not None
+        yield EngineProgress("planning")
         self._apply_ladder_policy(next_state, semantics)
         self._store_ledger(next_state, semantics.apply_result.ledger)
         self._sync_legacy_slots(next_state, pack, semantics.apply_result.ledger)
@@ -481,171 +392,115 @@ class DialogueV2Engine:
             before_hint=state.hint_level,
         )
 
-    def _complete_execution(self, turn: _TurnExecution) -> None:
-        pack = turn.pack
-        next_state = turn.next_state
-        semantics = turn.semantics
-        assert semantics is not None
-        self._complete_state(next_state, pack, semantics)
-        # Completion is a finite product-state message, so it does not
-        # spend a model call.  Attribution remains separate in NoteUpdate;
-        # the learner-facing sentence is always grateful and never frames
-        # Mormi as having figured the task out alone.
-        text = "고마워~ 네가 도와줘서 끝까지 이해할 수 있었어!"
-        mood: Literal[
-            "curious", "listening", "thinking", "relieved", "celebrating"
-        ] = "celebrating"
-        source = "reviewed_fallback"
-        fallback_reason = None
-        stable_status = "not_applicable"
-        stable_key_digest = None
-        speaker_latency = None
-        emitted_dialogue_act = self._dialogue_act(semantics)
-        turn.speech = _TurnSpeech(
-            text, mood, source, fallback_reason, stable_status, stable_key_digest,
-            speaker_latency, emitted_dialogue_act,
-        )
-
-    async def _prepare_execution_speech(self, turn: _TurnExecution) -> None:
-        state = turn.state
-        pack = turn.pack
-        next_state = turn.next_state
-        stable_copy_plans = turn.stable_copy_plans
-        semantics = turn.semantics
-        assert semantics is not None
-        question = self._question_contract(next_state, pack, semantics.apply_result.ledger)
-        if semantics.initial_help:
-            question = self._initial_help_question_contract(pack, question)
-        stable = await self._stable_fallback(
-            next_state,
-            pack,
-            semantics.apply_result.ledger,
-            question,
-            stable_copy_plans=stable_copy_plans,
-            before_expression=state.expression_level,
-            before_hint=state.hint_level,
-        )
-        stable_status = stable.status if stable is not None else "not_applicable"
-        stable_key_digest = (
-            stable.cache_key[:16] if stable is not None and stable.cache_key else None
-        )
-        conversational_fallback = self._conversational_fallback(
-            pack,
-            semantics,
-            question,
-            help_card_visible=next_state.hint_level is not HintLevel.H0,
-            repeat_count=next_state.concept_failures,
-        )
-        turn.question, turn.stable = question, stable
-        turn.stable_status, turn.stable_key_digest = stable_status, stable_key_digest
-        turn.conversational_fallback = conversational_fallback
-
-    def _execution_speech_route(self, turn: _TurnExecution) -> str:
-        semantics = turn.semantics
-        assert semantics is not None
-        if semantics.route == "understanding_fallback":
-            return "understanding_fallback"
-        if turn.stable is not None and semantics.route == "stable":
-            return "stable"
-        if semantics.route in {"safety", "bridge"}:
-            return semantics.route
-        return "main"
-
-    async def _render_execution_speech(self, turn: _TurnExecution) -> None:
-        state = turn.state
-        response = turn.response
-        pack = turn.pack
-        next_state = turn.next_state
-        previous_question = turn.previous_question
-        semantics = turn.semantics
-        assert semantics is not None
-        question = turn.question
-        assert question is not None
-        stable = turn.stable
-        stable_status, stable_key_digest = turn.stable_status, turn.stable_key_digest
-        conversational_fallback = turn.conversational_fallback
-        mood: MoodV2
         fallback_reason: str | None
-        # Stable copy is selected by an explicit route (for example the
-        # help button), never merely because ladder policy moved the next
-        # input into L2 or L0.  A free-text wrong answer or reverse
-        # question still deserves a contextual reaction before the
-        # server-owned structured re-ask.
-        if semantics.route == "understanding_fallback":
-            # Sonnet supplied no trustworthy semantics, so do not call a
-            # second model or change pedagogy. The reviewed current-target
-            # re-ask is safe to return as an ordinary committed turn.
-            text = conversational_fallback
-            mood = "thinking"
-            source = "deterministic_validation_fallback"
-            fallback_reason = semantics.understanding_failure_reason
-            speaker_latency = None
-            emitted_dialogue_act = self._dialogue_act(semantics)
-        elif stable is not None and semantics.route == "stable":
-            text, mood = stable.text, stable.mood
-            source = (
-                "stable_copy_cache"
-                if stable.status in {
-                    "hit",
-                    "generated",
-                    "seeded_reviewed_fallback",
-                }
-                else "stable_copy_fallback"
-            )
+        if semantics.apply_result.completion.complete:
+            self._complete_state(next_state, pack, semantics)
+            # Completion is a finite product-state message, so it does not
+            # spend a model call.  Attribution remains separate in NoteUpdate;
+            # the learner-facing sentence is always grateful and never frames
+            # Mormi as having figured the task out alone.
+            text = "고마워~ 네가 도와줘서 끝까지 이해할 수 있었어!"
+            mood: Literal[
+                "curious", "listening", "thinking", "relieved", "celebrating"
+            ] = "celebrating"
+            source = "reviewed_fallback"
             fallback_reason = None
+            stable_status = "not_applicable"
+            stable_key_digest = None
             speaker_latency = None
-            emitted_dialogue_act = stable.dialogue_act
-        elif semantics.route == "safety":
-            text = self._unsafe_fallback(question.fallback)
-            mood = "thinking"
-            source = "v2_safety_fallback"
-            fallback_reason = None
-            speaker_latency = None
-            emitted_dialogue_act = self._dialogue_act(semantics)
-        elif semantics.route == "bridge":
-            started = time.perf_counter()
-            text, mood, source, fallback_reason = await self._bridge(
-                next_state,
-                pack,
-                semantics,
-                question,
-                conversational_fallback,
-                response.text,
-                previous_question,
-                before_hint=state.hint_level,
-            )
-            speaker_latency = _elapsed_ms(started)
             emitted_dialogue_act = self._dialogue_act(semantics)
         else:
-            started = time.perf_counter()
-            text, mood, source, fallback_reason = await self._speak(
+            question = self._question_contract(next_state, pack, semantics.apply_result.ledger)
+            if semantics.initial_help:
+                question = self._initial_help_question_contract(pack, question)
+            stable = await self._stable_fallback(
                 next_state,
+                pack,
+                semantics.apply_result.ledger,
+                question,
+                stable_copy_plans=stable_copy_plans,
+                before_expression=state.expression_level,
+                before_hint=state.hint_level,
+            )
+            stable_status = stable.status if stable is not None else "not_applicable"
+            stable_key_digest = (
+                stable.cache_key[:16] if stable is not None and stable.cache_key else None
+            )
+            conversational_fallback = self._conversational_fallback(
                 pack,
                 semantics,
                 question,
-                conversational_fallback,
-                previous_question,
-                before_hint=state.hint_level,
+                help_card_visible=next_state.hint_level is not HintLevel.H0,
+                repeat_count=next_state.concept_failures,
             )
-            speaker_latency = _elapsed_ms(started)
-            emitted_dialogue_act = self._dialogue_act(semantics)
-        turn.speech = _TurnSpeech(
-            text, mood, source, fallback_reason, stable_status, stable_key_digest,
-            speaker_latency, emitted_dialogue_act,
-        )
 
-    def _compose_execution(self, turn: _TurnExecution) -> None:
-        pack = turn.pack
-        snapshot = turn.snapshot
-        next_state = turn.next_state
-        semantics = turn.semantics
-        assert semantics is not None
-        speech = turn.speech
-        assert speech is not None
-        text, mood, source = speech.text, speech.mood, speech.source
-        fallback_reason = speech.fallback_reason
-        stable_status, stable_key_digest = speech.stable_status, speech.stable_key_digest
-        speaker_latency, emitted_dialogue_act = speech.speaker_latency, speech.dialogue_act
+            # Stable copy is selected by an explicit route (for example the
+            # help button), never merely because ladder policy moved the next
+            # input into L2 or L0.  A free-text wrong answer or reverse
+            # question still deserves a contextual reaction before the
+            # server-owned structured re-ask.
+            if semantics.route == "understanding_fallback":
+                # Sonnet supplied no trustworthy semantics, so do not call a
+                # second model or change pedagogy. The reviewed current-target
+                # re-ask is safe to return as an ordinary committed turn.
+                text = conversational_fallback
+                mood = "thinking"
+                source = "deterministic_validation_fallback"
+                fallback_reason = semantics.understanding_failure_reason
+                speaker_latency = None
+                emitted_dialogue_act = self._dialogue_act(semantics)
+            elif stable is not None and semantics.route == "stable":
+                text, mood = stable.text, stable.mood
+                source = (
+                    "stable_copy_cache"
+                    if stable.status in {
+                        "hit",
+                        "generated",
+                        "seeded_reviewed_fallback",
+                    }
+                    else "stable_copy_fallback"
+                )
+                fallback_reason = None
+                speaker_latency = None
+                emitted_dialogue_act = stable.dialogue_act
+            elif semantics.route == "safety":
+                text = self._unsafe_fallback(question.fallback)
+                mood = "thinking"
+                source = "v2_safety_fallback"
+                fallback_reason = None
+                speaker_latency = None
+                emitted_dialogue_act = self._dialogue_act(semantics)
+            elif semantics.route == "bridge":
+                yield EngineProgress("speaking")
+                started = time.perf_counter()
+                text, mood, source, fallback_reason = await self._bridge(
+                    next_state,
+                    pack,
+                    semantics,
+                    question,
+                    conversational_fallback,
+                    response.text,
+                    previous_question,
+                    before_hint=state.hint_level,
+                )
+                speaker_latency = _elapsed_ms(started)
+                emitted_dialogue_act = self._dialogue_act(semantics)
+            else:
+                yield EngineProgress("speaking")
+                started = time.perf_counter()
+                text, mood, source, fallback_reason = await self._speak(
+                    next_state,
+                    pack,
+                    semantics,
+                    question,
+                    conversational_fallback,
+                    previous_question,
+                    before_hint=state.hint_level,
+                )
+                speaker_latency = _elapsed_ms(started)
+                emitted_dialogue_act = self._dialogue_act(semantics)
+
+        yield EngineProgress("validating")
         next_turn = self._build_turn(
             next_state,
             pack,
@@ -683,12 +538,10 @@ class DialogueV2Engine:
             runtime=runtime,
             accepted_claims=dict(next_state.verified_slots),
         )
-        turn.result = result
-
-    async def _note_execution(self, turn: _TurnExecution) -> None:
-        assert turn.result is not None
-        turn.result = await self._contextualize_note_if_safe(
-            turn.result, response=turn.response, recent_dialogue=turn.recent_dialogue,
+        yield await self._contextualize_note_if_safe(
+            result,
+            response=response,
+            recent_dialogue=recent_dialogue or [],
         )
 
     async def _contextualize_note_if_safe(
@@ -851,104 +704,94 @@ class DialogueV2Engine:
             "child_utterance": response.text,
             }
         )
-        context = _UnderstandingAttemptContext(
-            state, snapshot, ledger, response, request, time.perf_counter(),
-        )
-        return await run_attempt_graph(
-            self._understanding_graph, context, self._understand_attempt,
-            self._understanding_exhausted,
-        )
-
-    async def _understand_attempt(
-        self, context: _UnderstandingAttemptContext, attempt: int,
-    ) -> _TurnSemantics | None:
-        state, snapshot, ledger = context.state, context.snapshot, context.ledger
-        response, request, started = context.response, context.request, context.started
-        try:
-            async with asyncio.timeout(self.classifier_timeout_seconds):
-                candidate = await self.gateway.understand_v2(request)
-        except TimeoutError:
-            return self._understanding_failure_semantics(
+        started = time.perf_counter()
+        for attempt in (1, 2):
+            try:
+                async with asyncio.timeout(self.classifier_timeout_seconds):
+                    candidate = await self.gateway.understand_v2(request)
+            except TimeoutError:
+                return self._understanding_failure_semantics(
+                    snapshot,
+                    ledger,
+                    attempts=attempt,
+                    started=started,
+                    reason="understanding_timeout",
+                )
+            except ModelUnavailableError:
+                return self._understanding_failure_semantics(
+                    snapshot,
+                    ledger,
+                    attempts=attempt,
+                    started=started,
+                    reason="understanding_model_unavailable",
+                )
+            except ModelOutputError:
+                return self._understanding_failure_semantics(
+                    snapshot,
+                    ledger,
+                    attempts=attempt,
+                    started=started,
+                    reason="understanding_model_output_invalid",
+                )
+            route = self._route_for_understanding(candidate)
+            if route in {"bridge", "safety"}:
+                # Pure social turns and safety redirects do not mutate the
+                # reasoning ledger. Mixed safe-social + learning turns are
+                # routed through the main path below, where their literal
+                # learning evidence is guarded and preserved independently.
+                return _TurnSemantics(
+                    response=candidate,
+                    apply_result=self._unchanged_result(snapshot, ledger),
+                    guarded=None,
+                    route=route,
+                    understanding_source="sonnet_low",
+                    attempts=attempt,
+                    latency_ms=_elapsed_ms(started),
+                    guard_status="not_applicable",
+                )
+            try:
+                guarded = guard_understanding_response_v2(request, candidate)
+            except UnderstandingEvidenceGuardError as error:
+                request = request.model_copy(
+                    update={
+                        "guard_feedback_codes": [
+                            violation.code.value for violation in error.violations
+                        ]
+                    }
+                )
+                continue
+            result = apply_guarded_understanding_v2(
                 snapshot,
                 ledger,
-                attempts=attempt,
-                started=started,
-                reason="understanding_timeout",
+                guarded,
+                source_turn_id=response.turn_id,
             )
-        except ModelUnavailableError:
-            return self._understanding_failure_semantics(
-                snapshot,
-                ledger,
-                attempts=attempt,
-                started=started,
-                reason="understanding_model_unavailable",
+            initial_help = (
+                state.expression_level is ExpressionLevel.L4
+                and state.hint_level is HintLevel.H0
+                and guarded.response.support_need is SupportNeed.GENERAL_HELP
+                and guarded.response.conversation_move is ConversationMoveV2.NONE
             )
-        except ModelOutputError:
-            return self._understanding_failure_semantics(
-                snapshot,
-                ledger,
-                attempts=attempt,
-                started=started,
-                reason="understanding_model_output_invalid",
-            )
-        route = self._route_for_understanding(candidate)
-        if route in {"bridge", "safety"}:
-            # Pure social turns and safety redirects do not mutate the
-            # reasoning ledger. Mixed safe-social + learning turns are
-            # routed through the main path below, where their literal
-            # learning evidence is guarded and preserved independently.
             return _TurnSemantics(
-                response=candidate,
-                apply_result=self._unchanged_result(snapshot, ledger),
-                guarded=None,
-                route=route,
+                response=guarded.response,
+                apply_result=result,
+                guarded=guarded,
+                route=(
+                    "stable"
+                    if initial_help
+                    else route
+                ),
                 understanding_source="sonnet_low",
                 attempts=attempt,
                 latency_ms=_elapsed_ms(started),
-                guard_status="not_applicable",
+                guard_status="passed" if attempt == 1 else "retry_passed",
+                initial_help=initial_help,
             )
-        try:
-            guarded = guard_understanding_response_v2(request, candidate)
-        except UnderstandingEvidenceGuardError as error:
-            context.request = request.model_copy(
-                update={
-                    "guard_feedback_codes": [
-                        violation.code.value for violation in error.violations
-                    ]
-                }
-            )
-            return None
-        result = apply_guarded_understanding_v2(
+        return self._understanding_failure_semantics(
             snapshot,
             ledger,
-            guarded,
-            source_turn_id=response.turn_id,
-        )
-        initial_help = (
-            state.expression_level is ExpressionLevel.L4
-            and state.hint_level is HintLevel.H0
-            and guarded.response.support_need is SupportNeed.GENERAL_HELP
-            and guarded.response.conversation_move is ConversationMoveV2.NONE
-        )
-        return _TurnSemantics(
-            response=guarded.response,
-            apply_result=result,
-            guarded=guarded,
-            route=(
-                "stable"
-                if initial_help
-                else route
-            ),
-            understanding_source="sonnet_low",
-            attempts=attempt,
-            latency_ms=_elapsed_ms(started),
-            guard_status="passed" if attempt == 1 else "retry_passed",
-            initial_help=initial_help,
-        )
-
-    def _understanding_exhausted(self, context: _UnderstandingAttemptContext) -> _TurnSemantics:
-        return self._understanding_failure_semantics(
-            context.snapshot, context.ledger, attempts=2, started=context.started,
+            attempts=2,
+            started=started,
             reason="understanding_evidence_guard_failed",
         )
 
@@ -1929,45 +1772,35 @@ class DialogueV2Engine:
             fallback_copy_ref=f"fallback.{state.subgoal_id}",
         )
         firewall = self._unresolved_answer_firewall(pack, question.targets)
-        context = _SpeakerAttemptContext(plan, firewall, response_plan, fallback)
-        return await run_attempt_graph(
-            self._speaker_graph, context, self._speak_attempt, self._speaker_exhausted,
-        )
-
-    async def _speak_attempt(
-        self, context: _SpeakerAttemptContext, attempt: int,
-    ) -> SpeechResultV2 | None:
-        plan, firewall, response_plan = context.plan, context.firewall, context.response_plan
-        try:
-            async with asyncio.timeout(self.speaker_timeout_seconds):
-                output = await self.gateway.speak_v2(plan)
-            violation = speaker_output_violation_v2(
-                output,
-                plan,
-                forbidden_values=firewall.values,
-                forbidden_surfaces=firewall.surfaces,
-            )
-            if violation is None:
-                text = output.text.strip()
-                # The product UI keeps only the active Mormi turn on
-                # screen.  On every active model-generated turn the model
-                # owns only the short reaction/acknowledgement; the server
-                # appends the reviewed, target-only reask.  This applies
-                # to ordinary partial progress as well as support/social
-                # recovery, so a valid acknowledgement-only model output
-                # can never remove the question from the screen.
-                text = self._compose_reaction_and_reask(
-                    text,
-                    self._safe_reask_text(response_plan),
+        last_reason = "speaker_contract_rejected"
+        for _ in range(2):
+            try:
+                async with asyncio.timeout(self.speaker_timeout_seconds):
+                    output = await self.gateway.speak_v2(plan)
+                violation = speaker_output_violation_v2(
+                    output,
+                    plan,
+                    forbidden_values=firewall.values,
+                    forbidden_surfaces=firewall.surfaces,
                 )
-                return text, output.mood, "llm", None
-            context.last_reason = violation
-        except Exception as error:  # provider/schema failure uses the reviewed fallback
-            context.last_reason = type(error).__name__
-        return None
-
-    def _speaker_exhausted(self, context: _SpeakerAttemptContext) -> SpeechResultV2:
-        return context.fallback, "thinking", "generation_fallback", context.last_reason
+                if violation is None:
+                    text = output.text.strip()
+                    # The product UI keeps only the active Mormi turn on
+                    # screen.  On every active model-generated turn the model
+                    # owns only the short reaction/acknowledgement; the server
+                    # appends the reviewed, target-only reask.  This applies
+                    # to ordinary partial progress as well as support/social
+                    # recovery, so a valid acknowledgement-only model output
+                    # can never remove the question from the screen.
+                    text = self._compose_reaction_and_reask(
+                        text,
+                        self._safe_reask_text(response_plan),
+                    )
+                    return text, output.mood, "llm", None
+                last_reason = violation
+            except Exception as error:  # provider/schema failure uses the reviewed fallback
+                last_reason = type(error).__name__
+        return fallback, "thinking", "generation_fallback", last_reason
 
     async def _bridge(
         self,
