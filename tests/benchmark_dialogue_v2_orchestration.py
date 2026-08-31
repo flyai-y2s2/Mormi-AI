@@ -41,7 +41,7 @@ async def benchmark(samples: int = 100, delay_ms: float = 0) -> dict:
     response = _response(first.turn_id, ResponseType.TEXT, text="아직 헷갈려")
     timings: dict[str, list[float]] = {"old": [], "graph": []}
     for i in range(samples + 20):
-        runs = [("old", old.run_turn_stream), ("graph", new._run_turn_graph)]
+        runs = [("old", old.run_turn_stream), ("graph", new.run_turn_stream)]
         for label, run in runs if i % 2 else reversed(runs):
             started = time.perf_counter()
             _ = [event async for event in run(state, response, first.mormi.text)]

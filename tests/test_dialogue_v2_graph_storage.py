@@ -66,9 +66,6 @@ async def test_real_service_storage_and_replay_match_old_engine(
         gateway = LifeRuntimeGateway()
         home = (DialogueV2Engine if graph else HOME.DialogueV2Engine)(gateway)
         life = (DialogueV2LifeEngine if graph else LIFE.DialogueV2LifeEngine)(gateway)
-        if graph:
-            home.run_turn_stream = home._run_turn_graph
-            life.run_turn_stream = life._run_turn_graph
         service = ConversationService(
             repository,
             ConversationEngine(FakeGateway()),

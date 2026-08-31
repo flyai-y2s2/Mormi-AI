@@ -395,7 +395,7 @@ class DialogueV2Engine:
             deep=True,
         )
 
-    async def _run_turn_graph(
+    async def run_turn_stream(
         self, state: SessionState, response: ChildResponse, previous_question: str, *,
         recent_dialogue: list[DialogueHistoryTurn] | None = None,
     ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
@@ -405,30 +405,6 @@ class DialogueV2Engine:
         async with aclosing(stream_turn_graph(self._turn_graph, turn)) as events:
             async for event in events:
                 yield event
-
-    async def run_turn_stream(
-        self, state: SessionState, response: ChildResponse, previous_question: str, *,
-        recent_dialogue: list[DialogueHistoryTurn] | None = None,
-    ) -> AsyncIterator[EngineProgress | EngineTurnResult]:
-        turn = self._prepare_execution(state, response, previous_question, recent_dialogue)
-        if response.type is ResponseType.TEXT:
-            yield EngineProgress("understanding")
-        await self._interpret_execution(turn)
-        yield EngineProgress("planning")
-        self._apply_execution(turn)
-        assert turn.semantics is not None
-        if turn.semantics.apply_result.completion.complete:
-            self._complete_execution(turn)
-        else:
-            await self._prepare_execution_speech(turn)
-            if self._execution_speech_route(turn) in {"main", "bridge"}:
-                yield EngineProgress("speaking")
-            await self._render_execution_speech(turn)
-        yield EngineProgress("validating")
-        self._compose_execution(turn)
-        await self._note_execution(turn)
-        assert turn.result is not None
-        yield turn.result
 
     def _prepare_execution(
         self, state: SessionState, response: ChildResponse, previous_question: str,

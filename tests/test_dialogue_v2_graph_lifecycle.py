@@ -60,7 +60,7 @@ async def test_graph_progress_preserves_demand_driven_execution() -> None:
     gateway = GatedGateway("none")
     engine = DialogueV2Engine(gateway)
     state, first, response = await first_turn(engine)
-    events = engine._run_turn_graph(state, response, first.mormi.text)
+    events = engine.run_turn_stream(state, response, first.mormi.text)
     assert (await anext(events)).stage == "understanding"
     assert gateway.understanding_requests == []
     await events.aclose()
@@ -74,7 +74,7 @@ async def test_cancelling_graph_cancels_inflight_call_without_advancing_state(st
     engine = DialogueV2Engine(gateway)
     state, first, response = await first_turn(engine)
     before = state.model_dump(mode="json")
-    events = engine._run_turn_graph(state, response, first.mormi.text)
+    events = engine.run_turn_stream(state, response, first.mormi.text)
 
     async def consume() -> None:
         async for event in events:
@@ -118,7 +118,7 @@ async def test_closing_at_each_milestone_does_not_execute_next_step(
             original(turn)
 
     monkeypatch.setattr(engine, method_name, wrapped)
-    events = engine._run_turn_graph(state, response, first.mormi.text)
+    events = engine.run_turn_stream(state, response, first.mormi.text)
     async for event in events:
         if isinstance(event, EngineProgress) and event.stage == stop_at:
             break
@@ -153,7 +153,7 @@ async def test_shared_graph_keeps_concurrent_turns_and_context_separate(
         state, first, _ = await first_turn(engine)
         response = _response(first.turn_id, ResponseType.TEXT, text=label)
         before = state.model_dump(mode="json")
-        events = [e async for e in engine._run_turn_graph(state, response, first.mormi.text)]
+        events = [e async for e in engine.run_turn_stream(state, response, first.mormi.text)]
         assert state.model_dump(mode="json") == before
         result = events[-1]
         assert isinstance(result, EngineTurnResult)
@@ -187,7 +187,7 @@ async def test_internal_diagnostics_never_include_frame_or_child_text(caplog: An
     state, first, response = await first_turn(engine)
     token = turn_scope.set(TurnScope(state.conversation_id, first.turn_id))
     try:
-        _ = [event async for event in engine._run_turn_graph(state, response, first.mormi.text)]
+        _ = [event async for event in engine.run_turn_stream(state, response, first.mormi.text)]
     finally:
         turn_scope.reset(token)
     assert "graph_step" in caplog.text

@@ -28,7 +28,6 @@ async def test_closing_service_stream_closes_graph_without_model_or_commit(
     repository = Repository(database, TextCipher("synthetic-key"))
     gateway = GatedGateway("none")
     engine = DialogueV2Engine(gateway)
-    engine.run_turn_stream = engine._run_turn_graph
     service = ConversationService(
         repository,
         ConversationEngine(FakeGateway()),
