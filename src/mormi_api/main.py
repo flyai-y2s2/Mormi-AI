@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from typing import Annotated
 
 import uvicorn
@@ -732,29 +732,30 @@ async def respond_stream(
 ) -> StreamingResponse:
     async def events() -> AsyncIterator[str]:
         try:
-            async for event in conversation.respond_stream(conversation_id, body):
-                if event.name == "accepted":
-                    yield _sse(
-                        "response.accepted",
-                        {
-                            "conversation_id": conversation_id,
-                            "response_id": str(body.response_id),
-                        },
-                    )
-                    continue
-                if event.name == "progress" and event.stage:
-                    yield _sse(
-                        "response.progress",
-                        {"conversation_id": conversation_id, "stage": event.stage},
-                    )
-                    continue
-                if event.envelope is None:
-                    continue
-                async for chunk in _turn_sse_events(
-                    event.envelope,
-                    replayed=event.replayed,
-                ):
-                    yield chunk
+            async with aclosing(conversation.respond_stream(conversation_id, body)) as stream:
+                async for event in stream:
+                    if event.name == "accepted":
+                        yield _sse(
+                            "response.accepted",
+                            {
+                                "conversation_id": conversation_id,
+                                "response_id": str(body.response_id),
+                            },
+                        )
+                        continue
+                    if event.name == "progress" and event.stage:
+                        yield _sse(
+                            "response.progress",
+                            {"conversation_id": conversation_id, "stage": event.stage},
+                        )
+                        continue
+                    if event.envelope is None:
+                        continue
+                    async for chunk in _turn_sse_events(
+                        event.envelope,
+                        replayed=event.replayed,
+                    ):
+                        yield chunk
         except ConversationNotFoundError:
             yield _sse(
                 "error",

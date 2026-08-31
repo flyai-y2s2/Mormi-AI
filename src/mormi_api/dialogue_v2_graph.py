@@ -4,6 +4,7 @@ No checkpoints, graph retries, parallel nodes, raw state logging or external tra
 The progress rendezvous preserves the old async generator's backpressure: work
 starts only when the consumer resumes after receiving its pre-work milestone.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -14,9 +15,11 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langsmith import tracing_context
 
+from .dialogue_v2_graph_trace import trace_node
 from .dialogue_v2_runtime import DialogueV2Engine, _TurnExecution
 from .engine import EngineProgress, EngineTurnResult
 from .schemas import ResponseType
+
 
 class TurnGraphState(TypedDict):
     turn: _TurnExecution
@@ -31,30 +34,40 @@ def build_turn_graph(engine: DialogueV2Engine) -> Any:
             turn = state["turn"]
             if milestone is not None:
                 await state["emit"](milestone)
-            result = getattr(engine, method_name)(turn)
-            if inspect.isawaitable(result):
-                await result
+            with trace_node("turn", method_name):
+                result = getattr(engine, method_name)(turn)
+                if inspect.isawaitable(result):
+                    await result
             return {"turn": turn}
+
         return execute
 
     async def interpret(state: TurnGraphState) -> dict[str, _TurnExecution]:
         if state["turn"].response.type is ResponseType.TEXT:
             await state["emit"]("understanding")
-        await engine._interpret_execution(state["turn"])
+        with trace_node("turn", state["turn"].response.type.value):
+            await engine._interpret_execution(state["turn"])
         return {"turn": state["turn"]}
 
-    def after_policy(state: TurnGraphState) -> str:
+    async def after_policy(state: TurnGraphState) -> str:
         semantics = state["turn"].semantics
         assert semantics is not None
         return "complete" if semantics.apply_result.completion.complete else "prepare_speech"
 
-    def speech_route(state: TurnGraphState) -> str:
+    async def speech_route(state: TurnGraphState) -> str:
         return engine._execution_speech_route(state["turn"])
 
     input_nodes = {
-        "text": "understand_text", "no_response": "explicit_support",
-        "choice": "structured_choice", "fill": "structured_fill", "action": "joint_action",
+        "text": "understand_text",
+        "no_response": "explicit_support",
+        "choice": "structured_choice",
+        "fill": "structured_fill",
+        "action": "joint_action",
     }
+
+    async def input_route(state: TurnGraphState) -> str:
+        return input_nodes.get(state["turn"].response.type.value, "invalid_input")
+
     for input_node in [*input_nodes.values(), "invalid_input"]:
         builder.add_node(input_node, interpret)
         builder.add_edge(input_node, "apply_progress")
@@ -62,22 +75,37 @@ def build_turn_graph(engine: DialogueV2Engine) -> Any:
     builder.add_node("complete", node("_complete_execution"))
     builder.add_node("prepare_speech", node("_prepare_execution_speech"))
     for route in ("main", "bridge", "stable", "safety", "understanding_fallback"):
-        builder.add_node(route, node(
-            "_render_execution_speech", "speaking" if route in {"main", "bridge"} else None,
-        ))
+        builder.add_node(
+            route,
+            node(
+                "_render_execution_speech",
+                "speaking" if route in {"main", "bridge"} else None,
+            ),
+        )
         builder.add_edge(route, "compose")
     builder.add_node("compose", node("_compose_execution", "validating"))
     builder.add_node("note", node("_note_execution"))
     builder.add_conditional_edges(
-        START, lambda state: input_nodes.get(state["turn"].response.type.value, "invalid_input"),
+        START,
+        input_route,
         {n: n for n in [*input_nodes.values(), "invalid_input"]},
     )
-    builder.add_conditional_edges("apply_progress", after_policy, {
-        "complete": "complete", "prepare_speech": "prepare_speech",
-    })
-    builder.add_conditional_edges("prepare_speech", speech_route, {
-        route: route for route in ("main", "bridge", "stable", "safety", "understanding_fallback")
-    })
+    builder.add_conditional_edges(
+        "apply_progress",
+        after_policy,
+        {
+            "complete": "complete",
+            "prepare_speech": "prepare_speech",
+        },
+    )
+    builder.add_conditional_edges(
+        "prepare_speech",
+        speech_route,
+        {
+            route: route
+            for route in ("main", "bridge", "stable", "safety", "understanding_fallback")
+        },
+    )
     builder.add_edge("complete", "compose")
     builder.add_edge("compose", "note")
     builder.add_edge("note", END)
@@ -85,7 +113,8 @@ def build_turn_graph(engine: DialogueV2Engine) -> Any:
 
 
 async def stream_turn_graph(
-    graph: Any, turn: _TurnExecution,
+    graph: Any,
+    turn: _TurnExecution,
 ) -> AsyncGenerator[EngineProgress | EngineTurnResult, None]:
     pending: asyncio.Queue[tuple[EngineProgress, asyncio.Future[None]]] = asyncio.Queue(1)
 
@@ -123,5 +152,6 @@ async def stream_turn_graph(
             receiving.cancel()
         if not running.done():
             running.cancel()
-        await asyncio.gather(running, *([receiving] if receiving is not None else []),
-                             return_exceptions=True)
+        await asyncio.gather(
+            running, *([receiving] if receiving is not None else []), return_exceptions=True
+        )

@@ -7,6 +7,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from .dialogue_v2_attempt_graph import build_two_attempt_graph, run_attempt_graph
 from .dialogue_v2_content import (
     CopySlotV2,
     L2ChoicePlanV2,
@@ -240,6 +241,25 @@ class _UnresolvedAnswerFirewall:
     surfaces: tuple[str, ...]
 
 
+@dataclass(slots=True)
+class _UnderstandingAttemptContext:
+    state: SessionState
+    snapshot: PinnedContentSnapshotV2
+    ledger: ReasoningLedgerV2
+    response: ChildResponse
+    request: UnderstandingRequestV2
+    started: float
+
+
+@dataclass(slots=True)
+class _SpeakerAttemptContext:
+    plan: SpeakerPlanV2
+    firewall: _UnresolvedAnswerFirewall
+    response_plan: ConversationResponsePlanV2
+    fallback: str
+    last_reason: str = "speaker_contract_rejected"
+
+
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
 
@@ -317,6 +337,8 @@ class DialogueV2Engine:
         from .dialogue_v2_graph import build_turn_graph
 
         self._turn_graph = build_turn_graph(self)
+        self._understanding_graph = build_two_attempt_graph("mormi_v2_understanding")
+        self._speaker_graph = build_two_attempt_graph("mormi_v2_speaker")
 
     async def initialize_state(
         self,
@@ -853,94 +875,104 @@ class DialogueV2Engine:
             "child_utterance": response.text,
             }
         )
-        started = time.perf_counter()
-        for attempt in (1, 2):
-            try:
-                async with asyncio.timeout(self.classifier_timeout_seconds):
-                    candidate = await self.gateway.understand_v2(request)
-            except TimeoutError:
-                return self._understanding_failure_semantics(
-                    snapshot,
-                    ledger,
-                    attempts=attempt,
-                    started=started,
-                    reason="understanding_timeout",
-                )
-            except ModelUnavailableError:
-                return self._understanding_failure_semantics(
-                    snapshot,
-                    ledger,
-                    attempts=attempt,
-                    started=started,
-                    reason="understanding_model_unavailable",
-                )
-            except ModelOutputError:
-                return self._understanding_failure_semantics(
-                    snapshot,
-                    ledger,
-                    attempts=attempt,
-                    started=started,
-                    reason="understanding_model_output_invalid",
-                )
-            route = self._route_for_understanding(candidate)
-            if route in {"bridge", "safety"}:
-                # Pure social turns and safety redirects do not mutate the
-                # reasoning ledger. Mixed safe-social + learning turns are
-                # routed through the main path below, where their literal
-                # learning evidence is guarded and preserved independently.
-                return _TurnSemantics(
-                    response=candidate,
-                    apply_result=self._unchanged_result(snapshot, ledger),
-                    guarded=None,
-                    route=route,
-                    understanding_source="sonnet_low",
-                    attempts=attempt,
-                    latency_ms=_elapsed_ms(started),
-                    guard_status="not_applicable",
-                )
-            try:
-                guarded = guard_understanding_response_v2(request, candidate)
-            except UnderstandingEvidenceGuardError as error:
-                request = request.model_copy(
-                    update={
-                        "guard_feedback_codes": [
-                            violation.code.value for violation in error.violations
-                        ]
-                    }
-                )
-                continue
-            result = apply_guarded_understanding_v2(
+        context = _UnderstandingAttemptContext(
+            state, snapshot, ledger, response, request, time.perf_counter(),
+        )
+        return await run_attempt_graph(
+            self._understanding_graph, context, self._understand_attempt,
+            self._understanding_exhausted,
+        )
+
+    async def _understand_attempt(
+        self, context: _UnderstandingAttemptContext, attempt: int,
+    ) -> _TurnSemantics | None:
+        state, snapshot, ledger = context.state, context.snapshot, context.ledger
+        response, request, started = context.response, context.request, context.started
+        try:
+            async with asyncio.timeout(self.classifier_timeout_seconds):
+                candidate = await self.gateway.understand_v2(request)
+        except TimeoutError:
+            return self._understanding_failure_semantics(
                 snapshot,
                 ledger,
-                guarded,
-                source_turn_id=response.turn_id,
+                attempts=attempt,
+                started=started,
+                reason="understanding_timeout",
             )
-            initial_help = (
-                state.expression_level is ExpressionLevel.L4
-                and state.hint_level is HintLevel.H0
-                and guarded.response.support_need is SupportNeed.GENERAL_HELP
-                and guarded.response.conversation_move is ConversationMoveV2.NONE
+        except ModelUnavailableError:
+            return self._understanding_failure_semantics(
+                snapshot,
+                ledger,
+                attempts=attempt,
+                started=started,
+                reason="understanding_model_unavailable",
             )
+        except ModelOutputError:
+            return self._understanding_failure_semantics(
+                snapshot,
+                ledger,
+                attempts=attempt,
+                started=started,
+                reason="understanding_model_output_invalid",
+            )
+        route = self._route_for_understanding(candidate)
+        if route in {"bridge", "safety"}:
+            # Pure social turns and safety redirects do not mutate the
+            # reasoning ledger. Mixed safe-social + learning turns are
+            # routed through the main path below, where their literal
+            # learning evidence is guarded and preserved independently.
             return _TurnSemantics(
-                response=guarded.response,
-                apply_result=result,
-                guarded=guarded,
-                route=(
-                    "stable"
-                    if initial_help
-                    else route
-                ),
+                response=candidate,
+                apply_result=self._unchanged_result(snapshot, ledger),
+                guarded=None,
+                route=route,
                 understanding_source="sonnet_low",
                 attempts=attempt,
                 latency_ms=_elapsed_ms(started),
-                guard_status="passed" if attempt == 1 else "retry_passed",
-                initial_help=initial_help,
+                guard_status="not_applicable",
             )
-        return self._understanding_failure_semantics(
+        try:
+            guarded = guard_understanding_response_v2(request, candidate)
+        except UnderstandingEvidenceGuardError as error:
+            context.request = request.model_copy(
+                update={
+                    "guard_feedback_codes": [
+                        violation.code.value for violation in error.violations
+                    ]
+                }
+            )
+            return None
+        result = apply_guarded_understanding_v2(
             snapshot,
             ledger,
-            attempts=2,
-            started=started,
+            guarded,
+            source_turn_id=response.turn_id,
+        )
+        initial_help = (
+            state.expression_level is ExpressionLevel.L4
+            and state.hint_level is HintLevel.H0
+            and guarded.response.support_need is SupportNeed.GENERAL_HELP
+            and guarded.response.conversation_move is ConversationMoveV2.NONE
+        )
+        return _TurnSemantics(
+            response=guarded.response,
+            apply_result=result,
+            guarded=guarded,
+            route=(
+                "stable"
+                if initial_help
+                else route
+            ),
+            understanding_source="sonnet_low",
+            attempts=attempt,
+            latency_ms=_elapsed_ms(started),
+            guard_status="passed" if attempt == 1 else "retry_passed",
+            initial_help=initial_help,
+        )
+
+    def _understanding_exhausted(self, context: _UnderstandingAttemptContext) -> _TurnSemantics:
+        return self._understanding_failure_semantics(
+            context.snapshot, context.ledger, attempts=2, started=context.started,
             reason="understanding_evidence_guard_failed",
         )
 
@@ -1921,35 +1953,45 @@ class DialogueV2Engine:
             fallback_copy_ref=f"fallback.{state.subgoal_id}",
         )
         firewall = self._unresolved_answer_firewall(pack, question.targets)
-        last_reason = "speaker_contract_rejected"
-        for _ in range(2):
-            try:
-                async with asyncio.timeout(self.speaker_timeout_seconds):
-                    output = await self.gateway.speak_v2(plan)
-                violation = speaker_output_violation_v2(
-                    output,
-                    plan,
-                    forbidden_values=firewall.values,
-                    forbidden_surfaces=firewall.surfaces,
+        context = _SpeakerAttemptContext(plan, firewall, response_plan, fallback)
+        return await run_attempt_graph(
+            self._speaker_graph, context, self._speak_attempt, self._speaker_exhausted,
+        )
+
+    async def _speak_attempt(
+        self, context: _SpeakerAttemptContext, attempt: int,
+    ) -> SpeechResultV2 | None:
+        plan, firewall, response_plan = context.plan, context.firewall, context.response_plan
+        try:
+            async with asyncio.timeout(self.speaker_timeout_seconds):
+                output = await self.gateway.speak_v2(plan)
+            violation = speaker_output_violation_v2(
+                output,
+                plan,
+                forbidden_values=firewall.values,
+                forbidden_surfaces=firewall.surfaces,
+            )
+            if violation is None:
+                text = output.text.strip()
+                # The product UI keeps only the active Mormi turn on
+                # screen.  On every active model-generated turn the model
+                # owns only the short reaction/acknowledgement; the server
+                # appends the reviewed, target-only reask.  This applies
+                # to ordinary partial progress as well as support/social
+                # recovery, so a valid acknowledgement-only model output
+                # can never remove the question from the screen.
+                text = self._compose_reaction_and_reask(
+                    text,
+                    self._safe_reask_text(response_plan),
                 )
-                if violation is None:
-                    text = output.text.strip()
-                    # The product UI keeps only the active Mormi turn on
-                    # screen.  On every active model-generated turn the model
-                    # owns only the short reaction/acknowledgement; the server
-                    # appends the reviewed, target-only reask.  This applies
-                    # to ordinary partial progress as well as support/social
-                    # recovery, so a valid acknowledgement-only model output
-                    # can never remove the question from the screen.
-                    text = self._compose_reaction_and_reask(
-                        text,
-                        self._safe_reask_text(response_plan),
-                    )
-                    return text, output.mood, "llm", None
-                last_reason = violation
-            except Exception as error:  # provider/schema failure uses the reviewed fallback
-                last_reason = type(error).__name__
-        return fallback, "thinking", "generation_fallback", last_reason
+                return text, output.mood, "llm", None
+            context.last_reason = violation
+        except Exception as error:  # provider/schema failure uses the reviewed fallback
+            context.last_reason = type(error).__name__
+        return None
+
+    def _speaker_exhausted(self, context: _SpeakerAttemptContext) -> SpeechResultV2:
+        return context.fallback, "thinking", "generation_fallback", context.last_reason
 
     async def _bridge(
         self,

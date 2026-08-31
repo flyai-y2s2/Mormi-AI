@@ -23,11 +23,12 @@ from mormi_api.engine import EngineProgress, EngineTurnResult
 
 
 def cases() -> list[Any]:
+    import test_dialogue_v2_fault_parity as fault_tests
     import test_dialogue_v2_life_runtime as life_tests
     import test_dialogue_v2_runtime as home_tests
 
     result = []
-    for module in (home_tests, life_tests):
+    for module in (home_tests, life_tests, fault_tests):
         for name, function in vars(module).items():
             if not name.startswith("test_") or not inspect.iscoroutinefunction(function):
                 continue
@@ -57,8 +58,7 @@ async def test_existing_scenarios_match_frozen_executor(
     request: pytest.FixtureRequest,
     use_graph: bool,
 ) -> None:
-    original = (DialogueV2Engine._run_turn_graph if use_graph
-                else DialogueV2Engine.run_turn_stream)
+    original = DialogueV2Engine._run_turn_graph if use_graph else DialogueV2Engine.run_turn_stream
 
     async def checked(
         self: Any, state: Any, response: Any, previous_question: str, *, recent_dialogue: Any = None
