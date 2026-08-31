@@ -49,13 +49,16 @@ def cases() -> list[Any]:
 
 
 @pytest.mark.parametrize(("case", "parameters"), cases())
+@pytest.mark.parametrize("use_graph", [False, True], ids=["sequential", "graph"])
 async def test_existing_scenarios_match_frozen_executor(
     case: Any,
     parameters: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
+    use_graph: bool,
 ) -> None:
-    original = DialogueV2Engine.run_turn_stream
+    original = (DialogueV2Engine._run_turn_graph if use_graph
+                else DialogueV2Engine.run_turn_stream)
 
     async def checked(
         self: Any, state: Any, response: Any, previous_question: str, *, recent_dialogue: Any = None
