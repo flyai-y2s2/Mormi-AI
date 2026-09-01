@@ -345,13 +345,14 @@ jobs:
           IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
           REGISTRY: ${{ needs.build-and-push.outputs.registry }}
           AWS_REGION: ${{ env.AWS_REGION }}
+          OBSERVATION_INGEST_KEY: ${{ secrets.MORMI_OBSERVATION_INGEST_KEY }}
           DIALOGUE_V2_CANARY_PERCENT_OVERRIDE: >-
             ${{ github.event_name == 'workflow_dispatch' && inputs.dialogue_v2_canary_percent || '' }}
 
         run: |
           ssh -i ~/.ssh/id_deploy \
               "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
-              "IMAGE_URI='${IMAGE_URI}' REGISTRY='${REGISTRY}' AWS_REGION='${AWS_REGION}' DIALOGUE_V2_CANARY_PERCENT_OVERRIDE='${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}' bash -s" <<'REMOTE'
+              "IMAGE_URI='${IMAGE_URI}' REGISTRY='${REGISTRY}' AWS_REGION='${AWS_REGION}' OBSERVATION_INGEST_KEY='${OBSERVATION_INGEST_KEY}' DIALOGUE_V2_CANARY_PERCENT_OVERRIDE='${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}' bash -s" <<'REMOTE'
 
           set -euo pipefail
 
@@ -393,17 +394,9 @@ jobs:
 
           configure_star_note_delivery() {
             local image="$1"
-            local service_api_key
 
-            if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ai$'; then
-              echo "the current mormi-ai container is required to reuse its service key"
-              exit 1
-            fi
-            service_api_key="$(docker inspect mormi-ai \
-              --format '{{range .Config.Env}}{{println .}}{{end}}' \
-              | awk -F= '$1 == "MORMI_SERVICE_API_KEY" {sub(/^[^=]*=/, ""); print; exit}')"
-            if [ -z "${service_api_key}" ]; then
-              echo "the current mormi-ai container has no service API key"
+            if [ -z "${OBSERVATION_INGEST_KEY:-}" ]; then
+              echo "the dedicated observation ingest key is not configured"
               exit 1
             fi
 
@@ -414,7 +407,7 @@ jobs:
             persist_mormi_env \
               "${image}" \
               MORMI_OBSERVATION_INGEST_KEY \
-              "${service_api_key}"
+              "${OBSERVATION_INGEST_KEY}"
             persist_mormi_env \
               "${image}" \
               MORMI_STAR_NOTE_EVENTS_ENABLED \

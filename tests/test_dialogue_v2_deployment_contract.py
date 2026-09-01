@@ -100,13 +100,13 @@ def test_live_deploy_enables_and_gates_star_note_delivery_without_exposing_the_k
     live_gate = workflow.index("live API did not enable star-note delivery")
 
     assert configuration < live_start < live_gate
-    assert "docker inspect mormi-ai" in workflow
-    assert "MORMI_SERVICE_API_KEY" in workflow
+    assert "secrets.MORMI_OBSERVATION_INGEST_KEY" in workflow
+    assert "the dedicated observation ingest key is not configured" in workflow
     assert "https://iamssam.vercel.app/api/be/internal/v1/observations/events" in workflow
     assert "MORMI_STAR_NOTE_EVENTS_ENABLED" in workflow
     assert '"observation_ingest_enabled"[[:space:]]*:[[:space:]]*true' in workflow
     assert '"star_note_events_enabled"[[:space:]]*:[[:space:]]*true' in workflow
-    assert "MORMI_OBSERVATION_INGEST_KEY=${service_api_key}" not in workflow
+    assert "echo \"${OBSERVATION_INGEST_KEY}\"" not in workflow
 
 
 def test_emergency_canary_zero_path_skips_build_migration_and_prewarm() -> None:
