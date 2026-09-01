@@ -312,7 +312,14 @@ class LadderAnalysisRepository:
                 else LearnerProfile(learner_id=learner_id)
             )
             skill = profile.skills.get(record.skill_id) or SkillProfile(skill_id=record.skill_id)
-            if skill.highest_stable_expression_level.canonical() is not current_level.canonical():
+            stable_level = skill.highest_stable_expression_level.canonical()
+            if stable_level is recommended_level.canonical():
+                record.approved_at = approved_at
+                record.updated_at = approved_at
+                await db.commit()
+                await db.refresh(record)
+                return self._job(record)
+            if stable_level is not current_level.canonical():
                 raise LadderAnalysisStaleError("learner stable level has changed")
             skill.highest_stable_expression_level = recommended_level.canonical()
             profile.skills[record.skill_id] = skill

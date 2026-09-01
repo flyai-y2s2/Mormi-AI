@@ -125,3 +125,50 @@ async def test_approval_applies_only_matching_learner_and_latest_version(
         await repository.get_profile(7)
     ).skills["skill-a"].highest_stable_expression_level is ExpressionLevel.L3
     await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_approval_is_idempotent_when_profile_already_has_recommended_level(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database, store, repository = await setup_state(tmp_path, monkeypatch)
+    await repository.save_profile(
+        LearnerProfile(
+            learner_id=7,
+            skills={
+                "skill-a": SkillProfile(
+                    skill_id="skill-a",
+                    highest_stable_expression_level=ExpressionLevel.L2,
+                )
+            },
+        )
+    )
+    payload = create_payload()
+    payload["current_level"] = "L3"
+    created = await store.enqueue_from_dict(payload)
+    claimed = (await store.claim_pending(1))[0]
+    await store.complete(
+        claimed,
+        decision={
+            "action": "ADJUST_DOWN",
+            "current_level": "L3",
+            "recommended_level": "L2",
+        },
+        model_version="test-v2",
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        f"/v1/internal/ladder-analyses/{created.analysis_id}/approve",
+        headers={"X-Mormi-Service-Key": "shared-secret"},
+        json={"learner_id": 7, "recommendation_version": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+    evidence = await repository.report_evidence(7, include_raw=False)
+    assert evidence.ladder_recommendations[0].approved is True
+    assert (
+        await repository.get_profile(7)
+    ).skills["skill-a"].highest_stable_expression_level is ExpressionLevel.L2
+    await database.dispose()
