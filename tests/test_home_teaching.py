@@ -823,7 +823,7 @@ def test_every_home_support_step_keeps_question_and_choices_in_one_context() -> 
 
 
 @pytest.mark.asyncio
-async def test_home_first_turn_still_probes_l4_with_an_old_lower_profile(
+async def test_home_first_turn_uses_the_approved_skill_level(
     tmp_path: object,
 ) -> None:
     database = Database(f"sqlite+aiosqlite:///{tmp_path}/home-old-profile.db")
@@ -835,7 +835,7 @@ async def test_home_first_turn_still_probes_l4_with_an_old_lower_profile(
             skills={
                 "number-count": SkillProfile(
                     skill_id="number-count",
-                    highest_stable_expression_level=ExpressionLevel.L0,
+                    highest_stable_expression_level=ExpressionLevel.L2,
                 )
             },
         )
@@ -860,10 +860,9 @@ async def test_home_first_turn_still_probes_l4_with_an_old_lower_profile(
         )
     )
 
-    assert started.turn.input.kind is InputKind.TEXT
-    assert started.turn.help_card is None
+    assert started.turn.input.kind is InputKind.CHOICES
     state = await repository.get_state(started.conversation_id)
-    assert state.expression_level is ExpressionLevel.L4
+    assert state.expression_level is ExpressionLevel.L2
     assert state.hint_level is HintLevel.H0
     await database.dispose()
 

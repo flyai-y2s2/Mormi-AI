@@ -235,13 +235,7 @@ class ConversationService:
         )
         task_start_levels = {
             task_id: (
-                # Drill accuracy is concept-performance evidence, not evidence
-                # that the child cannot explain.  Home teaching must therefore
-                # offer one independent L4-H0 teaching turn before adding any
-                # expression support.
-                ExpressionLevel.L4
-                if request.scenario_id == "home_teach"
-                else ExpressionLevel.L2
+                ExpressionLevel.L2
                 if get_task(task_id, scenario_data).behavior
                 in {"budget_menu_selection", "menu_selection"}
                 else select_start_level(
