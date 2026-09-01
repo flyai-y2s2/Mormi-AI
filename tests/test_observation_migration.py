@@ -323,7 +323,7 @@ def test_migration_stamps_complete_schema_created_by_app_startup(
         version = connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar_one()
-        assert version == "20260826_06"
+        assert version == "20260831_07"
     engine.dispose()
 
 
@@ -365,7 +365,7 @@ def test_migration_runner_supports_transition_then_final_on_fresh_schema(
         }
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "20260826_06"
+        ).scalar_one() == "20260831_07"
     assert final_phase == "final"
     assert "uq_conversation_learning_session_round" not in constraints
     assert "uq_conversation_learning_session_scene_scenario_round" in constraints
@@ -392,7 +392,7 @@ def test_migration_repairs_missing_copy_cache_index_without_recreating_table(
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == "20260826_06"
+        ).scalar_one() == "20260831_07"
         assert {
             index["name"]
             for index in inspect(connection).get_indexes(
@@ -433,7 +433,7 @@ def test_migration_upgrades_complete_unversioned_baseline_through_current_head(
         version = connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
         ).scalar_one()
-        assert version == "20260826_06"
+        assert version == "20260831_07"
         assert "conversation_round" in {
             column["name"]
             for column in inspect(connection).get_columns("conversations")

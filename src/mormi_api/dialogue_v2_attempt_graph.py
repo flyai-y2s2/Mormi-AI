@@ -63,7 +63,7 @@ def build_two_attempt_graph(name: str) -> Any:
         },
     )
     builder.add_edge("exhausted", END)
-    return builder.compile(name=name)
+    return builder.compile(checkpointer=False, name=name)
 
 
 async def run_attempt_graph[C, R](

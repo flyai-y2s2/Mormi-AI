@@ -263,9 +263,11 @@ flowchart TD
 서브그래프를 사용한다. 추가 내부 처리 비용을 사용자가 승인한 뒤 기본 경로로 전환했으며
 임시 순차 실행 경로와 `_run_turn_graph` 진입점은 제거했다. 기존 Python 실행기는 테스트
 전용 기준 fixture에만 남는다. 기존 V2 canary 설정은 old/new 실행기를 선택하는 스위치가 아니다.
-이 변경은 작업 브랜치에만 있으며 원격 push·병합·배포는 하지 않았다.
+턴 그래프 전환은 PR #52로 `develop@9708953`에 병합되었다. 아래 부모 그래프는
+그와 별도의 opt-in 작업이며 기본 실행 경로에는 아직 활성화하지 않는다.
 
-- 그래프는 엔진마다 한 번 compile하며 checkpointer/store가 없다. 영속 DB/snapshot 계약은
+- 턴·재시도 그래프는 엔진마다 한 번 compile하며 `checkpointer=False`로 부모의 저장기
+  상속까지 차단한다. 영속 DB/snapshot 계약은
   그대로이고, 요청별 임시 graph state를 모델이나 외부 tracing에 전달하지 않는다.
 - 진행 이벤트는 작업 **전**에 내보내고 소비자가 다음 이벤트를 요청할 때 작업을 시작한다.
   서비스와 HTTP 스트림의 종료도 엔진까지 전파하여 미완료 그래프 작업을 취소한다.
@@ -283,6 +285,30 @@ flowchart TD
   감소 ≤10% 조건은 실패했다. 실제 운영 처리량 감소율로 해석하지 않는다. 사용자가 이 비용을
   허용해 기본 전환을 승인했다. 전환 후 추가 측정은 +4.38ms/34.64%로 같은 규모였으며,
   벤치마크의 원래 `cpu_budget_passed=false` 결과를 통과로 바꾸지 않았다.
+
+#### 선택적 세션 부모 그래프 (기본 비활성)
+
+`session_parent_graph.py`는 한 conversation의 입력 대기 → 기존 턴 서비스 실행 →
+다음 입력 대기/END를 관리한다. 생성 시 신규 V2 대화에만 실행 버전을 고정하고,
+첫 응답에서 기존 초기 질문의 DB 상태를 읽어 부모를 지연 초기화한다. 이후 요청은
+동일 `conversation_id`의 체크포인트를 복원하여 `interrupt`를 재개한다. 입력 원문은
+일시적인 request context에만 전달하고 resume 값에는 응답 ID만 넣는다.
+
+`dialogue_session_parents`는 대화 ID·DB 버전·대기 턴·graph 버전과 마지막 WAIT/END
+체크포인트만 보존한다. 요청 중간 체크포인트는 요청별 메모리에 staging하고,
+기존 `commit_turn` 및 기존 후처리가 끝난 뒤에만 경계 체크포인트를 DB에 투영한다.
+원문·모델 응답·최근 대화·전체 SessionState·error pending write는 저장하지 않는다.
+고정 크기 경계 JSON만 허용하고, 전체 대화 길이만큼 checkpoint history를 쌓지 않는다.
+
+DB 학습 상태가 최종 기준이다. 커서가 누락·손상·지연되면 확정된 DB 상태에서 다시
+WAIT/END를 만든다. 저장 후 응답 재전송에는 해당 응답의 원래 결과를 반환하고,
+별노트·완료·outbox를 부모 END에서 다시 실행하지 않는다. 이전 writer는 DB state_version과
+커서 generation으로 차단한다. 세션 완료 판정·과제 전환은 계속 기존 교육 엔진 소유다.
+
+부모 기능은 기존 V2 canary와 독립적인 두 설정으로 제어한다. 기본은 비활성/0%이며,
+활성화·DB migration·PostgreSQL 다중 프로세스 검증과 롤백 절차는
+`docs/SESSION_PARENT_ROLLOUT.md`를 따른다. 이 변경은 BE/FE API, 리포트·발화사다리
+분석 모델 입력, 교육 정책·프롬프트·콘텐츠·LLM 호출 예산을 바꾸지 않는다.
 
 V2 자유 발화는 Sonnet Low가 현재 모르미 질문, 요청 중인 answer/reason target,
 현재 L/H, 화면에 공개된 사실과 최근 6턴을 함께 보고 한 번에 구조화한다. Sonnet 응답은

@@ -43,6 +43,7 @@ from .llm import ClaudeGateway, ModelOutputError, ModelUnavailableError
 from .migrations import (
     SCENARIO_IDENTITY_READER_CAPABILITY,
     require_observation_schema,
+    require_session_parent_schema,
 )
 from .outbox import OutboxDispatcher, OutboxStore
 from .reporting import validate_report_summary, validate_speech_change_summary
@@ -173,6 +174,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         identity_schema_phase,
         dialogue_v2_canary_percent=settings.dialogue_v2_canary_percent,
     )
+    if settings.session_parent_graph_enabled:
+        async with database.engine.connect() as connection:
+            await connection.run_sync(require_session_parent_schema)
     raw_retention_stop = asyncio.Event()
     raw_retention_task: asyncio.Task[None] | None = None
     if not settings.skip_startup_maintenance:
@@ -231,6 +235,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         runtime_contract_version=settings.runtime_contract_version,
         dialogue_v2_canary_percent=settings.dialogue_v2_canary_percent,
         dialogue_v2_canary_salt=settings.dialogue_v2_canary_salt,
+        session_parent_graph_enabled=settings.session_parent_graph_enabled,
+        session_parent_graph_canary_percent=settings.session_parent_graph_canary_percent,
+        session_parent_store_timeout_seconds=settings.session_parent_store_timeout_seconds,
     )
     ladder_store = LadderAnalysisRepository(
         database, lease_seconds=settings.ladder_analysis_lease_seconds
