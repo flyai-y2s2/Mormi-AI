@@ -393,28 +393,28 @@ jobs:
 
           configure_star_note_delivery() {
             local image="$1"
-            local backend_ingest_key
+            local service_api_key
 
-            if ! docker ps --format '{{.Names}}' | grep -q '^mormi-backend$'; then
-              echo "mormi-backend must be running before star-note delivery is enabled"
+            if ! docker ps --format '{{.Names}}' | grep -q '^mormi-ai$'; then
+              echo "the current mormi-ai container is required to reuse its service key"
               exit 1
             fi
-            backend_ingest_key="$(docker inspect mormi-backend \
+            service_api_key="$(docker inspect mormi-ai \
               --format '{{range .Config.Env}}{{println .}}{{end}}' \
-              | awk -F= '$1 == "MORMI_OBSERVATION_INGEST_KEY" {sub(/^[^=]*=/, ""); print; exit}')"
-            if [ -z "${backend_ingest_key}" ]; then
-              echo "mormi-backend has no observation ingest key"
+              | awk -F= '$1 == "MORMI_SERVICE_API_KEY" {sub(/^[^=]*=/, ""); print; exit}')"
+            if [ -z "${service_api_key}" ]; then
+              echo "the current mormi-ai container has no service API key"
               exit 1
             fi
 
             persist_mormi_env \
               "${image}" \
               MORMI_OBSERVATION_INGEST_URL \
-              http://mormi-backend:8080/internal/v1/observations/events
+              https://iamssam.vercel.app/api/be/internal/v1/observations/events
             persist_mormi_env \
               "${image}" \
               MORMI_OBSERVATION_INGEST_KEY \
-              "${backend_ingest_key}"
+              "${service_api_key}"
             persist_mormi_env \
               "${image}" \
               MORMI_STAR_NOTE_EVENTS_ENABLED \
