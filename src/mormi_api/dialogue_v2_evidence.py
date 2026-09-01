@@ -13,6 +13,7 @@ from .schemas import (
     RelationUnderstandingClaimV2,
     UnderstandingRequestV2,
     UnderstandingResponseV2,
+    UnderstandingUiReferenceV2,
 )
 
 
@@ -163,6 +164,26 @@ def _literal_evidence_match(
     return None
 
 
+def _admitted_ui_reference(
+    request: UnderstandingRequestV2,
+    response: UnderstandingResponseV2,
+) -> UnderstandingUiReferenceV2 | None:
+    """Fail soft on an ungrounded UI reference without touching valid claims."""
+
+    reference = response.ui_reference
+    if reference is None:
+        return None
+    visible_ids = {element.element_id for element in request.visible_ui_elements}
+    if reference.element_id not in visible_ids:
+        return None
+    if _literal_evidence_match(
+        request.child_utterance,
+        reference.evidence_span,
+    ) is None:
+        return None
+    return reference.model_copy(deep=True)
+
+
 def guard_understanding_response_v2(
     request: UnderstandingRequestV2,
     response: UnderstandingResponseV2,
@@ -250,7 +271,10 @@ def guard_understanding_response_v2(
         raise UnderstandingEvidenceGuardError(violations)
 
     return GuardedUnderstandingV2(
-        response=response.model_copy(deep=True),
+        response=response.model_copy(
+            update={"ui_reference": _admitted_ui_reference(request, response)},
+            deep=True,
+        ),
         evidence_matches=evidence_matches,
     )
 
@@ -347,6 +371,7 @@ def admit_understanding_response_v2(
         update={
             "claims": accepted_claims,
             "contains_learning_evidence": bool(accepted_claims),
+            "ui_reference": _admitted_ui_reference(request, response),
         },
         deep=True,
     )

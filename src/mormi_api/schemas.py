@@ -740,6 +740,31 @@ class ConversationMoveV2(StrEnum):
     SAFE_PLAY = "safe_play"
 
 
+class UiElementKindV2(StrEnum):
+    """Server-authored UI element observable by the understanding model."""
+
+    HELP_CARD = "help_card"
+
+
+class UiReferenceInteractionV2(StrEnum):
+    """Non-pedagogical meaning of a child's reference to visible UI."""
+
+    ASKS_WHY = "asks_why"
+    ASKS_WHAT_NEXT = "asks_what_next"
+    EXPRESSES_CONFUSION = "expresses_confusion"
+    CHALLENGES = "challenges"
+    OTHER = "other"
+    UNCERTAIN = "uncertain"
+
+
+class UiReferenceBasisV2(StrEnum):
+    """How the child pointed at UI, independently from any learning claim."""
+
+    DIRECT = "direct"
+    DEICTIC = "deictic"
+    CONTENT_ECHO = "content_echo"
+
+
 class MoveSubjectV2(StrEnum):
     """Small subject vocabulary needed to plan a natural conversational reply."""
 
@@ -1036,6 +1061,40 @@ class UnderstandingTurnContextV2(DialogueV2Model):
         return self
 
 
+class UnderstandingVisibleUiElementV2(DialogueV2Model):
+    """Read-only UI prose for grounding child references in Sonnet.
+
+    This contract never crosses the Mormi speaker boundary.  It tells the
+    understanding model what the child could read before replying, without
+    turning the UI into learning evidence.
+    """
+
+    element_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$", max_length=120)
+    kind: UiElementKindV2
+    text: str = Field(min_length=1, max_length=300)
+    hint_level: HintLevel | None = None
+
+    @model_validator(mode="after")
+    def help_card_requires_hint_level(self) -> UnderstandingVisibleUiElementV2:
+        if self.kind is UiElementKindV2.HELP_CARD and self.hint_level not in {
+            HintLevel.H1,
+            HintLevel.H2,
+            HintLevel.H3,
+        }:
+            raise ValueError("a visible help card requires an H1-H3 hint level")
+        return self
+
+
+class UnderstandingUiReferenceV2(DialogueV2Model):
+    """Grounded UI discourse, never a fact or relation claim."""
+
+    element_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$", max_length=120)
+    interaction: UiReferenceInteractionV2
+    reference_basis: UiReferenceBasisV2
+    evidence_span: str = Field(min_length=1, max_length=300)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
 class UnderstandingRequestV2(DialogueV2Model):
     """Bounded, server-owned input for the V2 semantic understanding pass."""
 
@@ -1048,6 +1107,10 @@ class UnderstandingRequestV2(DialogueV2Model):
     targets: list[UnderstandingTargetV2] = Field(min_length=1, max_length=20)
     claimable_graph: ClaimableGraphContextV2
     current_turn: UnderstandingTurnContextV2
+    visible_ui_elements: list[UnderstandingVisibleUiElementV2] = Field(
+        default_factory=list,
+        max_length=8,
+    )
     recent_history: list[DialogueHistoryTurn] = Field(default_factory=list, max_length=6)
     child_utterance: str = Field(min_length=1, max_length=300)
     # Populated only for the single contract-repair retry.  Codes contain no
@@ -1075,6 +1138,9 @@ class UnderstandingRequestV2(DialogueV2Model):
         }
         if visible_context_ids != set(self.visible_facts):
             raise ValueError("visible fact contexts must match visible_facts")
+        ui_element_ids = [element.element_id for element in self.visible_ui_elements]
+        if len(ui_element_ids) != len(set(ui_element_ids)):
+            raise ValueError("visible UI element ids must be unique")
         for target in self.targets:
             if target.target_kind == "fact" and target.target_id not in fact_ids:
                 raise ValueError("fact target must exist in claimable_graph.fact_ids")
@@ -1118,6 +1184,9 @@ class UnderstandingResponseV2(DialogueV2Model):
     move_subject: MoveSubjectV2 = MoveSubjectV2.OTHER
     question_focus: QuestionFocusV2 | None = None
     support_need: SupportNeed = SupportNeed.NONE
+    # This axis describes what the child referred to on screen.  It cannot
+    # satisfy a graph target or mutate the reasoning ledger on its own.
+    ui_reference: UnderstandingUiReferenceV2 | None = None
     non_learning_kind: NonLearningKindV2 | None = None
     contains_learning_evidence: bool = False
     answer_status: AnswerStatusV2 = AnswerStatusV2.NOT_APPLICABLE
@@ -1195,6 +1264,20 @@ class ModelAuxiliaryUnderstandingClaimV2(DialogueV2Model):
     confidence: float | None
 
 
+class ModelUnderstandingUiReferenceV2(DialogueV2Model):
+    element_id: str
+    interaction: Literal[
+        "asks_why",
+        "asks_what_next",
+        "expresses_confusion",
+        "challenges",
+        "other",
+        "uncertain",
+    ]
+    reference_basis: Literal["direct", "deictic", "content_echo"]
+    evidence_span: str
+
+
 class ModelUnderstandingResponseV2(DialogueV2Model):
     """Small JSON grammar compiled by Anthropic, converted to the internal contract."""
 
@@ -1203,6 +1286,7 @@ class ModelUnderstandingResponseV2(DialogueV2Model):
     move_subject: MoveSubjectV2 = MoveSubjectV2.OTHER
     question_focus: QuestionFocusV2 | None
     support_need: SupportNeed
+    ui_reference: ModelUnderstandingUiReferenceV2 | None = None
     non_learning_kind: NonLearningKindV2 | None
     contains_learning_evidence: bool
     answer_status: AnswerStatusV2

@@ -8,7 +8,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .schemas import CanonicalValueV2, ExpressionLevel, HintLevel, MoneyValueV2, NumberValueV2
+from .schemas import (
+    CanonicalValueV2,
+    ExpressionLevel,
+    HintLevel,
+    MoneyValueV2,
+    NumberValueV2,
+    UiReferenceInteractionV2,
+)
 
 _ID_PATTERN = r"^[a-z][a-z0-9_.-]*$"
 _REFERENCE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
@@ -339,6 +346,14 @@ class ConversationResponsePlanV2(DialogueV2SpeakerModel):
         return self
 
 
+class SpeakerUiReferenceSignalV2(DialogueV2SpeakerModel):
+    """Minimal UI event for natural reaction, with no card prose or math."""
+
+    referenced_kind: Literal["help_card"] = "help_card"
+    interaction: UiReferenceInteractionV2
+    card_event: HelpCardEventV2 = "none"
+
+
 class SpeakerResponseSignalV2(DialogueV2SpeakerModel):
     """Raw-free turn meaning used to make the response conversational.
 
@@ -361,6 +376,7 @@ class SpeakerResponseSignalV2(DialogueV2SpeakerModel):
     new_fact_ids: list[str] = Field(default_factory=list, max_length=8)
     new_relation_ids: list[str] = Field(default_factory=list, max_length=8)
     repeat_count: int = Field(default=0, ge=0, le=100)
+    ui_reference: SpeakerUiReferenceSignalV2 | None = None
 
     @model_validator(mode="after")
     def ids_are_unique_and_incorrect_ids_were_attempted(self) -> SpeakerResponseSignalV2:
@@ -427,6 +443,15 @@ class SpeakerPlanV2(DialogueV2SpeakerModel):
             raise ValueError("speaker target focus entries must be unique")
         if set(focus_keys) != set(target_keys):
             raise ValueError("speaker target focus must describe every unresolved target")
+        ui_reference = self.response_signal.ui_reference
+        if ui_reference is not None:
+            if not self.support.help_card_visible:
+                raise ValueError("a help-card UI reference requires a visible card")
+            if (
+                ui_reference.card_event == "opened_or_strengthened"
+                and self.support.hint_level is HintLevel.H0
+            ):
+                raise ValueError("a help-card event requires an active hint level")
         if self.response_plan is not None:
             response_target_keys = {
                 (item.target_kind, item.target_id)

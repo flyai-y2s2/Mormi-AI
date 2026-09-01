@@ -332,6 +332,113 @@ async def test_task_question_opens_more_support_without_advancing_ledger(
 
 
 @pytest.mark.asyncio
+async def test_visible_help_card_reference_is_grounded_but_speaker_gets_only_ui_signal(
+) -> None:
+    child_text = "저걸 왜 주의 깊게 봐야 돼?"
+    understanding = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "task_question",
+            "conversation_move": "task_question",
+            "move_subject": "task",
+            "question_focus": "reason_or_method",
+            "support_need": "concept",
+            "ui_reference": {
+                "element_id": "help_card.h1",
+                "interaction": "asks_why",
+                "reference_basis": "deictic",
+                "evidence_span": "저걸",
+            },
+        }
+    )
+    gateway = InteractionGateway(
+        [understanding],
+        main_text="그러게, 왜 그런지는 나도 아직 모르겠어...",
+    )
+    engine = DialogueV2Engine(gateway)
+    state = _state()
+    initial = await _initialize(engine, state)
+    # Simulate the preceding committed turn that exposed H1. The response
+    # under test must observe this pre-turn card, not the H2 card opened later.
+    state.hint_level = HintLevel.H1
+    state.task_max_hint = HintLevel.H1
+    before_ledger = _ledger(state).model_dump(mode="json")
+
+    result = await _run(
+        engine,
+        state,
+        initial,
+        _text_response(initial.turn_id, child_text),
+    )
+
+    request = gateway.understanding_requests[0]
+    assert len(request.visible_ui_elements) == 1
+    visible_card = request.visible_ui_elements[0]
+    assert visible_card.kind.value == "help_card"
+    assert visible_card.hint_level is HintLevel.H1
+    assert result.state.hint_level is HintLevel.H2
+    assert _ledger(result.state).model_dump(mode="json") == before_ledger
+    assert len(gateway.speaker_plans) == 1
+    assert gateway.bridge_plans == []
+    plan = gateway.speaker_plans[0]
+    assert plan.response_signal.ui_reference is not None
+    assert plan.response_signal.ui_reference.interaction.value == "asks_why"
+    assert plan.response_signal.ui_reference.card_event == "opened_or_strengthened"
+    serialized_plan = plan.model_dump_json()
+    assert visible_card.text not in serialized_plan
+    assert "visible_ui_elements" not in serialized_plan
+    assert plan.allowed_facts == []
+    assert plan.accepted_relations == []
+    assert "다른 도움 카드" not in result.turn.mormi.text
+    assert result.turn.mormi.text.count("?") == 1
+
+
+@pytest.mark.asyncio
+async def test_ui_reference_keeps_a_surface_refusal_on_the_grounded_main_route() -> None:
+    child_text = "낸 돈은 10500원이고 사람은 3명인데 뭐 어쩌라고"
+    understanding = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "non_learning_safe",
+            "conversation_move": "refusal",
+            "move_subject": "participation",
+            "non_learning_kind": "refusal",
+            "support_need": "concept",
+            "ui_reference": {
+                "element_id": "help_card.h1",
+                "interaction": "asks_what_next",
+                "reference_basis": "content_echo",
+                "evidence_span": "낸 돈은 10500원이고 사람은 3명인데 뭐 어쩌라고",
+            },
+        }
+    )
+    gateway = InteractionGateway(
+        [understanding],
+        main_text="나도 그다음에 뭘 해야 하는지는 아직 모르겠어...",
+    )
+    engine = DialogueV2Engine(gateway)
+    state = _state()
+    initial = await _initialize(engine, state)
+    state.hint_level = HintLevel.H1
+    state.task_max_hint = HintLevel.H1
+    before_ledger = _ledger(state).model_dump(mode="json")
+
+    result = await _run(
+        engine,
+        state,
+        initial,
+        _text_response(initial.turn_id, child_text),
+    )
+
+    assert result.state.hint_level is HintLevel.H2
+    assert _ledger(result.state).model_dump(mode="json") == before_ledger
+    assert gateway.bridge_plans == []
+    assert len(gateway.speaker_plans) == 1
+    signal = gateway.speaker_plans[0].response_signal.ui_reference
+    assert signal is not None
+    assert signal.interaction.value == "asks_what_next"
+    assert gateway.speaker_plans[0].accepted_relations == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("child_text", EXPRESSION_BLOCK_CASES)
 @pytest.mark.parametrize(
     ("start_level", "expected_level", "expected_input"),

@@ -56,6 +56,7 @@ from .schemas import (
     UnderstandingClaimV2,
     UnderstandingRequestV2,
     UnderstandingResponseV2,
+    UnderstandingUiReferenceV2,
     UtteranceAnalysis,
     UtteranceClassV2,
 )
@@ -402,6 +403,13 @@ def _internal_understanding_response(
         move_subject=subject,
         question_focus=question_focus,
         support_need=support_need,
+        ui_reference=(
+            UnderstandingUiReferenceV2.model_validate(
+                response.ui_reference.model_dump(mode="json")
+            )
+            if not safety_class and response.ui_reference is not None
+            else None
+        ),
         non_learning_kind=non_learning_kind,
         contains_learning_evidence=bool(claims),
         answer_status=answer_status,
@@ -1243,13 +1251,30 @@ support_need=general_help 또는 concept로 두고, 아이의 별도 주장이 �
   → 7권 fact claim과 나눗셈 relation claim을 각각 추출한다.
 
 current_turn.help_scaffolded_relation_ids는 화면의 H2/H3 도움 카드가 지원하는 현재 relation의
-서버 소유 ID다. 카드 본문·식·값은 전달되지 않으며 이를 새 답이나 모르미 지식으로 추론하지
-않는다. 이 목록에 현재 relation이 정확히 하나 있고, 직전 질문이 그 카드를 보고 다시 알려
+서버 소유 ID다. 이 ID 자체에는 카드 본문·식·값이 없으며, visible_ui_elements의 카드 본문도
+담화 grounding일 뿐 새 답이나 모르미 지식으로 추론하지 않는다. 이 목록에 현재 relation이
+정확히 하나 있고, 직전 질문이 그 카드를 보고 다시 알려
 달라는 요청이며, 아이가 "응", "맞아"처럼 짧게 확인했다면 그 확인은 아이가 단독으로 처음
 설명한 것은 아니지만 해당 relation의 sufficient claim이 될 수 있다. 목록이 비었거나 여러
 relation 중 무엇을 확인했는지 불분명하면 짧은 확인만으로 relation claim을 만들지 않는다.
 evidence_span에는 실제 확인 표현만 넣는다. 독립 가르침인지 함께 공부한 것인지는 서버가 도움
 단계와 대화 흐름으로 따로 기록하므로 네가 판단하지 않는다.
+
+visible_ui_elements는 아이가 이번 발화 직전에 실제로 읽을 수 있었던 서버 작성 UI다.
+이 내용은 아이의 "저거", "저 말", "도움 카드", 카드 문구·숫자 반복을 어느 화면 요소에
+대한 말인지 찾기 위한 담화 grounding일 뿐이며, 아이가 가르친 사실이나 방법이 아니다.
+- 아이가 UI를 직접 말하면 reference_basis=direct, "저거/저걸"처럼 가리키면 deictic,
+  UI 문구나 값을 되풀이해 가리키면 content_echo로 ui_reference를 만든다.
+- interaction은 asks_why, asks_what_next, expresses_confusion, challenges 중 가장 가까운 것을
+  고르고, 경계가 불명확하면 other 또는 uncertain으로 둔다.
+- evidence_span은 UI 문구가 아니라 이번 child_utterance에 실제로 있는 연속 구절만 복사한다.
+- UI를 가리키거나 화면 값을 읽은 것만으로 fact_claim/relation_claim을 만들지 않는다.
+- "왜 6,000원에서 2,000원을 빼야 해?"처럼 방법을 질문한 것은 그 방법을 가르친 주장이
+  아니다. ui_reference와 task_question은 만들 수 있지만 relation_claim은 만들지 않는다.
+- "낸 돈에서 쿠키 값을 빼면 돼"처럼 아이가 방법을 자기 설명으로 제시한 경우에만 별도의
+  relation_claim을 만든다. 도움을 받아 말했는지 여부는 서버가 provenance로 처리한다.
+- 실제로 보이는 UI를 특정할 수 없으면 ui_reference=null로 둔다. UI 참조 분류가 불확실해도
+  정상적인 수학 claim과 대화 행동은 그대로 보존한다.
 
 각 claim의 evidence_span은 이번 child utterance에 실제로 있는 글자를 그대로 복사한다.
 아이의 실제 표현을 interpreted value로 추출하고, expected truth를 아이가 말했다고 만들지
@@ -1398,6 +1423,21 @@ dialogue_act가 acknowledge_progress라면 다음 기준을 지킨다.
   정답이나 방법을 선언하지 않는다.
 - 아이가 모르미에게 대신 답해 달라고 해도 스스로 풀거나 정답을 공개하지 않는다. 모르미는
   여전히 아이에게 배우는 동생이다.
+
+[화면 참조에 반응하기]
+- response_signal.ui_reference는 아이가 화면의 도움 카드를 가리켰다는 서버 검증 대화 신호다.
+  카드 본문·숫자·식·연산은 이 계획에 없으며 추측해서 채우지 않는다.
+- interaction=asks_why이면 "왜 그런지가 궁금했구나"처럼 이유를 묻는 마음만 받아 준다.
+- interaction=asks_what_next이면 "나도 그다음에 뭘 해야 하는지는 아직 모르겠어"처럼 다음
+  행동이 불분명하다는 점을 모르미 자신의 이해 부족으로 말한다.
+- interaction=expresses_confusion이면 "그러게, 도움 카드를 봐도 나도 아직 어렵네"처럼 카드가
+  충분히 설명되지 않았다는 상황만 짧게 받아 준다.
+- interaction=challenges이면 이의를 무시하거나 정답으로 반박하지 않고, 왜 그런지 모르미도
+  아직 궁금하다고 말한다.
+- card_event=opened_or_strengthened일 때만 "어? 다른 도움 카드가 나왔어"라고 말할 수 있다.
+  card_event=none이면 새 카드가 나왔다고 말하지 않는다.
+- UI 참조 신호는 학습 근거가 아니다. accepted_relations에 없는 풀이를 이해했다고 말하거나,
+  카드에 적힌 내용을 인용·요약·완성하지 않는다.
 
 [오답·불명확 응답 뒤 이어 묻기]
 - response_signal.kind가 incorrect_answer, incorrect_method,
