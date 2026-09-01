@@ -24,8 +24,7 @@ from .dialogue_v2_copy import (
 )
 from .dialogue_v2_evidence import (
     GuardedUnderstandingV2,
-    UnderstandingEvidenceGuardError,
-    guard_understanding_response_v2,
+    admit_understanding_response_v2,
 )
 from .dialogue_v2_ledger import (
     PinnedContentSnapshotV2,
@@ -249,6 +248,10 @@ class _UnderstandingAttemptContext:
     response: ChildResponse
     request: UnderstandingRequestV2
     started: float
+    # Claims that already crossed the provenance boundary are immutable across
+    # the repair attempt.  A later malformed relation must never erase a valid
+    # answer fact from the same child turn.
+    admitted: GuardedUnderstandingV2 | None = None
 
 
 @dataclass(slots=True)
@@ -903,12 +906,14 @@ class DialogueV2Engine:
     async def _understand_attempt(
         self, context: _UnderstandingAttemptContext, attempt: int,
     ) -> _TurnSemantics | None:
-        state, snapshot, ledger = context.state, context.snapshot, context.ledger
-        response, request, started = context.response, context.request, context.started
+        snapshot, ledger = context.snapshot, context.ledger
+        request, started = context.request, context.started
         try:
             async with asyncio.timeout(self.classifier_timeout_seconds):
                 candidate = await self.gateway.understand_v2(request)
         except TimeoutError:
+            if context.admitted is not None:
+                return self._admitted_understanding_semantics(context, attempt)
             return self._understanding_failure_semantics(
                 snapshot,
                 ledger,
@@ -917,6 +922,8 @@ class DialogueV2Engine:
                 reason="understanding_timeout",
             )
         except ModelUnavailableError:
+            if context.admitted is not None:
+                return self._admitted_understanding_semantics(context, attempt)
             return self._understanding_failure_semantics(
                 snapshot,
                 ledger,
@@ -925,6 +932,8 @@ class DialogueV2Engine:
                 reason="understanding_model_unavailable",
             )
         except ModelOutputError:
+            if context.admitted is not None:
+                return self._admitted_understanding_semantics(context, attempt)
             return self._understanding_failure_semantics(
                 snapshot,
                 ledger,
@@ -933,7 +942,7 @@ class DialogueV2Engine:
                 reason="understanding_model_output_invalid",
             )
         route = self._route_for_understanding(candidate)
-        if route in {"bridge", "safety"}:
+        if route in {"bridge", "safety"} and context.admitted is None:
             # Pure social turns and safety redirects do not mutate the
             # reasoning ledger. Mixed safe-social + learning turns are
             # routed through the main path below, where their literal
@@ -948,17 +957,78 @@ class DialogueV2Engine:
                 latency_ms=_elapsed_ms(started),
                 guard_status="not_applicable",
             )
-        try:
-            guarded = guard_understanding_response_v2(request, candidate)
-        except UnderstandingEvidenceGuardError as error:
+        admission = admit_understanding_response_v2(request, candidate)
+        guarded = self._merge_admitted_understanding(context.admitted, admission.guarded)
+        if admission.needs_repair and attempt == 1:
+            context.admitted = guarded if guarded.response.claims else None
             context.request = request.model_copy(
                 update={
                     "guard_feedback_codes": [
-                        violation.code.value for violation in error.violations
+                        violation.code.value
+                        for violation in admission.quarantined_claims
                     ]
                 }
             )
             return None
+        if not guarded.response.claims and admission.needs_repair:
+            return self._understanding_failure_semantics(
+                snapshot,
+                ledger,
+                attempts=attempt,
+                started=started,
+                reason="understanding_evidence_guard_failed",
+            )
+        context.admitted = guarded
+        return self._admitted_understanding_semantics(context, attempt)
+
+    @staticmethod
+    def _merge_admitted_understanding(
+        existing: GuardedUnderstandingV2 | None,
+        current: GuardedUnderstandingV2,
+    ) -> GuardedUnderstandingV2:
+        """Monotonically merge independently admitted claims across repair."""
+
+        if existing is None:
+            return current
+        claims_by_id = {claim.claim_id: claim for claim in existing.response.claims}
+        matches_by_id = {match.claim_id: match for match in existing.evidence_matches}
+        for claim in current.response.claims:
+            prior = claims_by_id.get(claim.claim_id)
+            if prior is None:
+                claims_by_id[claim.claim_id] = claim
+            elif prior != claim:
+                # An already admitted claim is immutable.  A provider repair
+                # may repeat it, but cannot revise its target, verdict, or
+                # evidence after it crossed the first boundary.
+                continue
+        for match in current.evidence_matches:
+            matches_by_id.setdefault(match.claim_id, match)
+        merged_claims = list(claims_by_id.values())
+        base = existing.response
+        return GuardedUnderstandingV2(
+            response=base.model_copy(
+                update={
+                    "claims": merged_claims,
+                    "contains_learning_evidence": bool(merged_claims),
+                },
+                deep=True,
+            ),
+            evidence_matches=[
+                matches_by_id[claim.claim_id] for claim in merged_claims
+            ],
+        )
+
+    def _admitted_understanding_semantics(
+        self,
+        context: _UnderstandingAttemptContext,
+        attempt: int,
+    ) -> _TurnSemantics:
+        """Apply only claim-level admitted progress after a bounded repair."""
+
+        state, snapshot, ledger = context.state, context.snapshot, context.ledger
+        response = context.response
+        guarded = context.admitted
+        assert guarded is not None
         result = apply_guarded_understanding_v2(
             snapshot,
             ledger,
@@ -971,6 +1041,11 @@ class DialogueV2Engine:
             and guarded.response.support_need is SupportNeed.GENERAL_HELP
             and guarded.response.conversation_move is ConversationMoveV2.NONE
         )
+        route = self._route_for_understanding(guarded.response)
+        if route in {"bridge", "safety"} and guarded.response.claims:
+            # Learning evidence that survived admission remains authoritative;
+            # a mixed social axis cannot divert it away from ledger progress.
+            route = "main"
         return _TurnSemantics(
             response=guarded.response,
             apply_result=result,
@@ -982,12 +1057,14 @@ class DialogueV2Engine:
             ),
             understanding_source="sonnet_low",
             attempts=attempt,
-            latency_ms=_elapsed_ms(started),
+            latency_ms=_elapsed_ms(context.started),
             guard_status="passed" if attempt == 1 else "retry_passed",
             initial_help=initial_help,
         )
 
     def _understanding_exhausted(self, context: _UnderstandingAttemptContext) -> _TurnSemantics:
+        if context.admitted is not None:
+            return self._admitted_understanding_semantics(context, 2)
         return self._understanding_failure_semantics(
             context.snapshot, context.ledger, attempts=2, started=context.started,
             reason="understanding_evidence_guard_failed",
@@ -1920,53 +1997,78 @@ class DialogueV2Engine:
             question,
             before_hint=before_hint,
         )
-        private_support_route = response_plan.response_mode != "normal"
-        target_aliases: dict[tuple[str, str], str] = {
-            (target.target_kind, target.target_id): focus.target_id
-            for target, focus in zip(
-                question.targets,
-                response_plan.reask_targets,
-                strict=True,
+        # A fact-only turn is a finite, reviewed transition.  Calling a free
+        # speaker here would give the model enough adjacent screen values to
+        # reverse-engineer the still-unverified method.  A server-owned
+        # acknowledgement preserves natural turn-taking without granting any
+        # new mathematical authority or paying for a redundant model call.
+        if (
+            semantics.apply_result.delta.progress_kind.value == "answer_only"
+            and semantics.response.conversation_move is ConversationMoveV2.NONE
+        ):
+            reaction = self._reviewed_fact_acknowledgement(
+                pack,
+                semantics.apply_result.new_fact_ids,
             )
-        }
+            return (
+                self._compose_reaction_and_reask(
+                    reaction,
+                    self._safe_reask_text(response_plan),
+                ),
+                "curious",
+                "reviewed_fallback",
+                None,
+            )
+        progress_aliases = self._speaker_progress_aliases(semantics)
+        allowed_facts = self._allowed_facts(
+            pack,
+            semantics.apply_result.ledger,
+            question.targets,
+            include_screen=False,
+        )
+        allowed_facts = [
+            fact.model_copy(
+                update={
+                    "fact_id": progress_aliases.get(
+                        ("fact", fact.fact_id),
+                        "fact_0",
+                    )
+                }
+            )
+            for fact in allowed_facts
+            if fact.fact_id in semantics.apply_result.new_fact_ids
+        ]
         plan = SpeakerPlanV2(
-            dialogue_act=self._dialogue_act(semantics),
+            dialogue_act=self._reaction_dialogue_act(semantics),
             response_signal=self._speaker_response_signal(
                 semantics,
                 question.targets,
                 repeat_count=state.concept_failures,
-                target_aliases=target_aliases,
+                target_aliases=progress_aliases,
             ),
             accepted_evidence=self._speaker_evidence(semantics),
             accepted_relations=self._speaker_accepted_relations(
                 state,
                 pack,
                 semantics,
+                target_aliases=progress_aliases,
             ),
-            target=self._speaker_target(question.targets, target_aliases=target_aliases),
-            target_focus=response_plan.reask_targets,
-            response_plan=response_plan,
+            # The main model owns reaction only.  Unresolved targets and the
+            # reviewed question live exclusively in the server-side
+            # ConversationResponsePlan used after generation.
+            target=SpeakerTargetV2(ask_mode="none"),
+            target_focus=[],
+            response_plan=None,
             support=SpeakerSupportV2(
                 expression_level=state.expression_level,
                 hint_level=state.hint_level,
                 support_need=semantics.response.support_need.value,
-                question_style_guide=self._question_style(state.expression_level),
+                question_style_guide="아이 말에 대한 짧은 반응 한 문장만 만든다.",
                 help_card_visible=state.hint_level is not HintLevel.H0,
             ),
-            allowed_facts=self._allowed_facts(
-                pack,
-                semantics.apply_result.ledger,
-                question.targets,
-                include_screen=not private_support_route,
-            ),
-            # The product UI renders only the latest Mormi turn.  The model
-            # therefore owns the conversational reaction, while the server
-            # owns the active target question on every non-completed turn.
-            # Keeping this target-only text out of model generation makes it
-            # impossible for a valid acknowledgement-only completion to make
-            # the learner's current question disappear.
-            current_question=self._safe_reask_text(response_plan),
-            previous_mormi_text=(None if private_support_route else previous_question),
+            allowed_facts=allowed_facts,
+            current_question=None,
+            previous_mormi_text=None,
             fallback_copy_ref=f"fallback.{state.subgoal_id}",
         )
         firewall = self._unresolved_answer_firewall(pack, question.targets)
@@ -1974,6 +2076,72 @@ class DialogueV2Engine:
         return await run_attempt_graph(
             self._speaker_graph, context, self._speak_attempt, self._speaker_exhausted,
         )
+
+    @staticmethod
+    def _speaker_progress_aliases(
+        semantics: _TurnSemantics,
+    ) -> dict[tuple[str, str], str]:
+        """Opaque every task identifier that crosses the reaction boundary."""
+
+        fact_ids = list(
+            dict.fromkeys(
+                [
+                    *semantics.apply_result.new_fact_ids,
+                    *(
+                        claim.fact_id
+                        for claim in semantics.response.claims
+                        if isinstance(claim, FactUnderstandingClaimV2)
+                    ),
+                ]
+            )
+        )
+        relation_ids = list(
+            dict.fromkeys(
+                [
+                    *semantics.apply_result.new_relation_ids,
+                    *(
+                        claim.relation_id
+                        for claim in semantics.response.claims
+                        if isinstance(claim, RelationUnderstandingClaimV2)
+                    ),
+                ]
+            )
+        )
+        return {
+            **{("fact", fact_id): f"fact_{index}" for index, fact_id in enumerate(fact_ids, 1)},
+            **{
+                ("relation", relation_id): f"relation_{index}"
+                for index, relation_id in enumerate(relation_ids, 1)
+            },
+        }
+
+    @staticmethod
+    def _reviewed_fact_acknowledgement(
+        pack: RequiredHomeTeachingPackV2,
+        fact_ids: list[str],
+    ) -> str:
+        facts = {fact.fact_id: fact for fact in pack.reasoning_graph.facts}
+        surfaces: list[str] = []
+        for fact_id in fact_ids:
+            fact = facts[fact_id]
+            if fact.accepted_surface_forms:
+                surfaces.append(fact.accepted_surface_forms[0])
+            else:
+                value = fact.value
+                if value.type == "money":
+                    surfaces.append(f"{value.amount:,}원")
+                elif value.type == "number":
+                    rendered = f"{value.value:g}"
+                    surfaces.append(f"{rendered}{value.unit or ''}")
+                elif value.type == "text":
+                    surfaces.append(value.text)
+                elif value.type == "boolean":
+                    surfaces.append("그렇다" if value.value else "아니다")
+                else:
+                    surfaces.append(value.choice_id)
+        if len(surfaces) == 1:
+            return f"아, {surfaces[0]}이구나~"
+        return f"아, 알려 준 값은 {', '.join(surfaces)}이구나~"
 
     async def _speak_attempt(
         self, context: _SpeakerAttemptContext, attempt: int,
@@ -2042,27 +2210,17 @@ class DialogueV2Engine:
             question,
             before_hint=before_hint,
         )
-        target_aliases: dict[tuple[str, str], str] = {
-            (target.target_kind, target.target_id): focus.target_id
-            for target, focus in zip(
-                question.targets,
-                response_plan.reask_targets,
-                strict=True,
-            )
-        }
         plan = BridgePlanV2(
             interaction_kind=kind,  # type: ignore[arg-type]
+            reaction_mode=response_plan.response_mode,
             safe_child_excerpt=pii_safe_bridge_excerpt_v2(
                 child_text,
                 interaction_kind=kind,  # type: ignore[arg-type]
             ),
-            current_question=self._safe_reask_text(response_plan),
-            target=self._speaker_target(
-                question.targets,
-                target_aliases=target_aliases,
-            ),
-            target_focus=response_plan.reask_targets,
-            response_plan=response_plan,
+            current_question=None,
+            target=SpeakerTargetV2(ask_mode="none"),
+            target_focus=[],
+            response_plan=None,
             # Pure social turns need no mathematical context. Keeping even
             # visible givens out prevents Haiku from solving the task from the
             # screen instead of asking the child to teach Mormi.
@@ -2370,6 +2528,8 @@ class DialogueV2Engine:
         state: SessionState,
         pack: RequiredHomeTeachingPackV2,
         semantics: _TurnSemantics,
+        *,
+        target_aliases: dict[tuple[str, str], str] | None = None,
     ) -> list[SpeakerAcceptedRelationV2]:
         relation_labels = {
             relation.relation_id: relation.speaker_label
@@ -2383,7 +2543,10 @@ class DialogueV2Engine:
             )
         return [
             SpeakerAcceptedRelationV2(
-                relation_id=relation_id,
+                relation_id=(target_aliases or {}).get(
+                    ("relation", relation_id),
+                    relation_id,
+                ),
                 speaker_label=relation_labels[relation_id],
                 source=(
                     "jointly_derived"
@@ -2579,6 +2742,21 @@ class DialogueV2Engine:
             ExpressionLevel.L1: "화면의 검수된 선택지에서 골라 알려 달라고 부탁한다.",
             ExpressionLevel.L0: "도움 카드를 보며 공동 수행을 부탁한다.",
         }[level]
+
+    @staticmethod
+    def _reaction_dialogue_act(semantics: _TurnSemantics) -> str:
+        """Model-facing act with no question-generation authority."""
+
+        if semantics.apply_result.has_new_canonical_progress:
+            return "acknowledge_progress"
+        if semantics.structured_correct is False or any(
+            getattr(claim, "verdict", None) == "incorrect"
+            for claim in semantics.response.claims
+        ):
+            return "acknowledge_confusion"
+        if semantics.response.support_need is not SupportNeed.NONE:
+            return "acknowledge_support_need"
+        return "acknowledge_uncertainty"
 
     @staticmethod
     def _dialogue_act(semantics: _TurnSemantics) -> str:

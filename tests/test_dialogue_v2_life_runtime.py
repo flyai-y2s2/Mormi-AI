@@ -68,14 +68,14 @@ class LifeRuntimeGateway:
     async def speak_v2(self, plan: SpeakerPlanV2) -> SpeakerOutputV2:
         self.speaker_plans.append(plan)
         return SpeakerOutputV2(
-            text="아, 그렇게 이어지는구나~ 남은 것도 알려줄 수 있어?",
+            text="아, 그렇게 이어지는구나~",
             mood="curious",
         )
 
     async def bridge_speak_v2(self, plan: BridgePlanV2) -> SpeakerOutputV2:
         del plan
         return SpeakerOutputV2(
-            text="나는 아직 이 문제가 궁금해... 다시 알려줄 수 있어?",
+            text="나는 아직 이 문제가 궁금해...",
             mood="curious",
         )
 
@@ -419,9 +419,8 @@ async def test_life_reverse_question_keeps_speaker_when_ladder_enters_l0() -> No
     assert result.runtime.speaker_source == "llm"
     assert len(gateway.speaker_plans) == 1
     assert result.turn.input.kind is InputKind.JOINT
-    assert result.turn.mormi.text.endswith(
-        gateway.speaker_plans[0].current_question or ""
-    )
+    assert gateway.speaker_plans[0].current_question is None
+    assert result.turn.mormi.text.count("?") == 1
 
 
 async def _finish_through_structured_route(

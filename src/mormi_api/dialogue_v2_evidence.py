@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 from enum import StrEnum
 
@@ -27,6 +28,31 @@ class EvidenceGuardViolationCodeV2(StrEnum):
     UNKNOWN_RELATION_ID = "unknown_relation_id"
     AUXILIARY_CLAIMS_DISABLED = "auxiliary_claims_disabled"
     EVIDENCE_NOT_LITERAL = "evidence_not_literal"
+    RELATION_EVIDENCE_IS_BARE_RESULT = "relation_evidence_is_bare_result"
+
+
+_BARE_NUMERIC_RESULT_V2 = re.compile(
+    r"""
+    ^\s*
+    [-+]?\d[\d,]*(?:\.\d+)?
+    \s*(?:원|명|개|권|번|회|쪽|줄|잔|장)?
+    \s*(?:이야|야|이에요|예요|입니다)?
+    \s*[.!?~^]*\s*$
+    """,
+    re.VERBOSE,
+)
+
+
+def _is_bare_numeric_result(evidence_span: str) -> bool:
+    """Return whether a span states only one result value.
+
+    A bare quantity can prove a fact, but it cannot literally prove a method or
+    explanation relation. This is a provenance boundary, not arithmetic
+    re-grading: equations, operation words, causal language and every other
+    non-bare explanation continue to be judged only by the understanding model.
+    """
+
+    return _BARE_NUMERIC_RESULT_V2.fullmatch(evidence_span) is not None
 
 
 class EvidenceMatchV2(DialogueV2Model):
@@ -70,6 +96,27 @@ class GuardedUnderstandingV2(DialogueV2Model):
 
     response: UnderstandingResponseV2
     evidence_matches: list[EvidenceMatchV2]
+
+
+class UnderstandingAdmissionV2(DialogueV2Model):
+    """Claim-level provenance admission for one understanding response.
+
+    A provider response may contain both a literal, valid fact claim and an
+    unsupported relation claim.  Treating that as one atomic failure discards
+    progress the child really made.  This boundary therefore preserves every
+    independently admissible claim and quarantines only the claims that need a
+    bounded repair attempt.  Quarantined claims never reach the ledger,
+    completion, notes, or the speaker projection.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    guarded: GuardedUnderstandingV2
+    quarantined_claims: list[EvidenceGuardViolationV2] = Field(default_factory=list)
+
+    @property
+    def needs_repair(self) -> bool:
+        return bool(self.quarantined_claims)
 
 
 class UnderstandingEvidenceGuardError(ValueError):
@@ -175,6 +222,19 @@ def guard_understanding_response_v2(
             )
             continue
 
+        if (
+            isinstance(claim, RelationUnderstandingClaimV2)
+            and claim.verdict in {"correct", "sufficient"}
+            and _is_bare_numeric_result(claim.evidence_span)
+        ):
+            violations.append(
+                EvidenceGuardViolationV2(
+                    claim_id=claim.claim_id,
+                    code=(EvidenceGuardViolationCodeV2.RELATION_EVIDENCE_IS_BARE_RESULT),
+                )
+            )
+            continue
+
         source_start, source_end, match_kind = evidence_match
         evidence_matches.append(
             EvidenceMatchV2(
@@ -192,4 +252,108 @@ def guard_understanding_response_v2(
     return GuardedUnderstandingV2(
         response=response.model_copy(deep=True),
         evidence_matches=evidence_matches,
+    )
+
+
+def admit_understanding_response_v2(
+    request: UnderstandingRequestV2,
+    response: UnderstandingResponseV2,
+) -> UnderstandingAdmissionV2:
+    """Admit valid claims independently and quarantine only invalid claims.
+
+    Semantic verdicts remain owned by the understanding model.  This function
+    performs the same graph-membership and literal-provenance checks as the
+    strict guard, but it does not let one malformed claim erase a different,
+    valid claim from the same child utterance.
+    """
+
+    fact_ids = frozenset(request.claimable_graph.fact_ids)
+    relation_ids = frozenset(request.claimable_graph.relation_ids)
+    accepted_claims = []
+    evidence_matches: list[EvidenceMatchV2] = []
+    quarantined: list[EvidenceGuardViolationV2] = []
+
+    for claim in response.claims:
+        claim_violations: list[EvidenceGuardViolationV2] = []
+        if isinstance(claim, FactUnderstandingClaimV2) and claim.fact_id not in fact_ids:
+            claim_violations.append(
+                EvidenceGuardViolationV2(
+                    claim_id=claim.claim_id,
+                    code=EvidenceGuardViolationCodeV2.UNKNOWN_FACT_ID,
+                )
+            )
+        elif (
+            isinstance(claim, RelationUnderstandingClaimV2)
+            and claim.relation_id not in relation_ids
+        ):
+            claim_violations.append(
+                EvidenceGuardViolationV2(
+                    claim_id=claim.claim_id,
+                    code=EvidenceGuardViolationCodeV2.UNKNOWN_RELATION_ID,
+                )
+            )
+        elif (
+            isinstance(claim, AuxiliaryUnderstandingClaimV2)
+            and not request.claimable_graph.open_auxiliary_claims
+        ):
+            claim_violations.append(
+                EvidenceGuardViolationV2(
+                    claim_id=claim.claim_id,
+                    code=EvidenceGuardViolationCodeV2.AUXILIARY_CLAIMS_DISABLED,
+                )
+            )
+
+        evidence_match = _literal_evidence_match(
+            request.child_utterance,
+            claim.evidence_span,
+        )
+        if evidence_match is None:
+            claim_violations.append(
+                EvidenceGuardViolationV2(
+                    claim_id=claim.claim_id,
+                    code=EvidenceGuardViolationCodeV2.EVIDENCE_NOT_LITERAL,
+                )
+            )
+        elif (
+            isinstance(claim, RelationUnderstandingClaimV2)
+            and claim.verdict in {"correct", "sufficient"}
+            and _is_bare_numeric_result(claim.evidence_span)
+        ):
+            claim_violations.append(
+                EvidenceGuardViolationV2(
+                    claim_id=claim.claim_id,
+                    code=EvidenceGuardViolationCodeV2.RELATION_EVIDENCE_IS_BARE_RESULT,
+                )
+            )
+
+        if claim_violations:
+            quarantined.extend(claim_violations)
+            continue
+
+        assert evidence_match is not None
+        source_start, source_end, match_kind = evidence_match
+        accepted_claims.append(claim)
+        evidence_matches.append(
+            EvidenceMatchV2(
+                claim_id=claim.claim_id,
+                source_start=source_start,
+                source_end=source_end,
+                source_text=request.child_utterance[source_start:source_end],
+                match_kind=match_kind,
+            )
+        )
+
+    admitted_response = response.model_copy(
+        update={
+            "claims": accepted_claims,
+            "contains_learning_evidence": bool(accepted_claims),
+        },
+        deep=True,
+    )
+    return UnderstandingAdmissionV2(
+        guarded=GuardedUnderstandingV2(
+            response=admitted_response,
+            evidence_matches=evidence_matches,
+        ),
+        quarantined_claims=quarantined,
     )

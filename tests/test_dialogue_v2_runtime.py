@@ -64,14 +64,14 @@ class RecordingV2Gateway:
 
     async def speak_v2(self, plan: SpeakerPlanV2) -> SpeakerOutputV2:
         self.speaker_plans.append(plan)
-        purchase_total = next(
-            (fact for fact in plan.allowed_facts if fact.fact_id == "purchase_total"),
-            None,
-        )
-        if purchase_total is not None and plan.accepted_evidence:
-            text = "아, 11000원까지 구했구나! 그러면 모자란 돈은 어떻게 구할까?"
+        learned_fact = next(iter(plan.allowed_facts), None)
+        if learned_fact is not None and plan.accepted_evidence:
+            if learned_fact.value.type == "money":
+                text = f"아, {learned_fact.value.amount:,}원이구나~"
+            else:
+                text = "아, 알려 준 값이구나~"
         else:
-            text = "음, 나는 아직 궁금한 게 있어... 남은 것도 알려줄래?"
+            text = "음, 나는 아직 잘 모르겠어..."
         return SpeakerOutputV2(
             text=text,
             mood="curious",
@@ -80,7 +80,7 @@ class RecordingV2Gateway:
     async def bridge_speak_v2(self, plan: BridgePlanV2) -> SpeakerOutputV2:
         self.bridge_plans.append(plan)
         return SpeakerOutputV2(
-            text="그런 생각도 들 수 있겠다! 다시 문제를 알려줄래?",
+            text="그런 생각도 들 수 있겠다!",
             mood="curious",
         )
 
@@ -584,7 +584,7 @@ async def test_11000_is_acknowledged_as_progress_then_only_shortage_is_asked() -
     assert result.state.expression_level is ExpressionLevel.L4
     assert result.state.hint_level is HintLevel.H0
     assert result.turn.help_card is None
-    assert "11000원" in result.turn.mormi.text
+    assert "11,000원" in result.turn.mormi.text
     assert "도움 카드" not in result.turn.mormi.text
     assert result.turn.input.target_slots == [
         "fact:shortage",
@@ -594,12 +594,13 @@ async def test_11000_is_acknowledged_as_progress_then_only_shortage_is_asked() -
     assert result.runtime.newly_verified_relation_ids == ["sum_item_costs"]
     assert len(gateway.speaker_plans) == 1
     plan = gateway.speaker_plans[0]
-    assert plan.dialogue_act == "acknowledge_progress_then_ask"
+    assert plan.dialogue_act == "acknowledge_progress"
     assert len(plan.accepted_evidence) == 2
     assert all(evidence.text is None for evidence in plan.accepted_evidence)
-    assert {fact.fact_id for fact in plan.allowed_facts} >= {"purchase_total", "budget"}
-    assert plan.target.fact_ids == ["shortage"]
-    assert plan.target.relation_ids == ["calculate_shortage"]
+    assert {fact.fact_id for fact in plan.allowed_facts} == {"fact_1"}
+    assert plan.target.fact_ids == []
+    assert plan.target.relation_ids == []
+    assert plan.current_question is None
 
 
 @pytest.mark.asyncio
@@ -638,11 +639,8 @@ async def test_mixed_private_evidence_keeps_progress_but_not_speaker_raw_text() 
     )
 
     assert result.runtime.newly_verified_fact_ids == ["purchase_total"]
-    assert len(gateway.speaker_plans) == 1
-    plan = gateway.speaker_plans[0]
-    assert len(plan.accepted_evidence) == 1
-    assert plan.accepted_evidence[0].text is None
-    assert "purchase_total" in {fact.fact_id for fact in plan.allowed_facts}
+    assert gateway.speaker_plans == []
+    assert "11,000원" in result.turn.mormi.text
     assert "김민수" not in result.turn.mormi.text
 
 
@@ -682,7 +680,7 @@ async def test_incorrect_free_text_gets_a_conversational_reask_with_visible_help
         async def speak_v2(self, plan: SpeakerPlanV2) -> SpeakerOutputV2:
             self.speaker_plans.append(plan)
             return SpeakerOutputV2(
-                text="어, 그런가? 나 아직 잘 모르겠어...",
+                text="음, 나는 아직 잘 모르겠어...",
                 mood="thinking",
             )
 
@@ -716,10 +714,8 @@ async def test_incorrect_free_text_gets_a_conversational_reask_with_visible_help
     assert plan.response_signal.incorrect_fact_ids == ["fact_1"]
     assert plan.response_signal.incorrect_relation_ids == []
     assert plan.response_signal.repeat_count == 1
-    assert {item.speaker_label for item in plan.target_focus} == {
-        "예산으로 살 수 있는 책 수",
-        "계산 방법",
-    }
+    assert plan.target_focus == []
+    assert plan.current_question is None
     # Support routes deliberately omit the previous problem sentence so the
     # speaker cannot reuse visible values or a revealed method as its own
     # knowledge. repeat_count still lets it vary the social opening.
@@ -727,6 +723,164 @@ async def test_incorrect_free_text_gets_a_conversational_reask_with_visible_help
     assert result.turn.mormi.text.endswith(plan.current_question or "")
     assert "affordable_count" not in plan.model_dump_json()
     assert "divide_budget_by_price" not in plan.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_l3_bare_answer_cannot_complete_the_missing_method_target() -> None:
+    first = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "reasoning_status": "sufficient",
+            "claims": [
+                {
+                    "claim_kind": "fact",
+                    "claim_id": "claim_book_count",
+                    "fact_id": "affordable_count",
+                    "claim_type": "final_answer",
+                    "evidence_span": "7권",
+                    "interpreted_value": {
+                        "type": "number",
+                        "value": 7,
+                        "unit": "권",
+                    },
+                    "verdict": "correct",
+                },
+                {
+                    "claim_kind": "relation",
+                    "claim_id": "claim_invented_book_method",
+                    "relation_id": "count_price_groups",
+                    "claim_type": "procedure_step",
+                    "evidence_span": "7권",
+                    "verdict": "sufficient",
+                },
+            ],
+        }
+    )
+    repaired = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "reasoning_status": "missing",
+            "claims": [
+                {
+                    "claim_kind": "fact",
+                    "claim_id": "claim_book_count",
+                    "fact_id": "affordable_count",
+                    "claim_type": "final_answer",
+                    "evidence_span": "7권",
+                    "interpreted_value": {
+                        "type": "number",
+                        "value": 7,
+                        "unit": "권",
+                    },
+                    "verdict": "correct",
+                }
+            ],
+        }
+    )
+    gateway = RecordingV2Gateway([first, repaired])
+    engine = DialogueV2Engine(gateway)
+    state = _state("divide-group")
+    initial = await _initialize(engine, state, "divide-group")
+    state.expression_level = ExpressionLevel.L3
+    state.subgoal_id = "l3.answer"
+
+    result = await _run_turn(
+        engine,
+        state,
+        _response(initial.turn_id, ResponseType.TEXT, text="7권"),
+        "나 14,000원으로 책을 몇 권 살 수 있는지 헷갈려... 책 수만 먼저 알려줄 수 있어?",
+    )
+
+    assert len(gateway.understanding_requests) == 2
+    assert gateway.understanding_requests[1].guard_feedback_codes == [
+        "relation_evidence_is_bare_result"
+    ]
+    assert result.state.status is SessionStatus.ACTIVE
+    assert result.runtime.newly_verified_fact_ids == ["affordable_count"]
+    assert result.runtime.newly_verified_relation_ids == []
+    assert result.state.expression_level is ExpressionLevel.L3
+    assert result.turn.input.kind is InputKind.TEXT
+    assert result.turn.mormi.text.endswith("계산 방법 알려줄 수 있어?")
+
+
+@pytest.mark.asyncio
+async def test_answer_progress_survives_failed_method_repair_without_speaker_inference() -> None:
+    mixed = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "reasoning_status": "sufficient",
+            "claims": [
+                {
+                    "claim_kind": "fact",
+                    "claim_id": "answer_600",
+                    "fact_id": "total_amount",
+                    "claim_type": "final_answer",
+                    "evidence_span": "600원이야",
+                    "interpreted_value": {"type": "money", "amount": 600},
+                    "verdict": "correct",
+                },
+                {
+                    "claim_kind": "relation",
+                    "claim_id": "invented_addition",
+                    "relation_id": "add_money_values",
+                    "claim_type": "procedure_step",
+                    "evidence_span": "600원이야",
+                    "verdict": "sufficient",
+                },
+            ],
+        }
+    )
+    still_invalid = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "reasoning_status": "sufficient",
+            "claims": [
+                {
+                    "claim_kind": "relation",
+                    "claim_id": "invented_addition",
+                    "relation_id": "add_money_values",
+                    "claim_type": "procedure_step",
+                    "evidence_span": "600원이야",
+                    "verdict": "sufficient",
+                }
+            ],
+        }
+    )
+    gateway = RecordingV2Gateway([mixed, still_invalid])
+    engine = DialogueV2Engine(gateway)
+    state = _state("money-count")
+    initial = await _initialize(engine, state, "money-count")
+
+    result = await _run_turn(
+        engine,
+        state,
+        _response(initial.turn_id, ResponseType.TEXT, text="600원이야"),
+        initial.mormi.text,
+    )
+
+    assert len(gateway.understanding_requests) == 2
+    assert gateway.understanding_requests[1].guard_feedback_codes == [
+        "relation_evidence_is_bare_result"
+    ]
+    assert gateway.speaker_plans == []
+    assert result.state.status is SessionStatus.ACTIVE
+    assert result.runtime.newly_verified_fact_ids == ["total_amount"]
+    assert result.runtime.newly_verified_relation_ids == []
+    assert result.turn.completion is None
+    assert result.turn.note_update is None
+    assert result.turn.mormi.text == "아, 600원이구나~ 계산 방법 알려줄 수 있어?"
+    assert result.turn.mormi.text.count("알려줄 수 있어?") == 1
+    assert "500원" not in result.turn.mormi.text
+    assert "100원" not in result.turn.mormi.text
+    assert "더해서" not in result.turn.mormi.text
 
 
 @pytest.mark.asyncio
@@ -763,9 +917,9 @@ async def test_repeated_incorrect_answers_remain_llm_turns_with_distinct_moves()
         async def speak_v2(self, plan: SpeakerPlanV2) -> SpeakerOutputV2:
             self.speaker_plans.append(plan)
             text = (
-                "어, 그런가? 도움 카드를 보고 몇 권 살 수 있는지 다시 알려줄 수 있어?"
+                "음, 나는 아직 잘 모르겠어..."
                 if plan.response_signal.repeat_count == 1
-                else "음, 나는 아직 책 수가 헷갈려... 카드의 계산 순서부터 알려줄 수 있어?"
+                else "어, 나는 아직 헷갈려..."
             )
             return SpeakerOutputV2(text=text, mood="thinking")
 
@@ -869,13 +1023,7 @@ async def test_share_reask_may_use_reviewed_one_person_target_language() -> None
     class OnePersonReaskGateway(RecordingV2Gateway):
         async def speak_v2(self, plan: SpeakerPlanV2) -> SpeakerOutputV2:
             self.speaker_plans.append(plan)
-            return SpeakerOutputV2(
-                text=(
-                    "어, 그런가? 나는 아직 한 사람이 낼 돈이 헷갈려... "
-                    "도움 카드를 보고 다시 알려줄 수 있어?"
-                ),
-                mood="thinking",
-            )
+            return SpeakerOutputV2(text="음, 나는 아직 잘 모르겠어...", mood="thinking")
 
     gateway = OnePersonReaskGateway([understanding])
     engine = DialogueV2Engine(gateway)
@@ -891,7 +1039,7 @@ async def test_share_reask_may_use_reviewed_one_person_target_language() -> None
 
     assert result.runtime.speaker_source == "llm"
     assert result.runtime.fallback_reason is None
-    assert "한 사람이 낼 돈" in result.turn.mormi.text
+    assert "각자 낼 돈" in result.turn.mormi.text
     assert "5000원" not in gateway.speaker_plans[0].model_dump_json()
 
 
@@ -955,10 +1103,11 @@ async def test_reverse_task_question_strengthens_help_without_mormi_solving_it()
     assert all(plan.allowed_facts == [] for plan in gateway.speaker_plans)
     assert all(plan.previous_mormi_text is None for plan in gateway.speaker_plans)
     for plan in gateway.speaker_plans:
-        assert plan.target.fact_ids == ["fact_1"]
-        assert plan.target.relation_ids == ["relation_1"]
-        assert plan.response_plan is not None
-        assert plan.response_plan.reask_targets == plan.target_focus
+        assert plan.target.fact_ids == []
+        assert plan.target.relation_ids == []
+        assert plan.target_focus == []
+        assert plan.response_plan is None
+        assert plan.current_question is None
         serialized_plan = plan.model_dump_json()
         assert "per_person" not in serialized_plan
         assert "equal_share_total" not in serialized_plan
@@ -1322,16 +1471,24 @@ async def test_entering_l2_or_l0_uses_stable_pre_answer_copy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("choice_id", "expected_level", "expected_target"),
+    ("choice_id", "expected_level", "expected_target", "speaker_source", "speaker_calls"),
     [
-        ("answer_0", ExpressionLevel.L2, "relation:subtract_price_from_paid"),
-        ("answer_1", ExpressionLevel.L2, "fact:change_amount"),
+        (
+            "answer_0",
+            ExpressionLevel.L2,
+            "relation:subtract_price_from_paid",
+            "reviewed_fallback",
+            0,
+        ),
+        ("answer_1", ExpressionLevel.L2, "fact:change_amount", "llm", 1),
     ],
 )
 async def test_l2_choice_skips_understanding_and_uses_sonnet_low_follow_up(
     choice_id: str,
     expected_level: ExpressionLevel,
     expected_target: str,
+    speaker_source: str,
+    speaker_calls: int,
 ) -> None:
     gateway = RecordingV2Gateway()
     engine = DialogueV2Engine(gateway)
@@ -1356,9 +1513,9 @@ async def test_l2_choice_skips_understanding_and_uses_sonnet_low_follow_up(
     assert result.turn.input.kind is InputKind.CHOICES
     assert result.turn.input.target_slots == [expected_target]
     assert result.runtime.understanding_source == "structured_choice"
-    assert result.runtime.speaker_source == "llm"
+    assert result.runtime.speaker_source == speaker_source
     assert gateway.understanding_requests == []
-    assert len(gateway.speaker_plans) == 1
+    assert len(gateway.speaker_plans) == speaker_calls
     assert gateway.bridge_plans == []
 
 
@@ -1524,8 +1681,11 @@ async def test_safe_non_learning_goes_only_to_haiku_bridge() -> None:
     assert len(gateway.bridge_plans) == 1
     bridge = gateway.bridge_plans[0]
     assert bridge.safe_child_excerpt is None
-    assert bridge.target.fact_ids == ["fact_1"]
-    assert bridge.target.relation_ids == ["relation_1"]
+    assert bridge.target.fact_ids == []
+    assert bridge.target.relation_ids == []
+    assert bridge.target_focus == []
+    assert bridge.current_question is None
+    assert bridge.response_plan is None
     assert "shortage" not in bridge.model_dump_json()
     assert "calculate_shortage" not in bridge.model_dump_json()
     assert "shortage" not in {fact.fact_id for fact in bridge.allowed_facts}

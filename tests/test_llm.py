@@ -78,10 +78,12 @@ def test_v2_speaker_prompt_keeps_mormi_in_the_learner_role() -> None:
     )
     assert "accepted_relations에 없는 방법은 말하지 않는다" in SPEAKER_V2_SYSTEM
     assert "14,000원을 2,000원으로 나눠서 7권이구나" in SPEAKER_V2_SYSTEM
-    assert "active turn의 질문과 도움 요청은 서버가 current_question으로 붙인다" in (
+    assert "active turn의 질문과 도움 요청은 서버 전용 ReaskPlan이 붙인다" in (
         SPEAKER_V2_SYSTEM
     )
-    assert "text 안에서 질문을 만들 권한이" in SPEAKER_V2_SYSTEM
+    assert "text 안에서 물음표, 의문문, 부탁, 답·방법 요청을 만들지 않는다" in (
+        SPEAKER_V2_SYSTEM
+    )
 
 
 def test_v2_understanding_prompt_keeps_conversation_and_learning_axes_independent() -> None:
@@ -175,16 +177,9 @@ def test_v2_understanding_prompt_does_not_turn_help_card_text_into_learning() ->
 
 def test_v2_speaker_prompts_obey_conversation_plan_and_fact_provenance() -> None:
     for rule in (
-        "response_plan이 있으면 그 계획이 사회적 반응과 학습 복귀 방식의 최우선 계약이다",
-        "explain_mormi_limit이면 왜 모르냐는 질문을 무시하지 말고",
-        "explain_ai_role이면 AI라는 말을 피하지 말고",
-        "decline_answer_and_ask이면 모르미가 대신 풀지 못한다는 사실만",
-        "respond_refusal이면 아이의 거절을 복창·해석하거나",
-        '"나 꼭 알고 싶은데..."처럼 모르미 자신의 궁금한 마음만',
-        '"도움 카드가 나왔어" 또는 "어? 도움 카드가 나왔어"',
-        '"나왔구나", "나왔네", "나왔군"처럼 관찰을 평가하는 말투는 쓰지 않는다',
-        "response_mode와 관계없이 서버가 검수된 current_question을 뒤에 결정적으로 붙인다",
-        "reask_targets·current_question을 반복하거나 도움을 다시 청하지 않는다",
+        "서버가 검수된 질문을 뒤에 결정적으로 붙인다",
+        "text에는 아이의 말에 대한 반응",
+        "text 안에서 물음표, 의문문, 부탁, 답·방법 요청을 만들지 않는다",
         "allowed_facts.source=screen은 화면에서 볼 수 있는 사실일 뿐",
         "allowed_facts.source=child_verified만 아이가 알려 준 사실",
         "allowed_facts.source=jointly_derived는 함께 확인한 사실",
@@ -193,7 +188,7 @@ def test_v2_speaker_prompts_obey_conversation_plan_and_fact_provenance() -> None
         assert rule in SPEAKER_V2_SYSTEM
 
     for rule in (
-        "서버가 검수된 current_question을",
+        "서버가 검수된 질문을 별도 계획으로",
         "질문, 요청, 학습 복귀는 서버 몫이다",
         "explain_ai_role: AI라는 사실을 인정하되",
         "decline_answer_and_ask:",
