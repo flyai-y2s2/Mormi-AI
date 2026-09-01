@@ -494,6 +494,8 @@ async def health(request: Request) -> HealthResponse:
         environment=current.environment,
         runtime_contract_version=current.runtime_contract_version,
         dialogue_v2_canary_percent=current.dialogue_v2_canary_percent,
+        observation_ingest_enabled=current.observation_ingest_enabled,
+        star_note_events_enabled=current.star_note_events_enabled,
         dialogue_runtime_capabilities=list(
             conversation.dialogue_runtime_capabilities
         ),

@@ -135,6 +135,8 @@ async def test_health_advertises_installed_dialogue_runtime_capabilities(
         is DialogueRuntimeContractVersion.LEGACY_V1
     )
     assert response.dialogue_v2_canary_percent == 0
+    assert response.observation_ingest_enabled is False
+    assert response.star_note_events_enabled is False
     await database.dispose()
 
 

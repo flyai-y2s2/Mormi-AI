@@ -92,6 +92,21 @@ def test_candidate_health_exposes_and_gates_effective_rollout_configuration() ->
     assert workflow.count("MORMI_ENVIRONMENT=production") == 9
 
 
+def test_live_deploy_enables_and_gates_star_note_delivery_without_exposing_the_key() -> None:
+    workflow = _workflow()
+
+    configuration = workflow.index("configure_star_note_delivery")
+    live_start = workflow.index("--name mormi-ai \\", configuration)
+    live_gate = workflow.index("live API did not enable star-note delivery")
+
+    assert configuration < live_start < live_gate
+    assert "http://mormi-backend:8080/internal/v1/observations/events" in workflow
+    assert "MORMI_STAR_NOTE_EVENTS_ENABLED" in workflow
+    assert '"observation_ingest_enabled"[[:space:]]*:[[:space:]]*true' in workflow
+    assert '"star_note_events_enabled"[[:space:]]*:[[:space:]]*true' in workflow
+    assert "MORMI_OBSERVATION_INGEST_KEY=${backend_ingest_key}" not in workflow
+
+
 def test_emergency_canary_zero_path_skips_build_migration_and_prewarm() -> None:
     workflow = _workflow()
     emergency = workflow[

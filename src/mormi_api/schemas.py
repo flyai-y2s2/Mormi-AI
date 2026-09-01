@@ -1848,6 +1848,8 @@ class HealthResponse(BaseModel):
     environment: str
     runtime_contract_version: DialogueRuntimeContractVersion
     dialogue_v2_canary_percent: int = Field(ge=0, le=100)
+    observation_ingest_enabled: bool = False
+    star_note_events_enabled: bool = False
     dialogue_runtime_capabilities: list[DialogueRuntimeContractVersion] = Field(
         default_factory=lambda: [DialogueRuntimeContractVersion.LEGACY_V1]
     )
