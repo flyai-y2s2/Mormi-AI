@@ -228,7 +228,11 @@ jobs:
   test:
     name: Lint & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The full parity/session-parent suite reaches completion locally in about
+    # two minutes, but GitHub's shared runner can take over fifteen minutes.
+    # Keep every release gate and allow the slower runner to finish instead of
+    # canceling a healthy suite around 90% progress.
+    timeout-minutes: 30
     if: >-
       github.event_name != 'workflow_dispatch' ||
       inputs.deployment_action == 'deploy'
