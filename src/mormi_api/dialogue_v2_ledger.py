@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from enum import StrEnum
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
@@ -358,6 +359,26 @@ class ReasoningCompletionV2(LedgerModelV2):
     complete: bool
 
 
+class TurnLearningProgressKindV2(StrEnum):
+    """Server-derived summary of independently admitted learning claims."""
+
+    NONE = "none"
+    ANSWER_ONLY = "answer_only"
+    METHOD_ONLY = "method_only"
+    ANSWER_AND_METHOD = "answer_and_method"
+    METHOD_PARTIAL = "method_partial"
+    MIXED = "mixed"
+
+
+class TurnLearningDeltaV2(LedgerModelV2):
+    """Typed, provider-independent learning change for one committed turn."""
+
+    new_fact_ids: list[str]
+    new_relation_ids: list[str]
+    partial_relation_ids: list[str]
+    progress_kind: TurnLearningProgressKindV2
+
+
 class ReasoningLedgerApplyResultV2(LedgerModelV2):
     ledger: ReasoningLedgerV2
     new_fact_ids: list[str]
@@ -382,6 +403,30 @@ class ReasoningLedgerApplyResultV2(LedgerModelV2):
     @property
     def has_new_partial_progress(self) -> bool:
         return bool(self.new_partial_relation_ids)
+
+    @property
+    def delta(self) -> TurnLearningDeltaV2:
+        has_facts = bool(self.new_fact_ids)
+        has_relations = bool(self.new_relation_ids)
+        has_partial = bool(self.new_partial_relation_ids)
+        if has_partial and (has_facts or has_relations):
+            kind = TurnLearningProgressKindV2.MIXED
+        elif has_facts and has_relations:
+            kind = TurnLearningProgressKindV2.ANSWER_AND_METHOD
+        elif has_facts:
+            kind = TurnLearningProgressKindV2.ANSWER_ONLY
+        elif has_relations:
+            kind = TurnLearningProgressKindV2.METHOD_ONLY
+        elif has_partial:
+            kind = TurnLearningProgressKindV2.METHOD_PARTIAL
+        else:
+            kind = TurnLearningProgressKindV2.NONE
+        return TurnLearningDeltaV2(
+            new_fact_ids=list(self.new_fact_ids),
+            new_relation_ids=list(self.new_relation_ids),
+            partial_relation_ids=list(self.new_partial_relation_ids),
+            progress_kind=kind,
+        )
 
 
 def _validate_ledger_binding(

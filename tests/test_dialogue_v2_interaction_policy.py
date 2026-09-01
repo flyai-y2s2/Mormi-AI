@@ -262,17 +262,14 @@ async def test_social_only_turn_preserves_ledger_ladders_and_active_target(
     assert result.turn.completion is None
     assert len(gateway.bridge_plans) == 1
     assert gateway.speaker_plans == []
-    response_plan = gateway.bridge_plans[0].response_plan
-    assert response_plan is not None
-    assert response_plan.response_mode == case.expected_response_mode
-    assert response_plan.reask_mode == "remaining_targets"
-    assert response_plan.card_visible is False
-    assert response_plan.reask_targets == gateway.bridge_plans[0].target_focus
-    assert {(target.target_kind, target.target_id) for target in response_plan.reask_targets} == {
-        ("fact", "fact_1"),
-        ("relation", "relation_1"),
-    }
-    assert result.turn.mormi.text.endswith(gateway.bridge_plans[0].current_question)
+    plan = gateway.bridge_plans[0]
+    assert plan.reaction_mode == case.expected_response_mode
+    assert plan.response_plan is None
+    assert plan.target_focus == []
+    assert plan.target.fact_ids == []
+    assert plan.target.relation_ids == []
+    assert plan.current_question is None
+    assert result.turn.mormi.text.count("?") == 1
 
 
 @pytest.mark.asyncio
@@ -321,19 +318,17 @@ async def test_task_question_opens_more_support_without_advancing_ledger(
     assert result.state.supported_note_slots == []
     assert len(gateway.speaker_plans) == 1
     plan = gateway.speaker_plans[0]
-    assert plan.response_plan is not None
-    assert plan.response_plan.response_mode == "redirect_to_help_card"
-    assert plan.response_plan.reask_mode == "help_guided_targets"
-    assert plan.response_plan.card_visible is True
+    assert plan.response_plan is None
     assert plan.allowed_facts == []
     assert plan.accepted_relations == []
-    assert all("나누" not in target.speaker_label for target in plan.target_focus)
-    assert plan.target.fact_ids == ["fact_1"]
-    assert plan.target.relation_ids == ["relation_1"]
+    assert plan.target_focus == []
+    assert plan.target.fact_ids == []
+    assert plan.target.relation_ids == []
     serialized_plan = plan.model_dump_json()
     assert "per_person" not in serialized_plan
     assert "equal_share_total" not in serialized_plan
-    assert result.turn.mormi.text.endswith(plan.current_question or "")
+    assert plan.current_question is None
+    assert result.turn.mormi.text.count("?") == 1
 
 
 @pytest.mark.asyncio
@@ -445,15 +440,13 @@ async def test_request_that_mormi_answer_opens_support_instead_of_repeating() ->
     assert result.turn.mormi.text != initial.mormi.text
     assert len(gateway.speaker_plans) == 1
     plan = gateway.speaker_plans[0]
-    assert plan.response_plan is not None
-    assert plan.response_plan.response_mode == "decline_answer_and_ask"
-    assert plan.response_plan.reask_mode == "help_guided_targets"
+    assert plan.response_plan is None
     assert plan.allowed_facts == []
     assert result.turn.mormi.text == (
         "나는 어떻게 하는 건지 몰라... 도움 카드를 보고 다시 "
         "각자 낼 돈이랑 계산 방법 알려주면 안 될까?"
     )
-    assert result.turn.mormi.text.endswith(plan.current_question or "")
+    assert plan.current_question is None
 
     refused = await _run(
         engine,
@@ -471,8 +464,7 @@ async def test_request_that_mormi_answer_opens_support_instead_of_repeating() ->
     assert "싫구나" not in refused.turn.mormi.text
     assert "않으신" not in refused.turn.mormi.text
     assert "도움 카드" not in refused.turn.mormi.text
-    assert gateway.bridge_plans[0].response_plan is not None
-    assert gateway.bridge_plans[0].response_plan.response_mode == "respond_refusal"
+    assert gateway.bridge_plans[0].reaction_mode == "respond_refusal"
 
 
 @pytest.mark.asyncio
@@ -507,8 +499,7 @@ async def test_refusal_uses_mormi_curiosity_without_paraphrasing_child() -> None
     assert "싫구나" not in result.turn.mormi.text
     assert "않으신" not in result.turn.mormi.text
     assert "도움 카드" not in result.turn.mormi.text
-    assert gateway.bridge_plans[0].response_plan is not None
-    assert gateway.bridge_plans[0].response_plan.response_mode == "respond_refusal"
+    assert gateway.bridge_plans[0].reaction_mode == "respond_refusal"
 
 
 @pytest.mark.asyncio
@@ -557,12 +548,11 @@ async def test_meta_plus_correct_answer_preserves_progress_and_social_response()
     assert result.turn.mormi.text != initial.mormi.text
     assert len(gateway.speaker_plans) == 1
     plan = gateway.speaker_plans[0]
-    assert plan.response_plan is not None
-    assert plan.response_plan.response_mode == "explain_ai_role"
-    assert plan.response_plan.reask_mode == "remaining_targets"
-    assert {fact.fact_id for fact in plan.allowed_facts} == {"per_person"}
+    assert plan.response_plan is None
+    assert {fact.fact_id for fact in plan.allowed_facts} == {"fact_1"}
     assert all(fact.source == "child_verified" for fact in plan.allowed_facts)
-    assert result.turn.mormi.text.endswith(plan.current_question or "")
+    assert plan.current_question is None
+    assert result.turn.mormi.text.count("?") == 1
 
 
 @pytest.mark.asyncio
@@ -608,12 +598,11 @@ async def test_normal_partial_progress_always_keeps_server_owned_reask(
 
     assert result.state.status is SessionStatus.ACTIVE
     assert result.turn.input.target_slots == ["relation:equal_share_total"]
-    assert len(gateway.speaker_plans) == 1
-    plan = gateway.speaker_plans[0]
-    assert plan.response_plan is not None
-    assert plan.response_plan.response_mode == "normal"
-    assert plan.current_question
-    assert result.turn.mormi.text == f"{acknowledgement} {plan.current_question}"
+    assert gateway.speaker_plans == []
+    assert result.runtime.speaker_source == "reviewed_fallback"
+    assert result.turn.mormi.text.startswith("아, 3,500원이구나~")
+    assert result.turn.mormi.text.count("?") == 1
+    assert "나누" not in result.turn.mormi.text
 
 
 @pytest.mark.asyncio
@@ -642,8 +631,8 @@ async def test_social_bridge_receives_no_descriptive_unresolved_target_ids() -> 
     assert "equal_share_total" not in serialized_plan
     assert "per_person" not in serialized_plan
     assert "나누" not in serialized_plan
-    assert gateway.bridge_plans[0].target.fact_ids == ["fact_1"]
-    assert gateway.bridge_plans[0].target.relation_ids == ["relation_1"]
+    assert gateway.bridge_plans[0].target.fact_ids == []
+    assert gateway.bridge_plans[0].target.relation_ids == []
 
 
 @pytest.mark.asyncio

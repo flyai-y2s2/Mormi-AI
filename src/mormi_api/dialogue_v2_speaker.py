@@ -33,6 +33,11 @@ _KOREAN_NUMBER_ENDINGS = (
     "이다",
     "이지",
 )
+_REACTION_REQUEST_ENDING = re.compile(
+    r"(?:알려|말해|골라|보여|도와|같이\s*해|해\s*줄|해\s*줘)"
+    r".{0,40}(?:줄래|줄\s*수\s*있어|주면\s*안\s*될까|줘|할까|해\s*볼까)"
+    r"\s*[.!~…]*$"
+)
 
 _EMAIL = re.compile(r"(?i)(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _PHONE = re.compile(
@@ -454,11 +459,12 @@ class BridgePlanV2(DialogueV2SpeakerModel):
     route: Literal["bridge_speaker"] = "bridge_speaker"
     dialogue_act: Literal["bridge_back"] = "bridge_back"
     interaction_kind: BridgeInteractionKindV2
+    reaction_mode: ConversationResponseModeV2 = "normal"
     # Data minimization is the only complete PII allowlist: the bridge model
     # receives a semantic interaction kind, never any child-authored substring.
     safe_child_excerpt: Literal[None] = None
-    current_question: str = Field(min_length=1, max_length=240)
-    target: SpeakerTargetV2
+    current_question: str | None = Field(default=None, max_length=240)
+    target: SpeakerTargetV2 = Field(default_factory=lambda: SpeakerTargetV2(ask_mode="none"))
     target_focus: list[SpeakerTargetFocusV2] = Field(default_factory=list, max_length=16)
     response_plan: ConversationResponsePlanV2 | None = None
     allowed_facts: list[SpeakerAllowedFactV2] = Field(default_factory=list, max_length=20)
@@ -850,6 +856,13 @@ def _dynamic_output_violation_v2(
         return answer_violation
     if not _numeric_literals_v2(output.text).issubset(allowed_numbers):
         return "number_not_allowed"
+    normalized = unicodedata.normalize("NFKC", output.text).strip()
+    if (
+        "?" in normalized
+        or "？" in normalized
+        or _REACTION_REQUEST_ENDING.search(normalized)
+    ):
+        return "question_not_allowed"
     return None
 
 

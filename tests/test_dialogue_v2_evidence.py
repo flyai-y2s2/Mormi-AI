@@ -8,6 +8,7 @@ from mormi_api.dialogue_v2_evidence import (
     EvidenceGuardViolationCodeV2,
     EvidenceMatchKindV2,
     UnderstandingEvidenceGuardError,
+    admit_understanding_response_v2,
     guard_understanding_response_v2,
 )
 from mormi_api.schemas import (
@@ -360,3 +361,44 @@ def test_guard_keeps_actual_method_evidence_for_model_adjudication(
 
     assert guarded.response == response
     assert guarded.evidence_matches[0].source_text == child_utterance
+
+
+def test_claim_admission_preserves_valid_answer_and_quarantines_bare_method() -> None:
+    child_utterance = "600원이야"
+    request = _request(child_utterance)
+    response = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "reasoning_status": "sufficient",
+            "claims": [
+                {
+                    "claim_kind": "fact",
+                    "claim_id": "answer",
+                    "fact_id": "shortage",
+                    "claim_type": "final_answer",
+                    "evidence_span": child_utterance,
+                    "interpreted_value": {"type": "money", "amount": 600},
+                    "verdict": "correct",
+                },
+                {
+                    "claim_kind": "relation",
+                    "claim_id": "invented_method",
+                    "relation_id": "calculate_shortage",
+                    "claim_type": "procedure_step",
+                    "evidence_span": child_utterance,
+                    "verdict": "sufficient",
+                },
+            ],
+        }
+    )
+
+    admission = admit_understanding_response_v2(request, response)
+
+    assert [claim.claim_id for claim in admission.guarded.response.claims] == ["answer"]
+    assert [match.claim_id for match in admission.guarded.evidence_matches] == ["answer"]
+    assert [item.code for item in admission.quarantined_claims] == [
+        EvidenceGuardViolationCodeV2.RELATION_EVIDENCE_IS_BARE_RESULT
+    ]
+    assert admission.needs_repair is True

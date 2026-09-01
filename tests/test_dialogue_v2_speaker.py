@@ -106,10 +106,7 @@ def _speaker_plan() -> SpeakerPlanV2:
 
 def _speaker_output() -> SpeakerOutputV2:
     return SpeakerOutputV2(
-        text=(
-            "아, 다 사면 11,000원이구나! 10,000원보다 얼마가 모자라고 "
-            "어떻게 구하는지 알려줄 수 있어?"
-        ),
+        text="아, 다 사면 11,000원이구나!",
         mood="curious",
     )
 
@@ -587,7 +584,7 @@ def test_main_speaker_does_not_mistake_target_language_for_new_math() -> None:
         mood="thinking",
     )
 
-    assert speaker_output_violation_v2(output, plan) is None
+    assert speaker_output_violation_v2(output, plan) == "question_not_allowed"
 
     invented = output.model_copy(
         update={"text": "나는 아직 두 명이 낼 돈이 헷갈려... 다시 알려줄 수 있어?"}
@@ -606,7 +603,7 @@ def test_allowed_fact_copy_cannot_add_an_unrelated_number() -> None:
 def test_bridge_guard_has_no_learning_evidence_or_hidden_number_path() -> None:
     plan = _bridge_plan()
     output = SpeakerOutputV2(
-        text="응, 모르미는 AI야. 그래도 모자란 돈을 구하는 방법을 알려줄 수 있어?",
+        text="응, 모르미는 AI야. 그래도 나는 아직 잘 모르겠어.",
         mood="curious",
     )
 
