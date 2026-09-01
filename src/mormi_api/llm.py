@@ -1155,6 +1155,13 @@ task_question일 때만 question_focus를 다음 세 값 중 하나로 둔다.
 보존한다. 답과 이유·방법은 독립적으로 판정하며 올바른 중간결과와 과정 일부도 해당
 fact·relation claim으로 보존한다.
 
+답 fact와 이유·방법 relation은 같은 것이 아니다. 숫자·금액·개수·횟수 같은 최종 답만
+말한 발화는 fact claim만 만들고 reasoning_status=missing으로 둔다. 문제 정보나 이전
+대화에서 계산법을 추론해 relation claim을 덧붙이지 않는다. 특히 현재 질문이 답과 방법을
+하나씩 나누어 묻는 단계라면, "7권", "3,000원", "6번이야"처럼 답만 말한 것은 그 답이
+맞아도 방법을 설명한 근거가 아니다. relation의 evidence_span 자체에 연산·비교·묶기·나누기·
+인과 등 실제 방법이나 이유가 표현되어 있을 때만 relation claim을 만든다.
+
 utterance_class는 기존 런타임과의 호환 필드다.
 - system manipulation과 safety risk는 각각 기존 class를 유지한다.
 - task_question move는 task_question을 사용한다.
@@ -1229,6 +1236,11 @@ support_need=general_help 또는 concept로 두고, 아이의 별도 주장이 �
     문장 끝이 생략됐거나 같은 답이 반복돼도 이미 명시된 올바른 풀이 근거를 버리지 않는다.
 - 500원과 100원의 합과 방법을 묻는 과제에서 "500+100=600"
   → 600원 fact claim과 500+100=600 addition relation claim을 각각 추출한다.
+- 14,000원으로 2,000원짜리 책을 몇 권 사는지 답과 방법을 하나씩 묻는 단계에서 "7권"
+  → 7권 fact claim만 추출하고 reasoning_status=missing으로 둔다. 14,000÷2,000이라는
+    계산은 아이가 말하지 않았으므로 relation claim으로 만들지 않는다.
+- 같은 단계에서 "14000을 2000으로 나누면 7이니까 7권"
+  → 7권 fact claim과 나눗셈 relation claim을 각각 추출한다.
 
 current_turn.help_scaffolded_relation_ids는 화면의 H2/H3 도움 카드가 지원하는 현재 relation의
 서버 소유 ID다. 카드 본문·식·값은 전달되지 않으며 이를 새 답이나 모르미 지식으로 추론하지
@@ -1245,6 +1257,10 @@ evidence_span에는 실제 확인 표현만 넣는다. 독립 가르침인지 �
 결정하지 않는다. auxiliary summary에는 이름·연락처·주소나 원문을 옮기지 말고, 현재
 수학 과제와 관련된 행동의 의미만 짧고 추상적으로 적는다. 내부 추론을 쓰지 말고 지정된
 JSON만 출력한다.
+
+guard_feedback_codes에 relation_evidence_is_bare_result가 있으면, 숫자·단위·짧은 종결어만
+있는 evidence_span을 방법·이유 relation으로 사용했다는 뜻이다. 원래 의미 판정을 바꾸거나
+fact claim을 버리지 말고, 그 relation claim만 제거하여 다시 출력한다.
 
 claim은 역할별 배열에 나눠 쓴다. fact_claims에는 target_id=fact ID와
 claim_type=final_answer|intermediate_result만, relation_claims에는 target_id=relation ID와

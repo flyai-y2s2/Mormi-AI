@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 from enum import StrEnum
 
@@ -27,6 +28,31 @@ class EvidenceGuardViolationCodeV2(StrEnum):
     UNKNOWN_RELATION_ID = "unknown_relation_id"
     AUXILIARY_CLAIMS_DISABLED = "auxiliary_claims_disabled"
     EVIDENCE_NOT_LITERAL = "evidence_not_literal"
+    RELATION_EVIDENCE_IS_BARE_RESULT = "relation_evidence_is_bare_result"
+
+
+_BARE_NUMERIC_RESULT_V2 = re.compile(
+    r"""
+    ^\s*
+    [-+]?\d[\d,]*(?:\.\d+)?
+    \s*(?:원|명|개|권|번|회|쪽|줄|잔|장)?
+    \s*(?:이야|야|이에요|예요|입니다)?
+    \s*[.!?~^]*\s*$
+    """,
+    re.VERBOSE,
+)
+
+
+def _is_bare_numeric_result(evidence_span: str) -> bool:
+    """Return whether a span states only one result value.
+
+    A bare quantity can prove a fact, but it cannot literally prove a method or
+    explanation relation. This is a provenance boundary, not arithmetic
+    re-grading: equations, operation words, causal language and every other
+    non-bare explanation continue to be judged only by the understanding model.
+    """
+
+    return _BARE_NUMERIC_RESULT_V2.fullmatch(evidence_span) is not None
 
 
 class EvidenceMatchV2(DialogueV2Model):
@@ -171,6 +197,19 @@ def guard_understanding_response_v2(
                 EvidenceGuardViolationV2(
                     claim_id=claim.claim_id,
                     code=EvidenceGuardViolationCodeV2.EVIDENCE_NOT_LITERAL,
+                )
+            )
+            continue
+
+        if (
+            isinstance(claim, RelationUnderstandingClaimV2)
+            and claim.verdict in {"correct", "sufficient"}
+            and _is_bare_numeric_result(claim.evidence_span)
+        ):
+            violations.append(
+                EvidenceGuardViolationV2(
+                    claim_id=claim.claim_id,
+                    code=(EvidenceGuardViolationCodeV2.RELATION_EVIDENCE_IS_BARE_RESULT),
                 )
             )
             continue

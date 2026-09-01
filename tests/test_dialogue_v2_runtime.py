@@ -730,6 +730,88 @@ async def test_incorrect_free_text_gets_a_conversational_reask_with_visible_help
 
 
 @pytest.mark.asyncio
+async def test_l3_bare_answer_cannot_complete_the_missing_method_target() -> None:
+    first = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "reasoning_status": "sufficient",
+            "claims": [
+                {
+                    "claim_kind": "fact",
+                    "claim_id": "claim_book_count",
+                    "fact_id": "affordable_count",
+                    "claim_type": "final_answer",
+                    "evidence_span": "7권",
+                    "interpreted_value": {
+                        "type": "number",
+                        "value": 7,
+                        "unit": "권",
+                    },
+                    "verdict": "correct",
+                },
+                {
+                    "claim_kind": "relation",
+                    "claim_id": "claim_invented_book_method",
+                    "relation_id": "count_price_groups",
+                    "claim_type": "procedure_step",
+                    "evidence_span": "7권",
+                    "verdict": "sufficient",
+                },
+            ],
+        }
+    )
+    repaired = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "reasoning_status": "missing",
+            "claims": [
+                {
+                    "claim_kind": "fact",
+                    "claim_id": "claim_book_count",
+                    "fact_id": "affordable_count",
+                    "claim_type": "final_answer",
+                    "evidence_span": "7권",
+                    "interpreted_value": {
+                        "type": "number",
+                        "value": 7,
+                        "unit": "권",
+                    },
+                    "verdict": "correct",
+                }
+            ],
+        }
+    )
+    gateway = RecordingV2Gateway([first, repaired])
+    engine = DialogueV2Engine(gateway)
+    state = _state("divide-group")
+    initial = await _initialize(engine, state, "divide-group")
+    state.expression_level = ExpressionLevel.L3
+    state.subgoal_id = "l3.answer"
+
+    result = await _run_turn(
+        engine,
+        state,
+        _response(initial.turn_id, ResponseType.TEXT, text="7권"),
+        "나 14,000원으로 책을 몇 권 살 수 있는지 헷갈려... 책 수만 먼저 알려줄 수 있어?",
+    )
+
+    assert len(gateway.understanding_requests) == 2
+    assert gateway.understanding_requests[1].guard_feedback_codes == [
+        "relation_evidence_is_bare_result"
+    ]
+    assert result.state.status is SessionStatus.ACTIVE
+    assert result.runtime.newly_verified_fact_ids == ["affordable_count"]
+    assert result.runtime.newly_verified_relation_ids == []
+    assert result.state.expression_level is ExpressionLevel.L3
+    assert result.turn.input.kind is InputKind.TEXT
+    assert result.turn.mormi.text.endswith("계산 방법 알려줄 수 있어?")
+
+
+@pytest.mark.asyncio
 async def test_incorrect_free_text_keeps_speaker_when_ladder_enters_l0() -> None:
     gateway = RecordingV2Gateway([_incorrect_book_count_understanding()])
     engine = DialogueV2Engine(gateway)

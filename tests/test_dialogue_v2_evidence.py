@@ -296,3 +296,67 @@ def test_guard_accepts_claim_free_non_learning_response() -> None:
 
     assert guarded.response == response
     assert guarded.evidence_matches == []
+
+
+@pytest.mark.parametrize("child_utterance", ["7권", "3,000원이야", "6번이야~"])
+def test_guard_rejects_bare_answer_as_sufficient_method_evidence(
+    child_utterance: str,
+) -> None:
+    request = _request(child_utterance)
+    response = UnderstandingResponseV2(
+        utterance_class="learning_response",
+        contains_learning_evidence=True,
+        answer_status="complete",
+        reasoning_status="sufficient",
+        claims=[
+            RelationUnderstandingClaimV2(
+                claim_id="claim_invented_method",
+                relation_id="calculate_shortage",
+                claim_type="procedure_step",
+                evidence_span=child_utterance,
+                verdict="sufficient",
+            )
+        ],
+    )
+
+    with pytest.raises(UnderstandingEvidenceGuardError) as error:
+        guard_understanding_response_v2(request, response)
+
+    assert [violation.code for violation in error.value.violations] == [
+        EvidenceGuardViolationCodeV2.RELATION_EVIDENCE_IS_BARE_RESULT
+    ]
+
+
+@pytest.mark.parametrize(
+    "child_utterance",
+    [
+        "6000나누기 2는 3000이니까",
+        "6000원을 2로 나누면 3000원이야",
+        "6000나누기2",
+        "600+100=700",
+        "네가 낸 돈에서 쿠키 값을 빼면 돼",
+    ],
+)
+def test_guard_keeps_actual_method_evidence_for_model_adjudication(
+    child_utterance: str,
+) -> None:
+    request = _request(child_utterance)
+    response = UnderstandingResponseV2(
+        utterance_class="learning_response",
+        contains_learning_evidence=True,
+        reasoning_status="sufficient",
+        claims=[
+            RelationUnderstandingClaimV2(
+                claim_id="claim_actual_method",
+                relation_id="calculate_shortage",
+                claim_type="procedure_step",
+                evidence_span=child_utterance,
+                verdict="sufficient",
+            )
+        ],
+    )
+
+    guarded = guard_understanding_response_v2(request, response)
+
+    assert guarded.response == response
+    assert guarded.evidence_matches[0].source_text == child_utterance
