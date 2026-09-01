@@ -21,9 +21,12 @@ from mormi_api.repository import Repository
 from mormi_api.schemas import (
     ChildResponse,
     DialogueRuntimeContractVersion,
+    ExpressionLevel,
     InputKind,
+    LearnerProfile,
     ResponseType,
     SessionCreate,
+    SkillProfile,
 )
 from mormi_api.security import TextCipher
 from mormi_api.service import ConversationService
@@ -239,6 +242,38 @@ async def test_only_new_eligible_home_conversations_select_v2_and_pin_it(
     assert selecting_service.dialogue_snapshot_reader_capabilities == (
         "dialogue-v2-snapshot-reader-v2",
     )
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_new_v2_home_conversation_starts_at_the_approved_skill_level(
+    tmp_path: object,
+) -> None:
+    database = Database(f"sqlite+aiosqlite:///{tmp_path}/v2-approved-level.db")
+    await database.create_schema()
+    repository = Repository(database, TextCipher("test-encryption-key"))
+    await repository.save_profile(
+        LearnerProfile(
+            learner_id=71,
+            skills={
+                "money_count": SkillProfile(
+                    skill_id="money_count",
+                    highest_stable_expression_level=ExpressionLevel.L2,
+                )
+            },
+        )
+    )
+    service = _service(
+        repository,
+        configured_version=DialogueRuntimeContractVersion.VERDICT_V1,
+        canary_percent=100,
+    )
+
+    started = await service.create_conversation(_home_request())
+    state = await repository.get_state(started.conversation_id)
+
+    assert state.expression_level is ExpressionLevel.L2
+    assert started.turn.input.kind is InputKind.CHOICES
     await database.dispose()
 
 

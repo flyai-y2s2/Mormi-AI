@@ -367,15 +367,20 @@ class DialogueV2Engine:
             selector_reason=selector_reason,
             canary_bucket=canary_bucket,
         )
-        state.expression_level = ExpressionLevel.L4
+        state.expression_level = state.task_start_level.canonical()
         state.hint_level = HintLevel.H0
         state.subgoal_id = pack.initial_question.plan_id
+        opening_text = (
+            pack.initial_question.reviewed_fallback
+            if state.expression_level is ExpressionLevel.L4
+            else self._question_contract(state, pack, ledger).fallback
+        )
         state.verified_slots = {}
         turn = self._build_turn(
             state,
             pack,
             ledger,
-            text=pack.initial_question.reviewed_fallback,
+            text=opening_text,
             mood="curious",
         )
         state.current_turn_id = turn.turn_id
