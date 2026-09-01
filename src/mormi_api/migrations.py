@@ -32,6 +32,7 @@ CURRENT_HEAD_TABLES = UNVERSIONED_BASELINE_TABLES | {
 
 SCENARIO_IDENTITY_TRANSITION_REVISION = "20260826_05"
 SCENARIO_IDENTITY_FINAL_REVISION = "20260826_06"
+SESSION_PARENT_REVISION = "20260831_07"
 SCENARIO_IDENTITY_READER_CAPABILITY = "conversation-scenario-idempotency-reader-v1"
 OLD_CONVERSATION_IDENTITY = "uq_conversation_learning_session_round"
 NEW_CONVERSATION_IDENTITY = (
@@ -206,6 +207,14 @@ def _require_unversioned_baseline_schema(bind: Connection | Engine) -> None:
     )
 
 
+def require_session_parent_schema(bind: Connection | Engine) -> None:
+    """The optional parent is additive; turn-only readers still accept revision 06."""
+    _raise_schema_issues(
+        _application_schema_issues(bind, required_tables={"dialogue_session_parents"}),
+        contract="Session parent",
+    )
+
+
 def synchronous_url(raw_url: str) -> str:
     url = make_url(raw_url)
 
@@ -236,6 +245,7 @@ def apply_database_migrations(
         "head",
         SCENARIO_IDENTITY_TRANSITION_REVISION,
         SCENARIO_IDENTITY_FINAL_REVISION,
+        SESSION_PARENT_REVISION,
     }:
         raise ValueError(f"unsupported database migration target: {target_revision}")
     expected_phase: ConversationIdentitySchemaPhase = (
@@ -261,7 +271,11 @@ def apply_database_migrations(
                 command.stamp(config, "20260825_04")
                 command.upgrade(config, SCENARIO_IDENTITY_TRANSITION_REVISION)
             else:
-                command.stamp(config, SCENARIO_IDENTITY_FINAL_REVISION)
+                command.stamp(
+                    config,
+                    SESSION_PARENT_REVISION if target_revision in {"head", SESSION_PARENT_REVISION}
+                    else SCENARIO_IDENTITY_FINAL_REVISION,
+                )
             require_observation_schema(engine, identity_contract=expected_phase)
         elif "alembic_version" in existing or not (existing & OBSERVATION_TABLES):
             # Existing pilot databases keep every row. Revision 05 expands the
@@ -287,6 +301,8 @@ def apply_database_migrations(
                 "Partial observation schema detected; refusing to guess. "
                 f"present={partial}, missing={missing}"
             )
+        if target_revision in {"head", SESSION_PARENT_REVISION}:
+            require_session_parent_schema(engine)
     finally:
         engine.dispose()
     return expected_phase

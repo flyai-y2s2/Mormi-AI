@@ -43,6 +43,12 @@ from mormi_api.schemas import (
     UnderstandingResponseV2,
 )
 
+EXPRESSION_BLOCK_CASES = (
+    "뭐라고 설명할지 모르겠어",
+    "설명하기 어려워",
+    "뭐라고 말해야 할지 모르겠어",
+)
+
 
 @dataclass(frozen=True)
 class InteractionCase:
@@ -331,6 +337,76 @@ async def test_task_question_opens_more_support_without_advancing_ledger(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("child_text", EXPRESSION_BLOCK_CASES)
+@pytest.mark.parametrize(
+    ("start_level", "expected_level", "expected_input"),
+    [
+        (ExpressionLevel.L4, ExpressionLevel.L3, InputKind.TEXT),
+        (ExpressionLevel.L3, ExpressionLevel.L2, InputKind.CHOICES),
+        (ExpressionLevel.L2, ExpressionLevel.L0, InputKind.JOINT),
+    ],
+)
+async def test_expression_block_immediately_lowers_visible_expression_contract(
+    child_text: str,
+    start_level: ExpressionLevel,
+    expected_level: ExpressionLevel,
+    expected_input: InputKind,
+) -> None:
+    """Sonnet's expression intent must become visible support in the same turn."""
+
+    understanding = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "help_request",
+            "conversation_move": "none",
+            "move_subject": "other",
+            "support_need": "expression",
+        }
+    )
+    gateway = InteractionGateway([understanding])
+    engine = DialogueV2Engine(gateway)
+    state = _state()
+    initial = await _initialize(engine, state)
+    state.expression_level = start_level
+    before_ledger = _ledger(state).model_dump(mode="json")
+
+    result = await _run(
+        engine,
+        state,
+        initial,
+        _text_response(initial.turn_id, child_text),
+    )
+
+    assert _ledger(result.state).model_dump(mode="json") == before_ledger
+    assert result.state.expression_level is expected_level
+    assert result.turn.input.kind is expected_input
+    assert result.runtime.dialogue_act == "offer_support"
+    assert result.runtime.speaker_source == "reviewed_fallback"
+    assert result.runtime.new_progress is False
+    assert gateway.understanding_requests[0].child_utterance == child_text
+    assert gateway.speaker_plans == []
+    assert gateway.bridge_plans == []
+    assert result.turn.mormi.text == {
+        ExpressionLevel.L3: (
+            "나 세 명이 똑같이 내면 한 명이 얼마를 내는지 헷갈려... "
+            "한 명이 낼 돈만 알려줄 수 있어?"
+        ),
+        ExpressionLevel.L2: (
+            "나 한 명이 얼마를 내는지 아직 헷갈려... 여기에서 골라서 알려줄 수 있어?"
+        ),
+        ExpressionLevel.L0: (
+            "아직 헷갈려서 그런데, 도움 카드를 보면서 나와 같이 계산해 줄 수 있어?"
+        ),
+    }[expected_level]
+    assert result.turn.mormi.text.count("?") == 1
+    if expected_level is ExpressionLevel.L0:
+        assert result.state.hint_level is HintLevel.H3
+        assert result.turn.help_card.visible is True
+    else:
+        assert result.state.hint_level is HintLevel.H0
+        assert result.turn.help_card is None
+
+
+@pytest.mark.asyncio
 async def test_request_that_mormi_answer_opens_support_instead_of_repeating() -> None:
     request_understanding = UnderstandingResponseV2.model_validate(
         {
@@ -490,13 +566,17 @@ async def test_meta_plus_correct_answer_preserves_progress_and_social_response()
 
 
 @pytest.mark.asyncio
-async def test_normal_partial_progress_always_keeps_server_owned_reask() -> None:
+@pytest.mark.parametrize("support_need", ["none", "expression"])
+async def test_normal_partial_progress_always_keeps_server_owned_reask(
+    support_need: str,
+) -> None:
     """A valid acknowledgement-only model output cannot erase the active question."""
 
     child_text = "한 사람이 낼 돈은 3500원이야"
     understanding = UnderstandingResponseV2.model_validate(
         {
             "utterance_class": "learning_response",
+            "support_need": support_need,
             "contains_learning_evidence": True,
             "answer_status": "complete",
             "reasoning_status": "missing",

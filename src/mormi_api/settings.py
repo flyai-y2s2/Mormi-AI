@@ -45,6 +45,11 @@ class Settings(BaseSettings):
         max_length=200,
     )
     stable_copy_model: str = "claude-sonnet-4-6"
+    # Independent from legacy/V2 selection. Only newly created V2 conversations
+    # enroll; the enabled flag is a turn-only emergency bypass for enrolled ones.
+    session_parent_graph_enabled: bool = False
+    session_parent_graph_canary_percent: int = Field(default=0, ge=0, le=100)
+    session_parent_store_timeout_seconds: float = Field(default=0.5, ge=0.05, le=5)
     stable_copy_effort: EffortLevel = "low"
     stable_copy_timeout_seconds: float = Field(default=8.0, ge=0.5, le=30)
     stable_copy_prompt_version: str = Field(default="stable-copy-v1", min_length=1)

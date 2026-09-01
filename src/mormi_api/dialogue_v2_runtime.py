@@ -551,6 +551,31 @@ class DialogueV2Engine:
             return semantics.route
         return "main"
 
+    @staticmethod
+    def _uses_reviewed_expression_support(semantics: _TurnSemantics) -> bool:
+        """Keep a pure expression block out of the dynamic reaction speaker.
+
+        The ladder has already selected a reviewed, visibly easier question.
+        Asking Haiku for a reaction here gives it no learning evidence to
+        acknowledge and can make it ask the same question that the server must
+        append. Mixed turns with actual learning progress still use the normal
+        speaker so Mormi can acknowledge only what the child really taught.
+        """
+
+        return (
+            semantics.route == "main"
+            # Silence timeout also carries SupportNeed.EXPRESSION, but it has
+            # a separate typed no-response contract and must keep its existing
+            # conversational speaker path. This branch is only for a free-text
+            # expression block actually classified by Sonnet.
+            and semantics.understanding_source == "sonnet_low"
+            and semantics.response.support_need is SupportNeed.EXPRESSION
+            and semantics.response.conversation_move is ConversationMoveV2.NONE
+            and not semantics.response.contains_learning_evidence
+            and not semantics.apply_result.has_new_canonical_progress
+            and not semantics.apply_result.has_new_partial_progress
+        )
+
     async def _render_execution_speech(self, turn: _TurnExecution) -> None:
         state = turn.state
         response = turn.response
@@ -579,6 +604,17 @@ class DialogueV2Engine:
             mood = "thinking"
             source = "deterministic_validation_fallback"
             fallback_reason = semantics.understanding_failure_reason
+            speaker_latency = None
+            emitted_dialogue_act = self._dialogue_act(semantics)
+        elif self._uses_reviewed_expression_support(semantics):
+            # The authored L3/L2/L0 question is already the complete response.
+            # Do not ask Haiku for a redundant reaction and do not append a
+            # second server question. This is a finite support transition, not
+            # a semantic output validator or a child-answer regrade.
+            text = question.fallback
+            mood = "thinking"
+            source = "reviewed_fallback"
+            fallback_reason = None
             speaker_latency = None
             emitted_dialogue_act = self._dialogue_act(semantics)
         elif stable is not None and semantics.route == "stable":

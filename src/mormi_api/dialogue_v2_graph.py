@@ -109,7 +109,9 @@ def build_turn_graph(engine: DialogueV2Engine) -> Any:
     builder.add_edge("complete", "compose")
     builder.add_edge("compose", "note")
     builder.add_edge("note", END)
-    return builder.compile(name="mormi_v2_turn")
+    # None inherits a parent's saver. False explicitly keeps child text and
+    # transient execution frames out of the session parent's checkpoints.
+    return builder.compile(checkpointer=False, name="mormi_v2_turn")
 
 
 async def stream_turn_graph(

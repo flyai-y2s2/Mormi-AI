@@ -163,9 +163,9 @@ async def test_shared_graph_keeps_concurrent_turns_and_context_separate(
     assert left.state.conversation_id != right.state.conversation_id
     assert left.state.current_turn_id != right.state.current_turn_id
     assert left.state.state_version == right.state.state_version == 2
-    assert engine._turn_graph.checkpointer is None
-    assert engine._understanding_graph.checkpointer is None
-    assert engine._speaker_graph.checkpointer is None
+    assert engine._turn_graph.checkpointer is False
+    assert engine._understanding_graph.checkpointer is False
+    assert engine._speaker_graph.checkpointer is False
 
 
 def test_retry_subgraphs_have_only_the_existing_bounded_loop() -> None:

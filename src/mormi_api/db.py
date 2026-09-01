@@ -75,6 +75,23 @@ class ConversationRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class SessionParentRecord(Base):
+    """Internal, replaceable workflow cursor. Never a source of learning truth."""
+
+    __tablename__ = "dialogue_session_parents"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.conversation_id", ondelete="CASCADE"), primary_key=True
+    )
+    graph_version: Mapped[str] = mapped_column(String(60))
+    state_version: Mapped[int] = mapped_column(Integer)
+    turn_id: Mapped[str] = mapped_column(String(100))
+    phase: Mapped[str] = mapped_column(String(20))
+    generation: Mapped[int] = mapped_column(Integer, default=1)
+    checkpoint: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class TurnRecord(Base):
     __tablename__ = "turns"
     __table_args__ = (

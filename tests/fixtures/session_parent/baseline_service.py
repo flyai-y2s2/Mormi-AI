@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import logging
 import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Literal, cast
-
-from sqlalchemy.exc import SQLAlchemyError
 
 from .content import create_scenario_data, get_scenario, get_task
 from .dialogue_v2_amusement_content import materialize_amusement_scenario_v2
@@ -50,11 +46,8 @@ from .schemas import (
     SessionCreate,
     SessionEnvelope,
     SessionState,
-    SessionStatus,
     utc_now,
 )
-from .session_parent_graph import SessionParentCoordinator
-from .session_parent_store import PARENT_GRAPH_VERSION, SessionParentStore
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +77,6 @@ class ConversationService:
         ),
         dialogue_v2_canary_percent: int = 0,
         dialogue_v2_canary_salt: str = "mormi-dialogue-v2-default",
-        session_parent_graph_enabled: bool = False,
-        session_parent_graph_canary_percent: int = 0,
-        session_parent_store_timeout_seconds: float = 0.5,
     ) -> None:
         if not 0 <= dialogue_v2_canary_percent <= 100:
             raise ValueError("dialogue V2 canary percent must be between 0 and 100")
@@ -97,16 +87,6 @@ class ConversationService:
         self.runtime_contract_version = runtime_contract_version
         self.dialogue_v2_canary_percent = dialogue_v2_canary_percent
         self.dialogue_v2_canary_salt = dialogue_v2_canary_salt
-        if not 0 <= session_parent_graph_canary_percent <= 100:
-            raise ValueError("session parent canary percent must be between 0 and 100")
-        self.session_parent_graph_canary_percent = session_parent_graph_canary_percent
-        self.session_parent = (
-            SessionParentCoordinator(
-                SessionParentStore(repository.database),
-                store_timeout_seconds=session_parent_store_timeout_seconds,
-            )
-            if session_parent_graph_enabled else None
-        )
 
     @property
     def dialogue_runtime_capabilities(
@@ -330,19 +310,6 @@ class ConversationService:
         persisted_conversation_id = await self.repository.create_conversation(state, turn)
         if persisted_conversation_id != state.conversation_id:
             return await self.snapshot(persisted_conversation_id)
-        if (
-            self.session_parent is not None
-            and state.runtime_contract_version is DialogueRuntimeContractVersion.VERDICT_V1
-            and int(hashlib.sha256(state.conversation_id.encode()).hexdigest()[:8], 16) % 100
-            < self.session_parent_graph_canary_percent
-        ):
-            try:
-                async with asyncio.timeout(self.session_parent.store_timeout_seconds):
-                    await self.session_parent.store.enroll(state)
-            except (SQLAlchemyError, TimeoutError):
-                # Creation already committed. Preserve its successful response;
-                # this conversation stays on the existing turn-only executor.
-                logger.warning("session_parent_enrollment_skipped reason=storage_unavailable")
         return SessionEnvelope(conversation_id=state.conversation_id, turn=turn)
 
     async def respond(
@@ -375,49 +342,6 @@ class ConversationService:
             turn_scope.reset(token)
 
     async def _respond_stream_scoped(
-        self,
-        conversation_id: str,
-        response: ChildResponse,
-    ) -> AsyncGenerator[ConversationStreamEvent, None]:
-        if self.session_parent is not None:
-            # Preserve replay-before-stale, including an OLD response after later
-            # turns. Never substitute the parent's latest turn for its result.
-            prior = await self.repository.response_exists(
-                conversation_id, str(response.response_id)
-            )
-            if prior:
-                yield ConversationStreamEvent(
-                    name="turn",
-                    envelope=SessionEnvelope(conversation_id=conversation_id, turn=prior),
-                    replayed=True,
-                )
-                return
-            state = await self.repository.get_state(conversation_id)
-            if (
-                state.runtime_contract_version is DialogueRuntimeContractVersion.VERDICT_V1
-                and state.status is SessionStatus.ACTIVE
-            ):
-                try:
-                    async with asyncio.timeout(self.session_parent.store_timeout_seconds):
-                        cursor = await self.session_parent.store.load(conversation_id)
-                except (SQLAlchemyError, TimeoutError, ValueError):
-                    logger.warning("session_parent_bypassed reason=cursor_unavailable")
-                    cursor = None
-                if cursor is not None and cursor.graph_version == PARENT_GRAPH_VERSION:
-                    async with aclosing(self.session_parent.stream(
-                        state,
-                        cursor,
-                        str(response.response_id),
-                        lambda: self._respond_stream_turn_only(conversation_id, response),
-                    )) as events:
-                        async for event in events:
-                            yield event
-                    return
-        async with aclosing(self._respond_stream_turn_only(conversation_id, response)) as events:
-            async for event in events:
-                yield event
-
-    async def _respond_stream_turn_only(
         self,
         conversation_id: str,
         response: ChildResponse,

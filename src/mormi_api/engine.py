@@ -132,14 +132,14 @@ class ConversationEngine:
         self.graph = self._build_graph()
 
     def _build_graph(self) -> Any:
-        builder = StateGraph(ConversationGraphState)
+        builder: Any = StateGraph(ConversationGraphState)
         # LangGraph's current generic overloads do not accept async bound methods
         # cleanly in mypy even though they are supported at runtime.
-        builder.add_node("understand", self._understand_node)  # type: ignore[call-overload]
-        builder.add_node("orchestrate", self._orchestrate_node)  # type: ignore[call-overload]
-        builder.add_node("bridge_speak", self._bridge_speak_node)  # type: ignore[call-overload]
-        builder.add_node("speak", self._speak_node)  # type: ignore[call-overload]
-        builder.add_node(  # type: ignore[call-overload]
+        builder.add_node("understand", self._understand_node)
+        builder.add_node("orchestrate", self._orchestrate_node)
+        builder.add_node("bridge_speak", self._bridge_speak_node)
+        builder.add_node("speak", self._speak_node)
+        builder.add_node(
             "validate_and_compose",
             self._validate_and_compose_node,
         )
