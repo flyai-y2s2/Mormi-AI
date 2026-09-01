@@ -29,6 +29,7 @@ from mormi_api.dialogue_v2_versions import (
 )
 from mormi_api.engine import ConversationEngine
 from mormi_api.llm import (
+    UNDERSTANDING_V2_SYSTEM,
     ClaudeGateway,
     _internal_understanding_response,
     structured_output_schema,
@@ -136,6 +137,17 @@ def test_runtime_contract_flag_defaults_to_legacy_and_rejects_unknown_values() -
         _env_file=None,
         runtime_contract_version="verdict-v1",
     ).validate_runtime_safety()
+
+
+def test_understanding_prompt_defines_expression_block_without_surface_code_rules() -> None:
+    for child_text in (
+        "뭐라고 설명할지 모르겠어",
+        "설명하기 어려워",
+        "뭐라고 말해야 할지 모르겠어",
+    ):
+        assert child_text in UNDERSTANDING_V2_SYSTEM
+    assert "support_need=expression" in UNDERSTANDING_V2_SYSTEM
+    assert "계산 방법 자체를 모르겠어" in UNDERSTANDING_V2_SYSTEM
 
 
 def test_legacy_state_without_runtime_contract_field_loads_as_legacy() -> None:

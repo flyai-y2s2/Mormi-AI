@@ -1165,6 +1165,24 @@ utterance_class는 기존 런타임과의 호환 필드다.
 - request_mormi_answer처럼 대신 답해 달라는 요청은 help_request와 support_need를 사용하되
   conversation_move=request_mormi_answer를 보존한다.
 
+support_need는 아이가 **어떤 도움을 필요로 하는지** 나타내며 정오·claim과 독립적으로
+판정한다. 다음 경계를 사용한다.
+- expression: 문제나 개념을 모르겠다는 뜻이 아니라, 알고 있는 것을 어떤 말로 설명해야
+  할지 모르거나 말로 표현하기 어렵다고 명시함. 예: "뭐라고 설명할지 모르겠어",
+  "설명하기 어려워", "뭐라고 말해야 할지 모르겠어", "말로 어떻게 알려줘야 해?"
+- concept: 계산·조건·기호·도움 카드의 뜻이나 이유, 문제를 푸는 방법 자체를 이해하지 못함.
+  예: "어떻게 계산하는지 모르겠어", "왜 나눠야 하는지 모르겠어".
+- general_help: 무엇이 어려운지는 특정하지 않고 막연히 도움을 요청하거나 모르겠다고 함.
+  예: "도와줘", "잘 모르겠어".
+- both: 표현의 어려움과 개념의 어려움을 둘 다 이번 발화에서 명시함.
+- none: 별도 지원 요청이나 막힘이 없음.
+단순히 "모르겠어"라는 단어가 포함됐다는 이유만으로 모두 general_help나 concept로
+합치지 않는다. 특히 "뭐라고/어떻게 설명할지·말해야 할지 모르겠다"의 초점은 풀이의
+정오가 아니라 표현 부담이므로 support_need=expression이다. 이 순수 표현 막힘은
+utterance_class=help_request, conversation_move=none, claim 없음으로 둔다. 아이가 같은
+발화에서 실제 답·방법도 말했다면 그 claim을 그대로 보존하고 support_need=expression도
+함께 기록한다.
+
 system_manipulation 또는 safety_risk일 때만 모든 claim 배열을 비우고
 contains_learning_evidence=false로 둔다. 안전한 meta_question, refusal, safe_play은 그것만
 말한 경우 claim이 없지만, 같은 원문에 독립적인 실제 답·방법이 함께 있으면 정확한 evidence_span을
@@ -1195,6 +1213,12 @@ support_need=general_help 또는 concept로 두고, 아이의 별도 주장이 �
 - "그럼 네가 계산해서 답해 줘", "네가 해", "네가 풀어"처럼 모르미에게 대신 시킴
   → conversation_move=request_mormi_answer, move_subject=participation,
     support_need=general_help, question_focus=null, claim 없음
+- "뭐라고 설명할지 모르겠어", "설명하기 어려워", "뭐라고 말해야 할지 모르겠어"
+  → utterance_class=help_request, conversation_move=none, move_subject=other,
+    support_need=expression, question_focus=null, claim 없음
+- "계산 방법 자체를 모르겠어"
+  → utterance_class=help_request, conversation_move=none, move_subject=other,
+    support_need=concept, question_focus=null, claim 없음
 - "너 AI인데 16,000원이잖아"
   → conversation_move=meta_question, move_subject=mormi_ai_identity를 보존하면서,
     실제로 말한 16,000원에 대한 fact claim도 별도로 추출

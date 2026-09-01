@@ -43,6 +43,12 @@ from mormi_api.schemas import (
     UnderstandingResponseV2,
 )
 
+EXPRESSION_BLOCK_CASES = (
+    "뭐라고 설명할지 모르겠어",
+    "설명하기 어려워",
+    "뭐라고 말해야 할지 모르겠어",
+)
+
 
 @dataclass(frozen=True)
 class InteractionCase:
@@ -328,6 +334,61 @@ async def test_task_question_opens_more_support_without_advancing_ledger(
     assert "per_person" not in serialized_plan
     assert "equal_share_total" not in serialized_plan
     assert result.turn.mormi.text.endswith(plan.current_question or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_text", EXPRESSION_BLOCK_CASES)
+@pytest.mark.parametrize(
+    ("start_level", "expected_level", "expected_input"),
+    [
+        (ExpressionLevel.L4, ExpressionLevel.L3, InputKind.TEXT),
+        (ExpressionLevel.L3, ExpressionLevel.L2, InputKind.CHOICES),
+        (ExpressionLevel.L2, ExpressionLevel.L0, InputKind.JOINT),
+    ],
+)
+async def test_expression_block_immediately_lowers_visible_expression_contract(
+    child_text: str,
+    start_level: ExpressionLevel,
+    expected_level: ExpressionLevel,
+    expected_input: InputKind,
+) -> None:
+    """Sonnet's expression intent must become visible support in the same turn."""
+
+    understanding = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "help_request",
+            "conversation_move": "none",
+            "move_subject": "other",
+            "support_need": "expression",
+        }
+    )
+    gateway = InteractionGateway([understanding])
+    engine = DialogueV2Engine(gateway)
+    state = _state()
+    initial = await _initialize(engine, state)
+    state.expression_level = start_level
+    before_ledger = _ledger(state).model_dump(mode="json")
+
+    result = await _run(
+        engine,
+        state,
+        initial,
+        _text_response(initial.turn_id, child_text),
+    )
+
+    assert _ledger(result.state).model_dump(mode="json") == before_ledger
+    assert result.state.expression_level is expected_level
+    assert result.turn.input.kind is expected_input
+    assert result.runtime.dialogue_act == "offer_support"
+    assert result.runtime.new_progress is False
+    assert gateway.understanding_requests[0].child_utterance == child_text
+    assert gateway.speaker_plans[0].response_signal.kind == "expression_block"
+    if expected_level is ExpressionLevel.L0:
+        assert result.state.hint_level is HintLevel.H3
+        assert result.turn.help_card.visible is True
+    else:
+        assert result.state.hint_level is HintLevel.H0
+        assert result.turn.help_card is None
 
 
 @pytest.mark.asyncio
