@@ -367,7 +367,7 @@ class DialogueV2Engine:
             selector_reason=selector_reason,
             canary_bucket=canary_bucket,
         )
-        state.expression_level = state.task_start_level.canonical()
+        state.expression_level = state.expression_level.canonical()
         state.hint_level = HintLevel.H0
         state.subgoal_id = pack.initial_question.plan_id
         opening_text = (
