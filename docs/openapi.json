@@ -1805,6 +1805,16 @@
             "minimum": 0.0,
             "title": "Dialogue V2 Canary Percent"
           },
+          "observation_ingest_enabled": {
+            "type": "boolean",
+            "title": "Observation Ingest Enabled",
+            "default": false
+          },
+          "star_note_events_enabled": {
+            "type": "boolean",
+            "title": "Star Note Events Enabled",
+            "default": false
+          },
           "dialogue_runtime_capabilities": {
             "items": {
               "$ref": "#/components/schemas/DialogueRuntimeContractVersion"

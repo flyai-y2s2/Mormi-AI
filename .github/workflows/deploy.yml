@@ -391,6 +391,36 @@ jobs:
           '
           }
 
+          configure_star_note_delivery() {
+            local image="$1"
+            local backend_ingest_key
+
+            if ! docker ps --format '{{.Names}}' | grep -q '^mormi-backend$'; then
+              echo "mormi-backend must be running before star-note delivery is enabled"
+              exit 1
+            fi
+            backend_ingest_key="$(docker inspect mormi-backend \
+              --format '{{range .Config.Env}}{{println .}}{{end}}' \
+              | awk -F= '$1 == "MORMI_OBSERVATION_INGEST_KEY" {sub(/^[^=]*=/, ""); print; exit}')"
+            if [ -z "${backend_ingest_key}" ]; then
+              echo "mormi-backend has no observation ingest key"
+              exit 1
+            fi
+
+            persist_mormi_env \
+              "${image}" \
+              MORMI_OBSERVATION_INGEST_URL \
+              http://mormi-backend:8080/internal/v1/observations/events
+            persist_mormi_env \
+              "${image}" \
+              MORMI_OBSERVATION_INGEST_KEY \
+              "${backend_ingest_key}"
+            persist_mormi_env \
+              "${image}" \
+              MORMI_STAR_NOTE_EVENTS_ENABLED \
+              true
+          }
+
           CANARY_ARGS=()
           if [ -n "${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE:-}" ]; then
             case "${DIALOGUE_V2_CANARY_PERCENT_OVERRIDE}" in
@@ -666,6 +696,10 @@ jobs:
             "${IMAGE_URI}" \
             MORMI_RUNTIME_CONTRACT_VERSION \
             verdict-v1
+          # The BE contract is already deployed. Reuse its private ingest key
+          # without printing it, persist the container-network URL, and open
+          # the pending star-note outbox only after every candidate gate passes.
+          configure_star_note_delivery "${IMAGE_URI}"
           docker rm -f mormi-ai-candidate
 
           # 검증된 후보로 API를 교체합니다.
@@ -748,7 +782,15 @@ jobs:
           fi
 
           echo "health:"
-          curl -fsS http://localhost:8000/health
+          live_health="$(curl -fsS http://localhost:8000/health)"
+          printf '%s\n' "${live_health}"
+          if ! printf '%s' "${live_health}" \
+            | grep -Eq '"observation_ingest_enabled"[[:space:]]*:[[:space:]]*true' \
+            || ! printf '%s' "${live_health}" \
+              | grep -Eq '"star_note_events_enabled"[[:space:]]*:[[:space:]]*true'; then
+            echo "live API did not enable star-note delivery"
+            exit 1
+          fi
 
           # 새 API가 정상인 경우에만 분석 워커를 교체합니다.
           docker rm -f mormi-ladder-worker 2>/dev/null || true
