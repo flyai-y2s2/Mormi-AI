@@ -13,7 +13,7 @@
 ![LangGraph](https://img.shields.io/badge/LangGraph-Stateful-1C3C3C)
 ![Claude](https://img.shields.io/badge/Claude-Sonnet%20%2B%20Haiku-D97757)
 
-[서비스 체험하기](https://iamssam.vercel.app) · [아키텍처](./docs/ARCHITECTURE.md) · [API 명세](./docs/API_SPEC.md)
+ [아키텍처](./docs/ARCHITECTURE.md) · [API 명세](./docs/API_SPEC.md)
 
 </div>
 
