@@ -575,6 +575,49 @@ def test_help_card_visibility_does_not_authorize_new_numbers() -> None:
     assert speaker_output_violation_v2(output, plan) == "number_not_allowed"
 
 
+def test_ui_reference_signal_carries_no_card_body_or_math() -> None:
+    payload = _speaker_plan().model_dump(mode="json")
+    payload["support"].update(
+        {
+            "hint_level": "H2",
+            "help_card_visible": True,
+        }
+    )
+    payload["response_signal"]["ui_reference"] = {
+        "referenced_kind": "help_card",
+        "interaction": "asks_what_next",
+        "card_event": "opened_or_strengthened",
+    }
+
+    plan = SpeakerPlanV2.model_validate(payload)
+    signal = plan.response_signal.ui_reference
+
+    assert signal is not None
+    serialized = plan.model_dump_json()
+    assert "help_card_body" not in serialized
+    assert "visible_ui_elements" not in serialized
+    assert "6000" not in serialized
+    assert "2000" not in serialized
+
+    payload["response_signal"]["ui_reference"]["card_text"] = (
+        "6,000원에서 2,000원을 빼"
+    )
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        SpeakerPlanV2.model_validate(payload)
+
+
+def test_help_card_ui_reference_requires_actual_visible_card() -> None:
+    payload = _speaker_plan().model_dump(mode="json")
+    payload["response_signal"]["ui_reference"] = {
+        "referenced_kind": "help_card",
+        "interaction": "asks_why",
+        "card_event": "none",
+    }
+
+    with pytest.raises(ValidationError, match="requires a visible card"):
+        SpeakerPlanV2.model_validate(payload)
+
+
 def test_main_speaker_does_not_mistake_target_language_for_new_math() -> None:
     payload = _speaker_plan().model_dump(mode="json")
     payload["target_focus"][0]["speaker_label"] = "한 명이 낼 돈"

@@ -578,6 +578,30 @@ def test_provider_canonicalization_resolves_legacy_and_additive_axis_conflicts()
     assert answer_request.support_need.value == "general_help"
 
 
+def test_provider_canonicalization_preserves_ui_reference_as_independent_axis() -> None:
+    response = _internal_understanding_response(
+        _provider_understanding_response(
+            utterance_class="task_question",
+            conversation_move="task_question",
+            move_subject="task",
+            question_focus="reason_or_method",
+            support_need="concept",
+            ui_reference={
+                "element_id": "help_card.h1",
+                "interaction": "asks_why",
+                "reference_basis": "deictic",
+                "evidence_span": "저걸",
+            },
+        )
+    )
+
+    assert response.ui_reference is not None
+    assert response.ui_reference.element_id == "help_card.h1"
+    assert response.ui_reference.interaction.value == "asks_why"
+    assert response.claims == []
+    assert response.contains_learning_evidence is False
+
+
 def test_provider_canonicalization_derives_learning_flag_from_actual_claims() -> None:
     claimed = _internal_understanding_response(
         _provider_understanding_response(

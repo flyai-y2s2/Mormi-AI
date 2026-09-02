@@ -71,6 +71,89 @@ def _request(
     )
 
 
+def _with_visible_help_card(
+    request: UnderstandingRequestV2,
+) -> UnderstandingRequestV2:
+    payload = request.model_dump(mode="json")
+    payload["current_turn"]["hint_level"] = "H1"
+    payload["visible_ui_elements"] = [
+        {
+            "element_id": "help_card.h1",
+            "kind": "help_card",
+            "text": "낸 돈과 쿠키 값을 주의 깊게 보자.",
+            "hint_level": "H1",
+        }
+    ]
+    return UnderstandingRequestV2.model_validate(payload)
+
+
+def test_ui_reference_is_grounded_without_becoming_learning_evidence() -> None:
+    child_text = "저걸 왜 주의 깊게 봐야 돼?"
+    request = _with_visible_help_card(_request(child_text))
+    response = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "task_question",
+            "conversation_move": "task_question",
+            "move_subject": "task",
+            "question_focus": "reason_or_method",
+            "support_need": "concept",
+            "ui_reference": {
+                "element_id": "help_card.h1",
+                "interaction": "asks_why",
+                "reference_basis": "deictic",
+                "evidence_span": "저걸",
+            },
+        }
+    )
+
+    admission = admit_understanding_response_v2(request, response)
+
+    assert admission.guarded.response.ui_reference is not None
+    assert admission.guarded.response.claims == []
+    assert admission.guarded.response.contains_learning_evidence is False
+
+
+def test_invalid_ui_reference_is_dropped_without_erasing_valid_claim() -> None:
+    child_text = "1000원이고 저걸 왜 봐?"
+    request = _with_visible_help_card(_request(child_text))
+    response = UnderstandingResponseV2.model_validate(
+        {
+            "utterance_class": "learning_response",
+            "conversation_move": "task_question",
+            "move_subject": "task",
+            "question_focus": "reason_or_method",
+            "support_need": "concept",
+            "contains_learning_evidence": True,
+            "answer_status": "complete",
+            "claims": [
+                {
+                    "claim_kind": "fact",
+                    "claim_id": "claim_shortage",
+                    "fact_id": "shortage",
+                    "claim_type": "final_answer",
+                    "evidence_span": "1000원",
+                    "interpreted_value": {"type": "money", "amount": 1000},
+                    "verdict": "correct",
+                }
+            ],
+            "ui_reference": {
+                "element_id": "help_card.not_visible",
+                "interaction": "asks_why",
+                "reference_basis": "deictic",
+                "evidence_span": "저걸",
+            },
+        }
+    )
+
+    admission = admit_understanding_response_v2(request, response)
+
+    assert admission.guarded.response.ui_reference is None
+    assert [claim.claim_id for claim in admission.guarded.response.claims] == [
+        "claim_shortage"
+    ]
+    assert admission.quarantined_claims == []
+
+
 @pytest.mark.parametrize(
     ("child_utterance", "interpreted_amount", "verdict"),
     [

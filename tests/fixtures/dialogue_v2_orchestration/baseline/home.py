@@ -48,6 +48,7 @@ from .dialogue_v2_speaker import (
     SpeakerSupportV2,
     SpeakerTargetFocusV2,
     SpeakerTargetV2,
+    SpeakerUiReferenceSignalV2,
     StableCopyPlanV2,
     bridge_excerpt_violation_v2,
     pii_safe_bridge_excerpt_v2,
@@ -94,8 +95,11 @@ from .schemas import (
     TaskAnchorContract,
     TaskRelation,
     TurnContract,
+    UiElementKindV2,
+    UiReferenceInteractionV2,
     UnderstandingRequestV2,
     UnderstandingResponseV2,
+    UnderstandingVisibleUiElementV2,
     UtteranceAnalysis,
     UtteranceClassV2,
     VisualContract,
@@ -430,6 +434,7 @@ class DialogueV2Engine:
                 semantics,
                 question,
                 help_card_visible=next_state.hint_level is not HintLevel.H0,
+                help_card_strengthened=next_state.hint_level is not state.hint_level,
                 repeat_count=next_state.concept_failures,
             )
 
@@ -699,6 +704,10 @@ class DialogueV2Engine:
                     else []
                 ),
             },
+            "visible_ui_elements": self._visible_ui_elements(
+                pack,
+                state.hint_level,
+            ),
             "recent_history": recent_dialogue[-6:],
             "child_utterance": response.text,
             }
@@ -799,6 +808,27 @@ class DialogueV2Engine:
         )
 
     @staticmethod
+    def _visible_ui_elements(
+        pack: RequiredHomeTeachingPackV2,
+        hint_level: HintLevel,
+    ) -> list[UnderstandingVisibleUiElementV2]:
+        if hint_level is HintLevel.H0:
+            return []
+        card = {
+            HintLevel.H1: pack.help_plan.H1,
+            HintLevel.H2: pack.help_plan.H2,
+            HintLevel.H3: pack.help_plan.H3,
+        }[hint_level]
+        return [
+            UnderstandingVisibleUiElementV2(
+                element_id=f"help_card.{hint_level.value.lower()}",
+                kind=UiElementKindV2.HELP_CARD,
+                text=card.body,
+                hint_level=hint_level,
+            )
+        ]
+
+    @staticmethod
     def _merge_admitted_understanding(
         existing: GuardedUnderstandingV2 | None,
         current: GuardedUnderstandingV2,
@@ -817,6 +847,10 @@ class DialogueV2Engine:
                 update={
                     "claims": merged_claims,
                     "contains_learning_evidence": bool(merged_claims),
+                    "ui_reference": (
+                        existing.response.ui_reference
+                        or current.response.ui_reference
+                    ),
                 },
                 deep=True,
             ),
@@ -1128,6 +1162,8 @@ class DialogueV2Engine:
     ) -> Literal["main", "bridge", "safety", "stable"]:
         if response.utterance_class.value in {"system_manipulation", "safety_risk"}:
             return "safety"
+        if response.ui_reference is not None:
+            return "main"
         # The provider contract uses ``learning_response`` for a safe social
         # move that also carries real learning evidence.  Claims attached to
         # the legacy/pure ``non_learning_safe`` class remain fail-closed.
@@ -1151,6 +1187,16 @@ class DialogueV2Engine:
             # understanding or expression. Preserve every L/H counter exactly.
             return
         response = semantics.response
+        ui_reference_needs_support = (
+            response.ui_reference is not None
+            and response.ui_reference.interaction
+            in {
+                UiReferenceInteractionV2.ASKS_WHY,
+                UiReferenceInteractionV2.ASKS_WHAT_NEXT,
+                UiReferenceInteractionV2.EXPRESSES_CONFUSION,
+                UiReferenceInteractionV2.CHALLENGES,
+            }
+        )
         if semantics.apply_result.has_new_canonical_progress:
             state.expression_failures = 0
             state.concept_failures = 0
@@ -1159,7 +1205,7 @@ class DialogueV2Engine:
             if response.conversation_move in {
                 ConversationMoveV2.TASK_QUESTION,
                 ConversationMoveV2.REQUEST_MORMI_ANSWER,
-            }:
+            } or ui_reference_needs_support:
                 self._raise_hint(state)
             return
         if semantics.apply_result.has_new_partial_progress:
@@ -1174,7 +1220,7 @@ class DialogueV2Engine:
         if response.conversation_move in {
             ConversationMoveV2.TASK_QUESTION,
             ConversationMoveV2.REQUEST_MORMI_ANSWER,
-        }:
+        } or ui_reference_needs_support:
             # Reverse questions and requests that Mormi supply the answer are
             # not wrong answers. They ask the product to expose one stronger
             # reviewed scaffold, while the reasoning ledger stays untouched.
@@ -1827,6 +1873,7 @@ class DialogueV2Engine:
                 question.targets,
                 repeat_count=state.concept_failures,
                 target_aliases=progress_aliases,
+                card_event=response_plan.card_event,
             ),
             accepted_evidence=self._speaker_evidence(semantics),
             accepted_relations=self._speaker_accepted_relations(
@@ -2041,6 +2088,7 @@ class DialogueV2Engine:
             for claim in semantics.response.claims
         )
         card_visible = state.hint_level is not HintLevel.H0
+        references_help_card = semantics.response.ui_reference is not None
 
         if move is ConversationMoveV2.META_QUESTION:
             response_mode = (
@@ -2054,7 +2102,7 @@ class DialogueV2Engine:
             response_mode = "respond_safe_play"
         elif move is ConversationMoveV2.REQUEST_MORMI_ANSWER:
             response_mode = "decline_answer_and_ask"
-        elif move is ConversationMoveV2.TASK_QUESTION or (
+        elif move is ConversationMoveV2.TASK_QUESTION or references_help_card or (
             card_visible
             and (
                 has_incorrect
@@ -2341,6 +2389,7 @@ class DialogueV2Engine:
         *,
         repeat_count: int,
         target_aliases: dict[tuple[str, str], str] | None = None,
+        card_event: Literal["none", "opened_or_strengthened"] = "none",
     ) -> SpeakerResponseSignalV2:
         """Compile a raw-free conversational event from the semantic result."""
 
@@ -2436,6 +2485,14 @@ class DialogueV2Engine:
                 list(semantics.apply_result.new_relation_ids),
             ),
             repeat_count=repeat_count,
+            ui_reference=(
+                SpeakerUiReferenceSignalV2(
+                    interaction=semantics.response.ui_reference.interaction,
+                    card_event=card_event,
+                )
+                if semantics.response.ui_reference is not None
+                else None
+            ),
         )
 
     @staticmethod
@@ -2555,6 +2612,7 @@ class DialogueV2Engine:
         question: _QuestionContract,
         *,
         help_card_visible: bool,
+        help_card_strengthened: bool,
         repeat_count: int,
     ) -> str:
         """Keep a failed model call conversational without changing pedagogy.
@@ -2577,6 +2635,27 @@ class DialogueV2Engine:
             reask = plain_reask
 
         move = semantics.response.conversation_move
+        ui_reference = semantics.response.ui_reference
+        if ui_reference is not None:
+            opening = {
+                UiReferenceInteractionV2.ASKS_WHY: (
+                    "그러게, 왜 그런지는 나도 아직 모르겠어..."
+                ),
+                UiReferenceInteractionV2.ASKS_WHAT_NEXT: (
+                    "나도 그다음에 뭘 해야 하는지는 아직 모르겠어..."
+                ),
+                UiReferenceInteractionV2.EXPRESSES_CONFUSION: (
+                    "그러게, 도움 카드를 봐도 나도 아직 어렵네..."
+                ),
+                UiReferenceInteractionV2.CHALLENGES: (
+                    "그러게, 왜 그렇게 적혀 있는지는 나도 아직 궁금해..."
+                ),
+                UiReferenceInteractionV2.OTHER: "나도 아직 잘 모르겠어...",
+                UiReferenceInteractionV2.UNCERTAIN: "나도 아직 잘 모르겠어...",
+            }[ui_reference.interaction]
+            if help_card_strengthened:
+                opening = f"{opening} 어? 다른 도움 카드가 나왔어."
+            return f"{opening} {reask}"
         if move is ConversationMoveV2.META_QUESTION:
             if semantics.response.move_subject is MoveSubjectV2.MORMI_AI_IDENTITY:
                 return f"나는 AI지만, 네가 가르쳐 주지 않은 건 잘 몰라... {reask}"
@@ -2591,7 +2670,7 @@ class DialogueV2Engine:
         if move is ConversationMoveV2.REQUEST_MORMI_ANSWER:
             return f"나는 어떻게 하는 건지 몰라... {reask}"
         if move is ConversationMoveV2.TASK_QUESTION:
-            if help_card_visible:
+            if help_card_strengthened:
                 return f"나도 아직 잘 모르겠어... 어? 도움 카드가 나왔어. {reask}"
             return f"나도 아직 잘 모르겠어... {reask}"
 
