@@ -7,6 +7,7 @@ import time
 from typing import Any, TypeVar
 
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic, transform_schema
+from anthropic.types import TextBlockParam
 from pydantic import BaseModel, ValidationError
 
 from .content import SlotDefinition, TaskDefinition
@@ -458,7 +459,7 @@ class ClaudeGateway:
     def configured(self) -> bool:
         return self.client is not None
 
-    def _system_with_prompt_cache(self, stage: str, system: str) -> str | list[dict[str, Any]]:
+    def _system_with_prompt_cache(self, stage: str, system: str) -> str | list[TextBlockParam]:
         if (
             not self.settings.prompt_caching_enabled
             or stage not in self.settings.prompt_cache_stages
@@ -562,7 +563,7 @@ class ClaudeGateway:
             output_config["effort"] = effort
         system_payload = self._system_with_prompt_cache(stage, system)
 
-        async def create(system_value: str | list[dict[str, Any]]) -> Any:
+        async def create(system_value: str | list[TextBlockParam]) -> Any:
             return await self._create_timed(
                 stage,
                 model=model,
