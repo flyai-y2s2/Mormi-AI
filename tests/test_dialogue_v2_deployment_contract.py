@@ -67,6 +67,28 @@ def test_candidate_requires_a_configured_llm_even_when_copy_cache_is_warm() -> N
     assert llm_check < live_removal
 
 
+def test_prompt_cache_is_smoked_gated_and_persisted_before_live_switch() -> None:
+    workflow = _workflow()
+
+    model_smoke = workflow.index("python scripts/smoke_dialogue_v2_models.py")
+    cache_smoke = workflow.index("python scripts/smoke_prompt_cache.py")
+    candidate = workflow.index("--name mormi-ai-candidate")
+    cache_gate = workflow.index(
+        "candidate prompt-cache configuration does not match the release contract"
+    )
+    cache_persist = workflow.index("MORMI_PROMPT_CACHING_ENABLED \\\n            true")
+    live_removal = workflow.index("docker rm -f mormi-ai 2>/dev/null")
+
+    assert model_smoke < cache_smoke < candidate < cache_gate < cache_persist < live_removal
+    assert "MORMI_PROMPT_CACHING_ENABLED=true" in workflow
+    assert "MORMI_PROMPT_CACHE_TTL=5m" in workflow
+    assert 'MORMI_PROMPT_CACHE_STAGES=["understanding_v2"]' in workflow
+    assert 'MORMI_PROMPT_CACHE_STAGES=["understanding_v2", "speaker_v2"]' not in workflow
+    assert workflow.count('"${PROMPT_CACHE_ARGS[@]}"') == 5
+    assert "Anthropic prompt-cache write/read smoke failed all attempts" in workflow
+    assert 'true|5m|understanding_v2' in workflow
+
+
 def test_candidate_health_exposes_and_gates_effective_rollout_configuration() -> None:
     workflow = _workflow()
 
@@ -89,7 +111,7 @@ def test_candidate_health_exposes_and_gates_effective_rollout_configuration() ->
     # Host-owned env files may predate the production profile setting. Every
     # database/model/runtime container must receive the explicit production
     # boundary; only the model-file preflight runs without application settings.
-    assert workflow.count("MORMI_ENVIRONMENT=production") == 9
+    assert workflow.count("MORMI_ENVIRONMENT=production") == 10
 
 
 def test_live_deploy_enables_and_gates_star_note_delivery_without_exposing_the_key() -> None:

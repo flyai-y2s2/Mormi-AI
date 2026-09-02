@@ -429,6 +429,15 @@ jobs:
             )
           fi
 
+          PROMPT_CACHE_ARGS=(
+            -e
+            MORMI_PROMPT_CACHING_ENABLED=true
+            -e
+            MORMI_PROMPT_CACHE_TTL=5m
+            -e
+            'MORMI_PROMPT_CACHE_STAGES=["understanding_v2"]'
+          )
+
           aws ecr get-login-password --region "${AWS_REGION}" \
             | docker login \
                 --username AWS \
@@ -543,6 +552,7 @@ jobs:
               -e MORMI_DIALOGUE_V2_CANARY_PERCENT=0 \
               -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
               -e MORMI_CLASSIFIER_EFFORT=low \
+              "${PROMPT_CACHE_ARGS[@]}" \
               -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
               -e MORMI_SPEAKER_EFFORT=low \
               -e MORMI_LADDER_ANALYSIS_WORKER_ENABLED=false \
@@ -560,6 +570,30 @@ jobs:
             exit 1
           fi
 
+          # Prove that the selected static Sonnet system prefix is accepted and
+          # reused by the provider before any candidate receives traffic.
+          PROMPT_CACHE_SMOKE_READY=false
+          for PROMPT_CACHE_SMOKE_ATTEMPT in 1 2 3; do
+            if docker run --rm \
+              --network mormi-services \
+              --env-file /etc/mormi-ai/mormi.env \
+              -e MORMI_ENVIRONMENT=production \
+              -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
+              "${PROMPT_CACHE_ARGS[@]}" \
+              "${IMAGE_URI}" \
+              python scripts/smoke_prompt_cache.py; then
+              PROMPT_CACHE_SMOKE_READY=true
+              break
+            fi
+            if [ "${PROMPT_CACHE_SMOKE_ATTEMPT}" -lt 3 ]; then
+              sleep 5
+            fi
+          done
+          if [ "${PROMPT_CACHE_SMOKE_READY}" != "true" ]; then
+            echo "Anthropic prompt-cache write/read smoke failed all attempts" >&2
+            exit 1
+          fi
+
           # 실제 API를 내리기 전에 동일한 환경의 후보 컨테이너를 먼저 확인합니다.
           docker rm -f mormi-ai-candidate 2>/dev/null || true
           docker run -d \
@@ -571,6 +605,7 @@ jobs:
             "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
+            "${PROMPT_CACHE_ARGS[@]}" \
             -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_SPEAKER_EFFORT=low \
             -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
@@ -666,6 +701,13 @@ jobs:
             docker rm -f mormi-ai-candidate 2>/dev/null || true
             exit 1
           fi
+          candidate_prompt_cache="$(docker exec mormi-ai-candidate \
+            python -c 'from mormi_api.settings import get_settings; s=get_settings(); print(str(s.prompt_caching_enabled).lower() + "|" + s.prompt_cache_ttl + "|" + ",".join(sorted(s.prompt_cache_stages)))')"
+          if [ "${candidate_prompt_cache}" != "true|5m|understanding_v2" ]; then
+            echo "candidate prompt-cache configuration does not match the release contract"
+            docker rm -f mormi-ai-candidate 2>/dev/null || true
+            exit 1
+          fi
 
           # A manual canary override is an operational source-of-truth change,
           # not a one-container flag. Persist it only after the candidate has
@@ -689,6 +731,18 @@ jobs:
             "${IMAGE_URI}" \
             MORMI_RUNTIME_CONTRACT_VERSION \
             verdict-v1
+          persist_mormi_env \
+            "${IMAGE_URI}" \
+            MORMI_PROMPT_CACHING_ENABLED \
+            true
+          persist_mormi_env \
+            "${IMAGE_URI}" \
+            MORMI_PROMPT_CACHE_TTL \
+            5m
+          persist_mormi_env \
+            "${IMAGE_URI}" \
+            MORMI_PROMPT_CACHE_STAGES \
+            '["understanding_v2"]'
           # The BE contract is already deployed. Reuse its private ingest key
           # without printing it, persist the container-network URL, and open
           # the pending star-note outbox only after every candidate gate passes.
@@ -707,6 +761,7 @@ jobs:
             "${DEPLOY_CANARY_ARGS[@]}" \
             -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
             -e MORMI_CLASSIFIER_EFFORT=low \
+            "${PROMPT_CACHE_ARGS[@]}" \
             -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
             -e MORMI_SPEAKER_EFFORT=low \
             -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \
@@ -746,6 +801,7 @@ jobs:
                 "${DEPLOY_CANARY_ARGS[@]}" \
                 -e MORMI_CLASSIFIER_MODEL=claude-sonnet-4-6 \
                 -e MORMI_CLASSIFIER_EFFORT=low \
+                "${PROMPT_CACHE_ARGS[@]}" \
                 -e MORMI_SPEAKER_MODEL=claude-haiku-4-5-20251001 \
                 -e MORMI_SPEAKER_EFFORT=low \
                 -e MORMI_REPORT_MODEL=claude-sonnet-4-6 \

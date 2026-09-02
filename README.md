@@ -435,7 +435,9 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_SHOW_INTERNAL_PEDAGOGY=false` | 아니요 | 운영 응답에서 내부 L/H·판정 근거를 숨김 |
 
 `develop` 배포 워크플로는 후보·운영·롤백 API 컨테이너에 분류기/화자/stable-copy
-모델과 effort, `stable-copy-validator-v2`를 `docker run -e`로 명시합니다. 따라서 EC2의 기존
+모델과 effort, `stable-copy-validator-v2`, Sonnet 이해 역할의 5분 정적 프롬프트 캐시를
+`docker run -e`로 명시합니다. 배포 전 PII 없는 write/read smoke와 후보의 effective setting을
+검증하고, 검증을 통과한 설정만 host env에 보존합니다. 따라서 EC2의 기존
 `/etc/mormi-ai/mormi.env`에 남아 있는 이전 설정보다 Sonnet Low 이해, Haiku 주 화자,
 Sonnet stable copy 설정이 우선합니다. 안전한 비학습 브리지는 별도
 `MORMI_BRIDGE_MODEL`의 Haiku 기본값을 사용합니다.
