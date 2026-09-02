@@ -159,6 +159,32 @@ def _safe_provider_error_code(error: APIConnectionError | APIStatusError) -> str
     return "model_provider_unavailable"
 
 
+def _prompt_cache_rejected(error: APIStatusError) -> bool:
+    """Detect provider rejections that are specific to prompt-cache metadata."""
+
+    if error.status_code != 400:
+        return False
+    body_text = str(error.body).lower()
+    return any(
+        marker in body_text
+        for marker in ("cache_control", "prompt caching", "cache ttl", "cache breakpoint")
+    )
+
+
+def _usage_token_count(usage: object | None, field: str) -> int:
+    if usage is None:
+        return 0
+    value = usage.get(field, 0) if isinstance(usage, dict) else getattr(usage, field, 0)
+    return int(value or 0)
+
+
+def _has_prompt_cache_breakpoint(kwargs: dict[str, Any]) -> bool:
+    system = kwargs.get("system")
+    return isinstance(system, list) and any(
+        isinstance(block, dict) and "cache_control" in block for block in system
+    )
+
+
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
 
@@ -432,6 +458,23 @@ class ClaudeGateway:
     def configured(self) -> bool:
         return self.client is not None
 
+    def _system_with_prompt_cache(self, stage: str, system: str) -> str | list[dict[str, Any]]:
+        if (
+            not self.settings.prompt_caching_enabled
+            or stage not in self.settings.prompt_cache_stages
+        ):
+            return system
+        return [
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {
+                    "type": "ephemeral",
+                    "ttl": self.settings.prompt_cache_ttl,
+                },
+            }
+        ]
+
     async def _create_timed(self, stage: str, **kwargs: Any) -> Any:
         """Call the model and log wall-clock time per call.
 
@@ -442,6 +485,7 @@ class ClaudeGateway:
         if not self.client:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
         started = time.perf_counter()
+        cache_requested = _has_prompt_cache_breakpoint(kwargs)
         try:
             message = await self.client.messages.create(**kwargs)
         except (APIConnectionError, APIStatusError) as error:
@@ -458,15 +502,32 @@ class ClaudeGateway:
             )
             raise
         conversation_id, turn_id = scope_fields()
+        usage = getattr(message, "usage", None)
+        cache_write_tokens = _usage_token_count(usage, "cache_creation_input_tokens")
+        cache_read_tokens = _usage_token_count(usage, "cache_read_input_tokens")
+        if cache_read_tokens:
+            cache_status = "hit"
+        elif cache_write_tokens:
+            cache_status = "write"
+        elif cache_requested:
+            cache_status = "miss"
+        else:
+            cache_status = "off"
         logger.info(
             "llm_call conversation_id=%s turn_id=%s stage=%s model=%s "
-            "duration_ms=%d status=ok stop_reason=%s",
+            "duration_ms=%d status=ok stop_reason=%s cache_status=%s "
+            "input_tokens=%d cache_write_tokens=%d cache_read_tokens=%d output_tokens=%d",
             conversation_id,
             turn_id,
             stage,
             kwargs.get("model"),
             _elapsed_ms(started),
             getattr(message, "stop_reason", None),
+            cache_status,
+            _usage_token_count(usage, "input_tokens"),
+            cache_write_tokens,
+            cache_read_tokens,
+            _usage_token_count(usage, "output_tokens"),
         )
         return message
 
@@ -482,7 +543,12 @@ class ClaudeGateway:
         temperature: float,
         effort: str | None = None,
     ) -> ResponseModelT:
-        """Run one V2 role call without retries or child-text logging."""
+        """Run one V2 role call without child-text logging.
+
+        A cache-metadata rejection receives one uncached compatibility retry;
+        model, transport, and structured-output failures keep their existing
+        behavior.
+        """
 
         if not self.client:
             raise ModelUnavailableError("ANTHROPIC_API_KEY is not configured")
@@ -494,13 +560,15 @@ class ClaudeGateway:
         }
         if effort is not None:
             output_config["effort"] = effort
-        try:
-            message = await self._create_timed(
+        system_payload = self._system_with_prompt_cache(stage, system)
+
+        async def create(system_value: str | list[dict[str, Any]]) -> Any:
+            return await self._create_timed(
                 stage,
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                system=system,
+                system=system_value,
                 messages=[
                     {
                         "role": "user",
@@ -512,7 +580,21 @@ class ClaudeGateway:
                 ],
                 output_config=output_config,
             )
-        except (APIConnectionError, APIStatusError) as error:
+
+        try:
+            message = await create(system_payload)
+        except APIStatusError as error:
+            if isinstance(system_payload, list) and _prompt_cache_rejected(error):
+                logger.warning("prompt_cache_fallback stage=%s reason=provider_rejected", stage)
+                try:
+                    message = await create(system)
+                except (APIConnectionError, APIStatusError) as retry_error:
+                    raise ModelUnavailableError(
+                        _safe_provider_error_code(retry_error)
+                    ) from retry_error
+            else:
+                raise ModelUnavailableError(_safe_provider_error_code(error)) from error
+        except APIConnectionError as error:
             raise ModelUnavailableError(_safe_provider_error_code(error)) from error
         if message.stop_reason in {"refusal", "max_tokens"}:
             raise ModelOutputError(f"{stage} stopped with {message.stop_reason}")

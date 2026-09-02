@@ -8,6 +8,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .schemas import DialogueRuntimeContractVersion
 
 EffortLevel = Literal["low", "medium", "high", "max"]
+PromptCacheStage = Literal["understanding_v2", "speaker_v2"]
+PromptCacheTtl = Literal["5m", "1h"]
+
+
+def _default_prompt_cache_stages() -> frozenset[PromptCacheStage]:
+    return frozenset({"understanding_v2"})
 
 
 class Settings(BaseSettings):
@@ -26,6 +32,11 @@ class Settings(BaseSettings):
     speaker_model: str = "claude-haiku-4-5-20251001"
     speaker_effort: EffortLevel = "low"
     star_note_model: str = "claude-haiku-4-5-20251001"
+    prompt_caching_enabled: bool = False
+    prompt_cache_ttl: PromptCacheTtl = "5m"
+    prompt_cache_stages: frozenset[PromptCacheStage] = Field(
+        default_factory=_default_prompt_cache_stages
+    )
     # Teacher-facing summaries are not Mormi dialogue. Keep their existing
     # Sonnet model independent from the child-facing speaker selection.
     report_model: str = "claude-sonnet-4-6"

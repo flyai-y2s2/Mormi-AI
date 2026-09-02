@@ -216,6 +216,15 @@ pip install -r requirements.txt
 
 자유 발화를 처리하려면 `.env`에 `MORMI_ANTHROPIC_API_KEY`를 등록해야 합니다. 선택·조작 응답과 결정형 테스트는 키 없이도 동작합니다.
 
+Anthropic 프롬프트 캐시는 선택된 V2 역할의 정적 system prefix에만 breakpoint를 두고,
+아이 발화와 현재 대화 상태는 매 호출의 동적 user message로 유지합니다. 캐시 쓰기·적중
+토큰은 `llm_call` 로그의 `cache_write_tokens`, `cache_read_tokens`로 확인할 수 있습니다.
+공급자 연동 smoke는 다음과 같이 실행합니다.
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/smoke_prompt_cache.py
+```
+
 ## 주요 API
 
 | Method | Path | 역할 |
@@ -403,6 +412,9 @@ AI 서버의 `/etc/mormi-ai/mormi.env`에는 다음 값을 둡니다.
 | `MORMI_SPEAKER_EFFORT` | 아니요 | Sonnet 화자로 재정의할 때의 추론 강도, 기본값 `low`; Haiku에는 전달하지 않음 |
 | `MORMI_STAR_NOTE_MODEL` | 아니요 | 직접 별노트 문맥 편집 모델, 기본값 `claude-haiku-4-5-20251001` |
 | `MORMI_REPORT_MODEL` | 아니요 | 교사용 요약 전용 모델, 기본값 `claude-sonnet-4-6`; 모르미 화자 변경과 독립 |
+| `MORMI_PROMPT_CACHING_ENABLED` | 아니요 | Anthropic V2 역할 프롬프트 캐싱 활성화 여부, 기본 `false` |
+| `MORMI_PROMPT_CACHE_TTL` | 아니요 | 캐시 TTL. `5m` 또는 `1h`, 기본 `5m` |
+| `MORMI_PROMPT_CACHE_STAGES` | 아니요 | 정적 system prefix를 캐시할 V2 역할의 JSON 배열. 기본 `["understanding_v2"]`; `speaker_v2` 추가 가능 |
 | `MORMI_RUNTIME_CONTRACT_VERSION` | 아니요 | 신규 대화의 router 모드. 기본 `legacy-v1`; 네이티브 팩 canary를 허용하려면 `verdict-v1` |
 | `MORMI_DIALOGUE_V2_CANARY_PERCENT` | 아니요 | V2 적격 신규 대화 중 `verdict-v1`로 고정할 비율(0~100). 기본 `0`; 0보다 크면 runtime 설정도 `verdict-v1`이어야 함 |
 | `MORMI_DIALOGUE_V2_CANARY_SALT` | 아니요 | 학습자·학습 세션·회차 기반 결정형 canary 버킷 salt. 진행 중인 대화에는 재적용하지 않음 |
