@@ -20,5 +20,12 @@ artifacts/ladder-model/
 # 일회성 프론트 협의·회신 문서는 공식 API_SPEC에 통합한다.
 docs/FRONTEND_*.md
 
+# 공개 저장소에는 현재 계약과 아키텍처만 유지한다.
+docs/V2_INTEGRATION_COORDINATION.md
+docs/OBSERVATION_EVENTS.md
+docs/SESSION_PARENT_ROLLOUT.md
+docs/LADDER_ANALYSIS_OPERATIONS.md
+docs/superpowers/
+
 # 로컬 .env 백업(비밀번호 포함)이 커밋되지 않게 한다.
 .env.bak*

@@ -74,5 +74,4 @@ $env:MORMI_LADDER_ANALYSIS_LEASE_SECONDS = "180"
 
 작업자는 모델을 첫 분석 때 지연 로드합니다. `MORMI_LADDER_MODEL_DIR`이 없거나 모델을
 읽지 못하면 해당 작업은 제한된 오류 코드로 실패하고 발화 원문을 오류 메시지나 신규
-분석 테이블에 복사하지 않습니다. 운영 연결과 재처리 절차는
-[`LADDER_ANALYSIS_OPERATIONS.md`](./LADDER_ANALYSIS_OPERATIONS.md)를 따릅니다.
+분석 테이블에 복사하지 않습니다.

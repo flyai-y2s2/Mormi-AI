@@ -306,9 +306,9 @@ WAIT/END를 만든다. 저장 후 응답 재전송에는 해당 응답의 원래
 커서 generation으로 차단한다. 세션 완료 판정·과제 전환은 계속 기존 교육 엔진 소유다.
 
 부모 기능은 기존 V2 canary와 독립적인 두 설정으로 제어한다. 기본은 비활성/0%이며,
-활성화·DB migration·PostgreSQL 다중 프로세스 검증과 롤백 절차는
-`docs/SESSION_PARENT_ROLLOUT.md`를 따른다. 이 변경은 BE/FE API, 리포트·발화사다리
-분석 모델 입력, 교육 정책·프롬프트·콘텐츠·LLM 호출 예산을 바꾸지 않는다.
+활성화 전에는 DB migration, PostgreSQL 다중 프로세스 검증과 롤백 가능 여부를 확인한다.
+이 변경은 BE/FE API, 리포트·발화사다리 분석 모델 입력, 교육 정책·프롬프트·콘텐츠·LLM
+호출 예산을 바꾸지 않는다.
 
 V2 자유 발화는 Sonnet Low가 현재 모르미 질문, 요청 중인 answer/reason target,
 현재 L/H, 화면에 공개된 사실과 최근 6턴을 함께 보고 한 번에 구조화한다. Sonnet 응답은
